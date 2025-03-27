@@ -1,0 +1,519 @@
+openapi: 3.0.0
+info:
+  title: DynamoDB API
+  version: 1.0.0
+  description: API for DynamoDB operations
+
+servers:
+  - url: http://localhost:5000/api/dynamodb
+    description: Local development server
+
+components:
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+        details:
+          type: string
+
+    TableItem:
+      type: object
+      required: ["id"]
+      properties:
+        id:
+          type: string
+          example: "123"
+        test:
+          type: string
+          example: "test value"
+        data:
+          type: object
+          additionalProperties: true
+          example: {
+            "field1": "value1",
+            "field2": "value2"
+          }
+
+    CreateTableRequest:
+      type: object
+      required:
+        - TableName
+        - KeySchema
+        - AttributeDefinitions
+      properties:
+        TableName:
+          type: string
+          example: "my-table"
+        KeySchema:
+          type: array
+          items:
+            type: object
+            required:
+              - AttributeName
+              - KeyType
+            properties:
+              AttributeName:
+                type: string
+                example: "id"
+              KeyType:
+                type: string
+                enum: [HASH, RANGE]
+                example: "HASH"
+        AttributeDefinitions:
+          type: array
+          items:
+            type: object
+            required:
+              - AttributeName
+              - AttributeType
+            properties:
+              AttributeName:
+                type: string
+                example: "id"
+              AttributeType:
+                type: string
+                enum: [S, N, B]
+                example: "S"
+        BillingMode:
+          type: string
+          enum: [PROVISIONED, PAY_PER_REQUEST]
+          example: "PAY_PER_REQUEST"
+        ProvisionedThroughput:
+          type: object
+          description: Required when BillingMode is PROVISIONED
+          properties:
+            ReadCapacityUnits:
+              type: integer
+              minimum: 1
+              example: 5
+            WriteCapacityUnits:
+              type: integer
+              minimum: 1
+              example: 5
+          required:
+            - ReadCapacityUnits
+            - WriteCapacityUnits
+
+    UpdateExpression:
+      type: object
+      required:
+        - UpdateExpression
+        - ExpressionAttributeNames
+        - ExpressionAttributeValues
+      properties:
+        UpdateExpression:
+          type: string
+          description: "DynamoDB update expression (e.g., set #field = :value)"
+          example: "set #test = :value"
+        ExpressionAttributeNames:
+          type: object
+          description: "Map of attribute name placeholders to actual names"
+          additionalProperties:
+            type: string
+          example:
+            "#test": "test"
+        ExpressionAttributeValues:
+          type: object
+          description: "Map of value placeholders to actual values"
+          additionalProperties: true
+          example:
+            ":value": "new value"
+
+    QueryRequest:
+      type: object
+      required:
+        - KeyConditionExpression
+        - ExpressionAttributeNames
+        - ExpressionAttributeValues
+      properties:
+        KeyConditionExpression:
+          type: string
+          description: "DynamoDB key condition expression"
+          example: "#id = :idValue"
+        ExpressionAttributeNames:
+          type: object
+          description: "Map of attribute name placeholders to actual names"
+          additionalProperties:
+            type: string
+          example:
+            "#id": "id"
+        ExpressionAttributeValues:
+          type: object
+          description: "Map of value placeholders to actual values"
+          additionalProperties: true
+          example:
+            ":idValue": "123"
+
+paths:
+  /tables:
+    get:
+      summary: List all DynamoDB tables
+      operationId: listTables
+      responses:
+        '200':
+          description: List of tables
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tables:
+                    type: array
+                    items:
+                      type: string
+                  count:
+                    type: integer
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    post:
+      summary: Create a new DynamoDB table
+      operationId: createTable
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTableRequest'
+            examples:
+              simpleTable:
+                summary: Simple table with hash key
+                value:
+                  TableName: "my-table"
+                  KeySchema: [
+                    { "AttributeName": "id", "KeyType": "HASH" }
+                  ]
+                  AttributeDefinitions: [
+                    { "AttributeName": "id", "AttributeType": "S" }
+                  ]
+                  BillingMode: "PAY_PER_REQUEST"
+              provisionedTable:
+                summary: Provisioned table with hash and range key
+                value:
+                  TableName: "my-table"
+                  KeySchema: [
+                    { "AttributeName": "id", "KeyType": "HASH" },
+                    { "AttributeName": "sortKey", "KeyType": "RANGE" }
+                  ]
+                  AttributeDefinitions: [
+                    { "AttributeName": "id", "AttributeType": "S" },
+                    { "AttributeName": "sortKey", "AttributeType": "S" }
+                  ]
+                  BillingMode: "PROVISIONED"
+                  ProvisionedThroughput:
+                    ReadCapacityUnits: 5
+                    WriteCapacityUnits: 5
+      responses:
+        '201':
+          description: Table created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  table:
+                    type: object
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /tables/{tableName}:
+    delete:
+      summary: Delete a DynamoDB table
+      operationId: deleteTable
+      parameters:
+        - name: tableName
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Table deleted successfully
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /tables/{tableName}/items:
+    get:
+      summary: Get all items from a table
+      operationId: getItems
+      parameters:
+        - name: tableName
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of items
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TableItem'
+                  count:
+                    type: integer
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    post:
+      summary: Create a new item
+      operationId: createItem
+      parameters:
+        - name: tableName
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TableItem'
+            examples:
+              simpleItem:
+                summary: Simple item with id and test field
+                value:
+                  id: "123"
+                  test: "test value"
+              complexItem:
+                summary: Item with nested data
+                value:
+                  id: "123"
+                  test: "test value"
+                  data:
+                    field1: "value1"
+                    field2: "value2"
+                    nested:
+                      subfield: "subvalue"
+      responses:
+        '201':
+          description: Item created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  item:
+                    $ref: '#/components/schemas/TableItem'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /tables/{tableName}/items/{id}:
+    get:
+      summary: Get items by id
+      operationId: getItemsByPk
+      parameters:
+        - name: tableName
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Items found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TableItem'
+                  count:
+                    type: integer
+        '404':
+          description: Items not found
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    put:
+      summary: Update item by id
+      operationId: updateItemsByPk
+      parameters:
+        - name: tableName
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sortKey
+          in: query
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateExpression'
+            examples:
+              updateSingleField:
+                summary: Update a single field
+                value:
+                  UpdateExpression: "set #test = :value"
+                  ExpressionAttributeNames:
+                    "#test": "test"
+                  ExpressionAttributeValues:
+                    ":value": "new test value"
+              updateMultipleFields:
+                summary: Update multiple fields
+                value:
+                  UpdateExpression: "set #test = :testValue, #data.#field = :fieldValue"
+                  ExpressionAttributeNames:
+                    "#test": "test"
+                    "#data": "data"
+                    "#field": "field1"
+                  ExpressionAttributeValues:
+                    ":testValue": "new test value"
+                    ":fieldValue": "new field value"
+      responses:
+        '200':
+          description: Item updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TableItem'
+                  count:
+                    type: integer
+        '404':
+          description: Items not found
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    delete:
+      summary: Delete items by id
+      operationId: deleteItemsByPk
+      parameters:
+        - name: tableName
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Items deleted successfully
+        '404':
+          description: Items not found
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /tables/{tableName}/query:
+    post:
+      summary: Query items in a table
+      operationId: queryItems
+      parameters:
+        - name: tableName
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QueryRequest'
+            examples:
+              queryById:
+                summary: Query by id
+                value:
+                  KeyConditionExpression: "#id = :idValue"
+                  ExpressionAttributeNames:
+                    "#id": "id"
+                  ExpressionAttributeValues:
+                    ":idValue": "123"
+              queryWithFilter:
+                summary: Query with filter expression
+                value:
+                  KeyConditionExpression: "#id = :idValue"
+                  FilterExpression: "#test = :testValue"
+                  ExpressionAttributeNames:
+                    "#id": "id"
+                    "#test": "test"
+                  ExpressionAttributeValues:
+                    ":idValue": "123"
+                    ":testValue": "test value"
+      responses:
+        '200':
+          description: Query results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TableItem'
+                  count:
+                    type: integer
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error' 

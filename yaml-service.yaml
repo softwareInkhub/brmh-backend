@@ -1,0 +1,218 @@
+openapi: 3.0.0
+info:
+  title: YAML Service API
+  version: 1.0.0
+  description: API for generating OpenAPI specifications from namespace, accounts, and methods data
+
+paths:
+  /generate:
+    post:
+      summary: Generate OpenAPI specification
+      operationId: generateOpenApiSpec
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - namespace
+              properties:
+                namespace:
+                  $ref: '#/components/schemas/NamespaceInput'
+                accounts:
+                  type: array
+                  description: List of accounts in the namespace
+                  items:
+                    $ref: '#/components/schemas/NamespaceAccountInput'
+                methods:
+                  type: array
+                  description: List of methods in the namespace
+                  items:
+                    $ref: '#/components/schemas/NamespaceMethodInput'
+      responses:
+        "200":
+          description: Generated OpenAPI specification
+          content:
+            application/yaml:
+              schema:
+                type: string
+        "400":
+          description: Invalid input data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  details:
+                    type: object
+
+components:
+  schemas:
+    NamespaceInput:
+      type: object
+      required:
+        - namespace-name
+        - namespace-url
+      properties:
+        namespace-name:
+          type: string
+          example: "shopify"
+        namespace-url:
+          type: string
+          example: "https://api.shopify.com/v1"
+        tags:
+          type: array
+          items:
+            type: string
+          example: ["ecommerce", "retail"]
+        description:
+          type: string
+          example: "Shopify e-commerce platform API integration"
+
+    NamespaceAccountInput:
+      type: object
+      required:
+        - namespace-account-name
+      properties:
+        namespace-account-name:
+          type: string
+          example: "my-store"
+        namespace-account-id:
+          type: string
+          example: "acc_123456"
+        namespace-account-url-override:
+          type: string
+          example: "https://my-store.myshopify.com/api/v1"
+        namespace-account-header:
+          type: array
+          items:
+            type: object
+            required:
+              - key
+              - value
+            properties:
+              key:
+                type: string
+                example: "X-Shopify-Access-Token"
+              value:
+                type: string
+                example: "shpat_123456789"
+        variables:
+          type: array
+          items:
+            type: object
+            required:
+              - key
+              - value
+            properties:
+              key:
+                type: string
+              value:
+                type: string
+          example: [{"key": "store_id", "value": "12345"}]
+        tags:
+          type: array
+          items:
+            type: string
+          example: ["production", "us-store"]
+        description:
+          type: string
+          example: "Main production store account"
+
+    NamespaceMethodInput:
+      type: object
+      required:
+        - namespace-method-name
+        - namespace-method-type
+      properties:
+        namespace-method-name:
+          type: string
+          example: "getProducts"
+        namespace-method-id:
+          type: string
+          example: "method_123456"
+        namespace-method-type:
+          type: string
+          enum: [GET, POST, PUT, PATCH, DELETE]
+        namespace-method-url-override:
+          type: string
+          example: "/admin/api/products"
+        save-data:
+          type: boolean
+          default: false
+          description: Whether to save the response data
+        isInitialized:
+          type: boolean
+          default: false
+          description: Whether the method is initialized
+        tags:
+          type: array
+          items:
+            type: string
+          example: ["products", "inventory"]
+        namespace-method-queryParams:
+          type: array
+          items:
+            type: object
+            required:
+              - key
+            properties:
+              key:
+                type: string
+                example: "limit"
+              value:
+                type: string
+                example: "10"
+              description:
+                type: string
+                example: "Number of items per page"
+              required:
+                type: boolean
+                default: false
+        namespace-method-header:
+          type: array
+          items:
+            type: object
+            required:
+              - key
+            properties:
+              key:
+                type: string
+                example: "Content-Type"
+              value:
+                type: string
+                example: "application/json"
+              description:
+                type: string
+                example: "The content type of the request"
+              required:
+                type: boolean
+                default: false
+        sample-request:
+          type: object
+          example: {
+            "limit": 10,
+            "page": 1
+          }
+        sample-response:
+          type: object
+          example: {
+            "products": [
+              {
+                "id": "123",
+                "title": "Sample Product"
+              }
+            ]
+          }
+        request-schema:
+          type: object
+          description: JSON Schema for request validation
+        response-schema:
+          type: object
+          description: JSON Schema for response validation
+        description:
+          type: string
+          example: "Retrieve a list of products with pagination" 

@@ -1,0 +1,122 @@
+openapi: 3.0.0
+info:
+  title: Pinterest API Integration
+  version: 1.0.0
+  description: API endpoints for Pinterest OAuth and data fetching
+
+servers:
+  - url: http://localhost:5000
+    description: Pinterest API proxy server
+
+paths:
+  /api/pinterest/token:
+    post:
+      summary: Exchange authorization code for access token
+      operationId: getPinterestToken
+      tags:
+        - Pinterest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - code
+                - clientId
+                - clientSecret
+                - redirectUrl
+              properties:
+                code:
+                  type: string
+                  description: Authorization code from Pinterest
+                clientId:
+                  type: string
+                  description: Pinterest application client ID
+                clientSecret:
+                  type: string
+                  description: Pinterest application client secret
+                redirectUrl:
+                  type: string
+                  description: OAuth redirect URL
+      responses:
+        "200":
+          description: Access token retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: string
+                description: Pinterest access token
+        "400":
+          description: Missing required fields
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        "500":
+          description: Failed to fetch token
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+
+  /api/pinterest/test:
+    post:
+      summary: Test Pinterest API endpoints
+      operationId: testPinterestApi
+      tags:
+        - Pinterest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - url
+                - token
+              properties:
+                url:
+                  type: string
+                  description: Pinterest API endpoint URL
+                token:
+                  type: string
+                  description: Pinterest access token
+                params:
+                  type: object
+                  description: Optional query parameters
+                  additionalProperties: true
+      responses:
+        "200":
+          description: Data retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Pinterest API response
+        "400":
+          description: Missing required fields
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        "500":
+          description: Failed to fetch data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  details:
+                    type: string 

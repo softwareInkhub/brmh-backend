@@ -1,0 +1,677 @@
+openapi: 3.0.0
+info:
+  title: Namespace Management API
+  version: 1.0.0
+  description: API for managing namespaces, accounts, and methods
+
+paths:
+  /namespaces:
+    get:
+      summary: Get all namespaces
+      operationId: getNamespaces
+      responses:
+        "200":
+          description: List of namespaces
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Namespace'
+
+    post:
+      summary: Create a new namespace
+      operationId: createNamespace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NamespaceInput'
+      responses:
+        "201":
+          description: Namespace created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Namespace'
+
+  /namespaces/{namespaceId}:
+    get:
+      summary: Get namespace by ID
+      operationId: getNamespaceById
+      parameters:
+        - name: namespaceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Namespace details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Namespace'
+
+    put:
+      summary: Update namespace
+      operationId: updateNamespace
+      parameters:
+        - name: namespaceId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NamespaceInput'
+      responses:
+        "200":
+          description: Namespace updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Namespace'
+
+    delete:
+      summary: Delete namespace
+      operationId: deleteNamespace
+      parameters:
+        - name: namespaceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Namespace deleted
+
+  /accounts:
+    get:
+      summary: Get all accounts
+      operationId: getAllAccounts
+      responses:
+        "200":
+          description: List of all accounts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/NamespaceAccount'
+
+  /accounts/{accountId}:
+    get:
+      summary: Get account by ID
+      operationId: getAccountById
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Account details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NamespaceAccount'
+
+    put:
+      summary: Update account
+      operationId: updateNamespaceAccount
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NamespaceAccountInput'
+      responses:
+        "200":
+          description: Account updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NamespaceAccount'
+
+    delete:
+      summary: Delete account
+      operationId: deleteNamespaceAccount
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Account deleted
+
+  /namespaces/{namespaceId}/accounts:
+    get:
+      summary: Get accounts by namespace ID
+      operationId: getNamespaceAccounts
+      parameters:
+        - name: namespaceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of accounts for namespace
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/NamespaceAccount'
+
+    post:
+      summary: Create account in namespace
+      operationId: createNamespaceAccount
+      parameters:
+        - name: namespaceId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NamespaceAccountInput'
+      responses:
+        "201":
+          description: Account created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NamespaceAccount'
+
+  /methods:
+    get:
+      summary: Get all methods
+      operationId: getAllMethods
+      responses:
+        "200":
+          description: List of all methods
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/NamespaceMethod'
+
+  /methods/{methodId}:
+    get:
+      summary: Get method by ID
+      operationId: getMethodById
+      parameters:
+        - name: methodId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Method details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NamespaceMethod'
+
+    put:
+      summary: Update method
+      operationId: updateNamespaceMethod
+      parameters:
+        - name: methodId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NamespaceMethodInput'
+      responses:
+        "200":
+          description: Method updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NamespaceMethod'
+
+    delete:
+      summary: Delete method
+      operationId: deleteNamespaceMethod
+      parameters:
+        - name: methodId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Method deleted
+
+  /namespaces/{namespaceId}/methods:
+    get:
+      summary: Get methods by namespace ID
+      operationId: getNamespaceMethods
+      parameters:
+        - name: namespaceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of methods for namespace
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/NamespaceMethod'
+
+    post:
+      summary: Create method in namespace
+      operationId: createNamespaceMethod
+      parameters:
+        - name: namespaceId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NamespaceMethodInput'
+      responses:
+        "201":
+          description: Method created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NamespaceMethod'
+
+  /execute:
+    post:
+      summary: Execute a single API request
+      operationId: executeNamespaceRequest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - method
+                - url
+              properties:
+                method:
+                  type: string
+                  enum: [GET, POST, PUT, PATCH, DELETE]
+                url:
+                  type: string
+                queryParams:
+                  type: object
+                  additionalProperties: true
+                headers:
+                  type: object
+                  additionalProperties: true
+                body:
+                  type: object
+      responses:
+        "200":
+          description: API response
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /execute/paginated:
+    post:
+      summary: Execute a paginated API request
+      operationId: executeNamespacePaginatedRequest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - method
+                - url
+              properties:
+                method:
+                  type: string
+                  enum: [GET, POST, PUT, PATCH, DELETE]
+                url:
+                  type: string
+                maxIterations:
+                  type: integer
+                  minimum: 1
+                  default: 10
+                paginationType:
+                  type: string
+                  enum: [link, bookmark]
+                  default: link
+                  description: |
+                    Type of pagination to use:
+                    - 'link' for APIs using Link headers (e.g. Shopify)
+                    - 'bookmark' for APIs using bookmark tokens (e.g. Pinterest)
+                queryParams:
+                  type: object
+                  additionalProperties: true
+                headers:
+                  type: object
+                  additionalProperties: true
+                body:
+                  type: object
+      responses:
+        "200":
+          description: Paginated API response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: integer
+                    description: HTTP status code
+                  metadata:
+                    type: object
+                    properties:
+                      totalPages:
+                        type: integer
+                        description: Total number of pages fetched
+                      totalItems:
+                        type: integer
+                        description: Total number of items fetched
+                      executionId:
+                        type: string
+                        description: Unique ID for this pagination execution
+                      paginationType:
+                        type: string
+                        enum: [link, bookmark]
+                        description: Type of pagination used
+                  data:
+                    type: array
+                    description: Aggregated data from all pages
+                    items:
+                      type: object
+        "401":
+          description: Authentication failed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Authentication Failed"
+                  status:
+                    type: integer
+                    example: 401
+                  statusText:
+                    type: string
+                  details:
+                    type: object
+        "403":
+          description: Authorization failed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Authentication Failed"
+                  status:
+                    type: integer
+                    example: 403
+                  statusText:
+                    type: string
+                  details:
+                    type: object
+        "500":
+          description: Server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Failed to execute paginated request"
+                  details:
+                    type: string
+                  code:
+                    type: string
+
+components:
+  schemas:
+    NamespaceInput:
+      type: object
+      required:
+        - namespace-name
+        - namespace-url
+      properties:
+        namespace-name:
+          type: string
+          example: "shopify"
+        namespace-url:
+          type: string
+          example: "https://api.shopify.com/v1"
+        tags:
+          type: array
+          items:
+            type: string
+          example: ["ecommerce", "retail"]
+
+    Namespace:
+      type: object
+      properties:
+        namespace-id:
+          type: string
+        namespace-name:
+          type: string
+        namespace-url:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+
+    NamespaceAccountInput:
+      type: object
+      required:
+        - namespace-account-name
+      properties:
+        namespace-account-name:
+          type: string
+          example: "my-store"
+        namespace-account-url-override:
+          type: string
+        namespace-account-header:
+          type: array
+          items:
+            type: object
+            properties:
+              key:
+                type: string
+              value:
+                type: string
+        variables:
+          type: array
+          items:
+            type: object
+            properties:
+              key:
+                type: string
+              value:
+                type: string
+          example: [{"key": "store_id", "value": "12345"}]
+        tags:
+          type: array
+          items:
+            type: string
+          example: ["production", "us-store"]
+
+    NamespaceAccount:
+      type: object
+      properties:
+        namespace-id:
+          type: string
+        namespace-account-id:
+          type: string
+        namespace-account-name:
+          type: string
+        namespace-account-url-override:
+          type: string
+        namespace-account-header:
+          type: array
+          items:
+            type: object
+            properties:
+              key:
+                type: string
+              value:
+                type: string
+        variables:
+          type: array
+          items:
+            type: object
+            properties:
+              key:
+                type: string
+              value:
+                type: string
+        tags:
+          type: array
+          items:
+            type: string
+
+    NamespaceMethodInput:
+      type: object
+      required:
+        - namespace-method-name
+        - namespace-method-type
+      properties:
+        namespace-method-name:
+          type: string
+          example: "getProducts"
+        namespace-method-type:
+          type: string
+          enum: [GET, POST, PUT, PATCH, DELETE]
+        namespace-method-url-override:
+          type: string
+        save-data:
+          type: boolean
+          default: false
+          description: "Whether to save the response data or not"
+        isInitialized:
+          type: boolean
+          default: false
+          description: "Whether the method is initialized or not"
+        tags:
+          type: array
+          items:
+            type: string
+          example: ["products", "inventory"]
+        namespace-method-queryParams:
+          type: array
+          items:
+            type: object
+            properties:
+              key:
+                type: string
+              value:
+                type: string
+        namespace-method-header:
+          type: array
+          items:
+            type: object
+            properties:
+              key:
+                type: string
+              value:
+                type: string
+        sample-request:
+          type: object
+        sample-response:
+          type: object
+        request-schema:
+          type: object
+        response-schema:
+          type: object
+
+    NamespaceMethod:
+      type: object
+      properties:
+        namespace-id:
+          type: string
+        namespace-method-id:
+          type: string
+        namespace-method-name:
+          type: string
+        namespace-method-type:
+          type: string
+        namespace-method-url-override:
+          type: string
+        save-data:
+          type: boolean
+          default: false
+          description: "Whether to save the response data or not"
+        isInitialized:
+          type: boolean
+          default: false
+          description: "Whether the method is initialized or not"
+        tags:
+          type: array
+          items:
+            type: string
+        namespace-method-queryParams:
+          type: array
+          items:
+            type: object
+            properties:
+              key:
+                type: string
+              value:
+                type: string
+        namespace-method-header:
+          type: array
+          items:
+            type: object
+            properties:
+              key:
+                type: string
+              value:
+                type: string
+        sample-request:
+          type: object
+        sample-response:
+          type: object
+        request-schema:
+          type: object
+        response-schema:
+          type: object
