@@ -12,7 +12,6 @@ import axios from 'axios';
 import { handlers as pinterestHandlers } from './pinterest-handlers.js';
 import { handlers as dynamodbHandlers } from './lib/dynamodb-handlers.js';
 import dotenv from 'dotenv';
-import { handlers as yamlHandlers } from './yaml-handlers.js';
 import { handlers as awsMessagingHandlers } from './aws-messaging-handlers.js';
 import { saveSingleExecutionLog, savePaginatedExecutionLogs } from './executionHandler.js';
 
@@ -1225,7 +1224,7 @@ const mainApi = new OpenAPIBackend({
 
             // Function to save items to DynamoDB
             const saveItemsToDynamoDB = async (items, pageData) => {
-              if (!saveData || !tableName || items.length === 0) return;
+              if (!saveData || !tableName || items.length === 0) return [];
 
               console.log(`\nSaving ${items.length} items to DynamoDB table: ${tableName}`);
               
@@ -1240,6 +1239,7 @@ const mainApi = new OpenAPIBackend({
 
               const BATCH_SIZE = 5;
               const batches = [];
+              const savedItemIds = [];
               
               for (let i = 0; i < items.length; i += BATCH_SIZE) {
                 batches.push(items.slice(i, i + BATCH_SIZE));
@@ -1274,8 +1274,9 @@ const mainApi = new OpenAPIBackend({
                     return acc;
                   }, {});
                   
+                  const itemId = cleanedItem.id || `item_${timestamp}_${batchIndex}_${index}`;
                   const itemData = {
-                    id: cleanedItem.id || `item_${timestamp}_${batchIndex}_${index}`,
+                    id: itemId,
                     Item: simplifiedItem,
                     timestamp,
                     _metadata: {
@@ -1302,8 +1303,9 @@ const mainApi = new OpenAPIBackend({
                       return null;
                     }
 
-                    console.log(`Successfully saved item ${batchIndex * BATCH_SIZE + index + 1}/${items.length}`);
-                    return index;
+                    console.log(`Successfully saved item ${batchIndex * BATCH_SIZE + index + 1}/${items.length} with ID: ${itemId}`);
+                    savedItemIds.push(itemId);
+                    return itemId;
                   } catch (error) {
                     console.error(`Error saving item ${batchIndex * BATCH_SIZE + index + 1}:`, error);
                     return null;
@@ -1314,7 +1316,8 @@ const mainApi = new OpenAPIBackend({
                 console.log(`Completed batch ${batchIndex + 1}/${batches.length}`);
               }
 
-              console.log(`Completed saving ${items.length} items to DynamoDB`);
+              console.log(`Completed saving ${items.length} items to DynamoDB. Saved IDs:`, savedItemIds);
+              return savedItemIds;
             };
 
             // Function to detect pagination type from response
@@ -1442,37 +1445,30 @@ const mainApi = new OpenAPIBackend({
                 } else {
                   currentPageItems = [response.data];
                 }
+
+                console.log('Extracted current page items:', {
+                  count: currentPageItems.length,
+                  firstItem: currentPageItems[0]
+                });
               }
 
-              // Log current page data count
-              console.log('\nPage Data Summary:', {
-                itemsInCurrentPage: currentPageItems.length,
-                totalItemsSoFar: totalItemsProcessed + currentPageItems.length,
-                currentPage: pageCount,
-                maxIterations,
-                responseData: response.data
+              // Extract IDs from items
+              const itemIds = currentPageItems.map(item => {
+                const id = item.id || item.Id || item.ID || item._id || 
+                          item.pin_id || item.board_id || 
+                          item.order_id || item.product_id ||
+                          `generated_${uuidv4()}`;
+                return id.toString();
               });
 
-              // Store page data
-              const pageData = {
-                items: currentPageItems,
-                data: response.data, // Keep the original response data for reference
-                url: urlObj.toString(),
-                headers: response.headers
-              };
-              pages.push(pageData);
-              totalItemsProcessed += currentPageItems.length;
+              console.log('Extracted item IDs:', {
+                count: itemIds.length,
+                sampleIds: itemIds.slice(0, 5)
+              });
 
               // After processing each page's items
               if (currentPageItems.length > 0) {
-                // Save items to DynamoDB if saveData is true
-                await saveItemsToDynamoDB(currentPageItems, {
-                  url: urlObj.toString(),
-                  status: response.status,
-                  headers: response.headers
-                });
-
-                // Save child execution log
+                // Save child execution log with the item IDs
                 await executionLogs.saveChildExecution({
                   pageNumber: pageCount,
                   totalItemsProcessed,
@@ -1480,7 +1476,8 @@ const mainApi = new OpenAPIBackend({
                   url: urlObj.toString(),
                   status: response.status,
                   paginationType: detectedPaginationType || 'none',
-                  isLast: !hasMorePages || pageCount === maxIterations
+                  isLast: !hasMorePages || pageCount === maxIterations,
+                  itemIds: itemIds // Pass the extracted item IDs directly
                 });
               }
 
@@ -1655,22 +1652,7 @@ const pinterestApi = new OpenAPIBackend({
   }
 });
 
-// Initialize YAML OpenAPI backend
-const yamlApi = new OpenAPIBackend({
-  definition: './yaml-service.yaml',
-  quick: true,
-  handlers: {
-    validationFail: async (c, req, res) => ({
-      statusCode: 400,
-      error: c.validation.errors
-    }),
-    notFound: async (c, req, res) => ({
-      statusCode: 404,
-      error: 'Not Found'
-    }),
-    generateOpenApiSpec: yamlHandlers.generateOpenApiSpec
-  }
-});
+
 
 // Initialize AWS Messaging OpenAPI backend
 const awsMessagingApi = new OpenAPIBackend({
@@ -1705,7 +1687,6 @@ await Promise.all([
   mainApi.init(),
   awsApi.init(),
   pinterestApi.init(),
-  yamlApi.init(),
   awsMessagingApi.init()
 ]);
 
@@ -1795,76 +1776,9 @@ app.get('/pinterest-api-docs', (req, res) => {
   );
 });
 
-// Load YAML service OpenAPI specification
-const yamlOpenapiSpec = yaml.load(fs.readFileSync(path.join(__dirname, 'yaml-service.yaml'), 'utf8'));
 
-// Serve YAML service API docs
-app.use('/yaml-service-docs', swaggerUi.serve);
-app.get('/yaml-service-docs', (req, res) => {
-  res.send(
-    swaggerUi.generateHTML(yamlOpenapiSpec, {
-      customSiteTitle: "YAML Service API Documentation",
-      customfavIcon: "/favicon.ico",
-      customCss: '.swagger-ui .topbar { display: none }',
-      swaggerUrl: "/yaml-service-docs/swagger.json"
-    })
-  );
-});
 
-// Serve YAML service OpenAPI specification
-app.get('/yaml-service-docs/swagger.json', (req, res) => {
-  res.json(yamlOpenapiSpec);
-});
 
-// Handle YAML service routes
-app.all('/api/yaml/*', async (req, res) => {
-  try {
-    // Remove the /api/yaml prefix from the path
-    const adjustedPath = req.path.replace('/api/yaml', '');
-    
-    const response = await yamlApi.handleRequest(
-      {
-        method: req.method,
-        path: adjustedPath || '/',
-        body: req.body,
-        query: req.query,
-        headers: req.headers
-      },
-      req,
-      res
-    );
-    res.status(response.statusCode).json(response.body);
-  } catch (error) {
-    console.error('[YAML Service] Error:', error.message);
-    res.status(500).json({
-      error: 'Failed to handle YAML service request',
-      message: error.message
-    });
-  }
-});
-
-// Add direct route for generate
-app.post('/generate', async (req, res) => {
-  try {
-    const response = await yamlApi.handleRequest(
-      {
-        method: 'POST',
-        path: '/generate',
-        body: req.body,
-        headers: req.headers
-      },
-      req,
-      res
-    );
-    res.status(response.statusCode).json(response.body);
-  } catch (error) {
-    console.error('[Generate YAML] Error:', error.message);
-    res.status(500).json({
-      error: 'Failed to generate YAML',
-      message: error.message
-    });
-  }
-});
 
 // Handle AWS DynamoDB routes
 app.all('/api/dynamodb/*', async (req, res, next) => {
@@ -2404,7 +2318,6 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`Main API documentation available at http://localhost:${PORT}/api-docs`);
   console.log(`Pinterest API documentation available at http://localhost:${PORT}/pinterest-api-docs`);
   console.log(`AWS DynamoDB service available at http://localhost:${PORT}/api/dynamodb`);
-  console.log(`YAML Service documentation available at http://localhost:${PORT}/yaml-service-docs`);
   console.log(`AWS Messaging Service documentation available at http://localhost:${PORT}/aws-messaging-docs`);
 });
 

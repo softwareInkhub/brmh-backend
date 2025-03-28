@@ -18,6 +18,12 @@ export const saveExecutionLog = async ({
 }) => {
   try {
     const timestamp = new Date().toISOString();
+    
+    // Format item IDs as DynamoDB list type
+    const formattedItemIds = (data.itemIds || []).map(id => ({
+      S: id.toString() // Convert each ID to string type for DynamoDB
+    }));
+
     const logItem = {
       'exec-id': execId,
       'child-exec-id': childExecId,
@@ -30,7 +36,10 @@ export const saveExecutionLog = async ({
         'response-status': data.responseStatus,
         'pagination-type': data.paginationType || 'none',
         'timestamp': timestamp,
-        'is-last': data.isLast || false
+        'is-last': data.isLast || false,
+        'item-ids': {
+          L: formattedItemIds // Use DynamoDB list type for item IDs
+        }
       }
     };
 
@@ -38,6 +47,13 @@ export const saveExecutionLog = async ({
     if (isParent) {
       logItem.data.status = data.status || EXECUTION_STATUS.STARTED;
     }
+
+    console.log('Saving execution log with item IDs:', {
+      execId,
+      childExecId,
+      itemIdsCount: formattedItemIds.length,
+      itemIds: formattedItemIds
+    });
 
     const response = await dynamodbHandlers.createItem({
       request: {
@@ -153,7 +169,8 @@ export const savePaginatedExecutionLogs = async ({
             requestUrl: pageData.url,
             responseStatus: pageData.status,
             paginationType: pageData.paginationType,
-            isLast: pageData.isLast
+            isLast: pageData.isLast,
+            itemIds: pageData.itemIds || []
           }
         });
       }
