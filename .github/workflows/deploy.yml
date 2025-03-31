@@ -1,56 +1,65 @@
-name: Deploy to EC2
+name: Deploy to AWS
 
 on:
   push:
-    branches: [ main ]  # or your default branch name
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
-
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v1
+    - uses: actions/checkout@v3
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
       with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: us-east-1
-
-    - name: Deploy to EC2
+        node-version: '20'
+        
+    - name: Install dependencies
+      run: npm install
+      
+    - name: Build application
+      run: npm run build
+      
+    - name: Deploy to AWS
       uses: appleboy/ssh-action@master
       with:
         host: ec2-34-199-78-49.compute-1.amazonaws.com
         username: ec2-user
-        key: ${{ secrets.EC2_SSH_KEY }}
+        key: |
+        -----BEGIN RSA PRIVATE KEY-----
+MIIEpAIBAAKCAQEAxOudxJgH8we4CGwP+IuqGf2OY1qYV1WmFyWhH4Ach8mfJ+ob
+eFNFQfc/hU9YDOVYii/JyhAIcTHVr60LiI4x3QnwsguDAXOk63WOw+vd8UFN4frt
+/LjxPyUwUFH1ZgwOk/gNsqs9gvkR/i1g3ESupqpa+GjsrZD4cKlHmmM4xwjNHnuk
+sPJNYNEtO7vRk54WloLKAp2SaZiSsAn7SHB0hSNEU+MHZ14udRcK8ulFjqvga2G3
+7JP2CiVPwLJymTvunyi1whCqBIMu1GPU4xJzaqlCbQ/EfoqfB1BZw3hPJgjo+zar
+GTLvHKPhBa8k6aMEJ9zmFHvLIR0CAIcTk1i+HwIDAQABAoIBAFlIQsXp8GC+NTCM
+XklgeYVDMxXU85FVYfLIut7fZRAj2Cduu3m4t4QLKB+3M8LVEWnF9QXKcylvYOU/
+3iTR48XGRf1TvtgfqLyhFlO6U2yZIUi+Trzw1WC96cPhBRR5jvqD0yIZBdCmQQQv
+auUztsQWJRzP5c9kFWBvP+m95vZGOOLxJmURWd0Y0kAF0aafOXOshWBgXRarwAiI
+JwEf289dyfqGp7zU3s+lGOlTjA8Uaicn5uUJda5d6f3Wk8DV65xNwPy/4kvpXozd
+uQdrzHz+M5IocDUSaWnKMvset4cPgu3Ez259buKQqhiSmJsdNcAveuCjjepgJaAi
+5cOfioECgYEA9V/miojWkJ5QbsjnftV/9NjYr9NmlLuO/BaYzc/Q8YtvC6U6e0RG
+rtr+c9kK8GJkGRjfw+xAlwMCUxf1yCRTrMqqvTiwddA8noHV5Fske1GDhejXVTxw
+Kotm14giePqgyY2lDedyNMQJEDvVunrHC6akckrmd+i8/Hd+1jMi8H8CgYEAzXKT
+kwehVoZYBACoGB6EafuBq2G891ANfl7JUV6UaCdM7Xdtgw+QW/stCd9mZLojeslD
+RDzWcNQ0nHGX1GJ0qw60Ij+V3oikJBfLa6LauRPwDqLSj+pBNAV4VEzK94fTE0Tn
+8qpyti0eJOHLWFw79PFzxO1INj0G4tAAfJd1YmECgYEAvq9iR7KDnCuLsixqyoQ8
+Rhjme+07QMZpHbqp0Pd5Ft0W1OP4iKbMj0IckAbRm3G6/E36RxWoNDLgcZajKIAi
+jpuJCDev2j6TfVLE2AuEVFlKbpw+Cz1GpaljqIdg0sdigH+VDzMX662UpYr6U0rq
+uEEudquCYxj5FPIAHZHryx0CgYB4dYelm8GzU83jeucUTUBiS78513LOpzdiMv1j
+Ikttzi1CxtWFFOkVpW5A7aXBxYnsAnnYVrt9KE84sznMo3W4nkRsGFAtTHzBVNpG
+4BPSlKgaTMmc7EMS12o4M1aGUDMohyxgkiP0QPv9sA5kXqAg/Dle66l9c8bH0iGW
+6889wQKBgQCZs1c8b3v+KU5w4uGhCDWdm2cKTHBQ2vWTq2IBvHIYfBcCxjC8GDXR
+n5UsWX1/O8xmvjtYw0D8ijs3pIX0kkVz3fX1xldDIbtijCMz1FTqUQZp5EH51Llb
+GIT8uO8M0WoI7aQlu6Z3bezxruS1UmdbXYWjdFFTjNZot6tu0ENs5Q==
+-----END RSA PRIVATE KEY-----
         script: |
-          # Debug: Print current directory and contents
-          pwd
-          ls -la
-          
-          # Navigate to the correct directory
           cd /home/ec2-user/brmh-backend
-          
-          # Debug: Print git status
-          git status
-          
-          # Fetch and pull changes
-          git fetch origin
           git pull origin main
-          
-          # Debug: Print npm version and install dependencies
-          npm -v
           npm install
-          
-          # Debug: Check PM2 status
-          pm2 list
-          
-          # Restart the application
-          pm2 restart all
-          
-          # Debug: Print final status
-          echo "Deployment completed"
-          git status
-          pm2 list 
+          npm run build
+          pm2 restart all || pm2 start npm --name "brmh-backend" -- start 
