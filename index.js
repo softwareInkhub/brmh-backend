@@ -2318,6 +2318,6 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`Main API documentation available at http://localhost:${PORT}/api-docs`);
   console.log(`Pinterest API documentation available at http://localhost:${PORT}/pinterest-api-docs`);
   console.log(`AWS DynamoDB service available at http://localhost:${PORT}/api/dynamodb`);
-  console.log(`AWS Messaging Service documentation available at http://localhost:${PORT}/aws-messaging-docs`);
+  console.log(`AWS Messaging Service documentation available at http://localhost:${PORT}/aws-messaging-docsss`);
 });
 
