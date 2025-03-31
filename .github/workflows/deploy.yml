@@ -17,7 +17,7 @@ jobs:
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: us-east-1  # Updated to your region
+        aws-region: us-east-1
 
     - name: Deploy to EC2
       uses: appleboy/ssh-action@master
@@ -26,7 +26,31 @@ jobs:
         username: ec2-user
         key: ${{ secrets.EC2_SSH_KEY }}
         script: |
+          # Debug: Print current directory and contents
+          pwd
+          ls -la
+          
+          # Navigate to the correct directory
           cd /home/ec2-user/brmh-backend
+          
+          # Debug: Print git status
+          git status
+          
+          # Fetch and pull changes
+          git fetch origin
           git pull origin main
+          
+          # Debug: Print npm version and install dependencies
+          npm -v
           npm install
-          pm2 restart all  # If you're using PM2 for process management 
+          
+          # Debug: Check PM2 status
+          pm2 list
+          
+          # Restart the application
+          pm2 restart all
+          
+          # Debug: Print final status
+          echo "Deployment completed"
+          git status
+          pm2 list 
