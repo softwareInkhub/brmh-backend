@@ -37,6 +37,7 @@ export const saveExecutionLog = async ({
         'pagination-type': data.paginationType || 'none',
         'timestamp': timestamp,
         'is-last': data.isLast || false,
+        'max-iterations': data.maxIterations,
         'item-ids': {
           L: formattedItemIds // Use DynamoDB list type for item IDs
         }
@@ -143,7 +144,8 @@ export const savePaginatedExecutionLogs = async ({
         responseStatus: 0, // Will be updated later
         paginationType: 'paginated',
         status: EXECUTION_STATUS.STARTED,
-        isLast: false
+        isLast: false,
+        maxIterations: maxIterations // Add maxIterations to the log data
       },
       isParent: true
     });

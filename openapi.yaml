@@ -3,6 +3,9 @@ info:
   title: Namespace Management API
   version: 1.0.0
   description: API for managing namespaces, accounts, and methods
+servers:
+  - url: /api
+    description: API prefix for all routes
 
 paths:
   /namespaces:

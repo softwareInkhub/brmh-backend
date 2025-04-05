@@ -5,7 +5,7 @@ info:
   description: API for DynamoDB operations
 
 servers:
-  - url: http://localhost:5000/api/dynamodb
+  - url: http://localhost:4000/api/dynamodb
     description: Local development server
 
 components:
@@ -511,6 +511,72 @@ paths:
                       $ref: '#/components/schemas/TableItem'
                   count:
                     type: integer
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /tables/{tableName}/items/loop:
+    post:
+      summary: Fetch items from a table in a loop with pagination
+      operationId: getItemsInLoop
+      parameters:
+        - name: tableName
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                maxIterations:
+                  type: integer
+                  minimum: 1
+                  default: 10
+                  description: Maximum number of iterations to perform
+                pageSize:
+                  type: integer
+                  minimum: 1
+                  default: 100
+                  description: Number of items to fetch per iteration
+                lastEvaluatedKey:
+                  type: object
+                  description: Last evaluated key from previous iteration
+                filterExpression:
+                  type: string
+                  description: Filter expression for the query
+                expressionAttributeNames:
+                  type: object
+                  description: Expression attribute names
+                expressionAttributeValues:
+                  type: object
+                  description: Expression attribute values
+      responses:
+        '200':
+          description: Items fetched successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TableItem'
+                  count:
+                    type: integer
+                  lastEvaluatedKey:
+                    type: object
+                    description: Last evaluated key for pagination
+                  iterations:
+                    type: integer
+                    description: Number of iterations performed
         '500':
           description: Server error
           content:
