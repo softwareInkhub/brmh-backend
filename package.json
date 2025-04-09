@@ -7,7 +7,6 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js"
-    
   },
   "keywords": [],
   "author": "",
@@ -20,13 +19,26 @@
     "axios": "^1.6.7",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
-    "express": "^4.18.3",
+    "express": "^4.21.2",
     "js-yaml": "^4.1.0",
-    "openapi-backend": "^5.10.5",
-    "swagger-ui-express": "^5.0.0",
-    "uuid": "^9.0.1"
+    "nanoid": "^5.1.5",
+    "openapi-backend": "^5.11.1",
+    "swagger-ui-express": "^5.0.1",
+    "uuid": "^9.0.1",
+    "ws": "^8.18.1"
   },
   "devDependencies": {
     "nodemon": "^3.1.0"
-  }
+  },
+  "directories": {
+    "lib": "lib"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/softwareInkhub/brmh-backend.git"
+  },
+  "bugs": {
+    "url": "https://github.com/softwareInkhub/brmh-backend/issues"
+  },
+  "homepage": "https://github.com/softwareInkhub/brmh-backend#readme"
 }

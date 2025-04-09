@@ -9,7 +9,7 @@ import yaml from 'js-yaml';
 import { v4 as uuidv4 } from 'uuid';
 import cors from 'cors'
 import axios from 'axios';
-import { handlers as pinterestHandlers } from './pinterest-handlers.js';
+// import { handlers as pinterestHandlers } from './pinterest-handlers.js';
 import { handlers as dynamodbHandlers } from './lib/dynamodb-handlers.js';
 import dotenv from 'dotenv';
 import { handlers as awsMessagingHandlers } from './aws-messaging-handlers.js';
@@ -93,17 +93,11 @@ const mainApi = new OpenAPIBackend({
       });
 
       try {
-        const response = await dynamodbHandlers.getItems({
+        const response = await dynamodbHandlers.getItemsByPk({
           request: {
             params: {
-              tableName: 'brmh-namespace-accounts'
-            },
-            requestBody: {
-              TableName: 'brmh-namespace-accounts',
-              FilterExpression: "id = :accountId",
-              ExpressionAttributeValues: {
-                ":accountId": accountId
-              }
+              tableName: 'brmh-namespace-accounts',
+              id: accountId
             }
           }
         });
@@ -1670,23 +1664,23 @@ const awsApi = new OpenAPIBackend({
 });
 
 // Initialize Pinterest OpenAPI backend
-const pinterestApi = new OpenAPIBackend({
-  definition: './pinterest-api.yaml',
-  quick: true,
-  handlers: {
-    validationFail: async (c, req, res) => ({
-      statusCode: 400,
-      error: c.validation.errors
-    }),
-    notFound: async (c, req, res) => ({
-      statusCode: 404,
-      error: 'Not Found'
-    }),
-    // Map the Pinterest handlers
-    getPinterestToken: pinterestHandlers.getPinterestToken,
-    testPinterestApi: pinterestHandlers.testPinterestApi
-  }
-});
+// const pinterestApi = new OpenAPIBackend({
+//   definition: './pinterest-api.yaml',
+//   quick: true,
+//   handlers: {
+//     validationFail: async (c, req, res) => ({
+//       statusCode: 400,
+//       error: c.validation.errors
+//     }),
+//     notFound: async (c, req, res) => ({
+//       statusCode: 404,
+//       error: 'Not Found'
+//     }),
+//     // Map the Pinterest handlers
+//     getPinterestToken: pinterestHandlers.getPinterestToken,
+//     testPinterestApi: pinterestHandlers.testPinterestApi
+//   }
+// });
 
 
 
@@ -1721,7 +1715,7 @@ const awsMessagingApi = new OpenAPIBackend({
 // Initialize all APIs
 await Promise.all([
   awsApi.init(),
-  pinterestApi.init(),
+  // pinterestApi.init(),
   awsMessagingApi.init()
 ]);
 
@@ -1743,7 +1737,7 @@ const handleRequest = async (handler, req, res) => {
 // Serve Swagger UI for all APIs
 const mainOpenapiSpec = yaml.load(fs.readFileSync(path.join(__dirname, 'openapi.yaml'), 'utf8'));
 const awsOpenapiSpec = yaml.load(fs.readFileSync(path.join(__dirname, 'swagger/aws-dynamodb.yaml'), 'utf8'));
-const pinterestOpenapiSpec = yaml.load(fs.readFileSync(path.join(__dirname, 'pinterest-api.yaml'), 'utf8'));
+// const pinterestOpenapiSpec = yaml.load(fs.readFileSync(path.join(__dirname, 'pinterest-api.yaml'), 'utf8'));
 
 // Serve main API docs
 app.use('/api-docs', swaggerUi.serve);
@@ -1795,17 +1789,17 @@ app.get('/api/dynamodb/swagger.json', (req, res) => {
 });
 
 // Serve Pinterest API docs
-app.use('/pinterest-api-docs', swaggerUi.serve);
-app.get('/pinterest-api-docs', (req, res) => {
-  res.send(
-    swaggerUi.generateHTML(pinterestOpenapiSpec, {
-      customSiteTitle: "Pinterest API Documentation",
-      customfavIcon: "/favicon.ico",
-      customCss: '.swagger-ui .topbar { display: none }',
-      swaggerUrl: "/pinterest-api-docs/swagger.json"
-    })
-  );
-});
+// app.use('/pinterest-api-docs', swaggerUi.serve);
+// app.get('/pinterest-api-docs', (req, res) => {
+//   res.send(
+//     swaggerUi.generateHTML(pinterestOpenapiSpec, {
+//       customSiteTitle: "Pinterest API Documentation",
+//       customfavIcon: "/favicon.ico",
+//       customCss: '.swagger-ui .topbar { display: none }',
+//       swaggerUrl: "/pinterest-api-docs/swagger.json"
+//     })
+//   );
+// });
 
 
 
@@ -1971,11 +1965,49 @@ app.all('/api/aws-messaging/*', async (req, res) => {
   }
 });
 
+app.post('/pinterest/token', async (req, res) => {
+  console.log('Incoming Request Body:', req.body); // Log the incoming request body
+  const { code, clientId, clientSecret, redirectUrl } = req.body;
+
+  // Check if any of the required fields are missing
+  if (!code || !clientId || !clientSecret || !redirectUrl) {
+      return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  const tokenRequestBody = new URLSearchParams({
+      grant_type: 'authorization_code',
+      code: code,
+      client_id: clientId,
+      client_secret: clientSecret,
+      redirect_uri: redirectUrl
+  }).toString();
+
+  const auth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+  
+
+  try {
+      const response = await axios.post('https://api.pinterest.com/v5/oauth/token', tokenRequestBody, {
+          headers: {
+              'Authorization': `Basic ${auth}`,
+              'Content-Type': 'application/x-www-form-urlencoded'
+          }
+      });
+     
+      res.json(response.data.access_token); // Send the response data back to the client
+  
+  
+  } catch (error) {
+      console.error('Error fetching token:', error.response ? error.response.data : error.message);
+      res.status(500).json({ error: 'Failed to fetch token' });
+  }
+});
+
+
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server listening on port ${PORT}`);
   console.log(`Main API documentation available at http://localhost:${PORT}/api-docs`);
-  console.log(`Pinterest API documentation available at http://localhost:${PORT}/pinterest-api-docs`);
+  // console.log(`Pinterest API documentation available at http://localhost:${PORT}/pinterest-api-docs`);
   console.log(`AWS DynamoDB service available at http://localhost:${PORT}/api/dynamodb`);
   console.log(`AWS Messaging Service documentation available at http://localhost:${PORT}/aws-messaging-docsss`);
 });

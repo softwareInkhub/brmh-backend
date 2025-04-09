@@ -1,161 +1,310 @@
-# DynamoDB Loop Request Documentation
+# Namespace Account & Method Documentation
 
-## Overview
-The loop request functionality allows you to fetch items from a DynamoDB table in batches with pagination support. Results are cached for 5 minutes by default to improve performance and reduce DynamoDB costs.
+## Namespace Accounts
 
-## Endpoint
+### Update Namespace Account
+Updates an existing account with new configuration.
+
+#### Endpoint
 ```
-POST /api/dynamodb/tables/{tableName}/items/loop
+PUT /api/accounts/{accountId}
 ```
 
-## Request Parameters
+#### Path Parameters
+- `accountId` (string, required): The unique identifier of the account to update
 
-### Path Parameters
-- `tableName` (string, required): The name of the DynamoDB table to query
-
-### Request Body
+#### Request Body
 ```json
 {
-  "pageSize": 1000,             // Number of items to fetch per iteration (default: 1000)
-  "maxIterations": null,        // Maximum number of iterations (null for infinite loop)
-  "lastEvaluatedKey": null,     // Last evaluated key from previous request for pagination
-  "filterExpression": "#status = :active",  // Optional filter expression
-  "expressionAttributeNames": {  // Required if using filterExpression
-    "#status": "status"
-  },
-  "expressionAttributeValues": { // Required if using filterExpression
-    ":active": "active"
-  },
-  "useCache": true             // Whether to use caching (default: true)
-}
-```
-
-## Response
-```json
-{
-  "items": [
-    // Array of items from the table
+  "namespace-account-name": "updated-store",
+  "namespace-account-url-override": "https://updated-store.myshopify.com",
+  "namespace-account-header": [
+    {
+      "key": "X-API-Key",
+      "value": "updated-api-key"
+    }
   ],
-  "count": 150,                 // Total number of items returned
-  "lastEvaluatedKey": {         // Key to use for next pagination request
-    "id": "123",
-    "timestamp": "2024-01-01T00:00:00Z"
-  },
-  "iterations": 2,              // Number of iterations performed
-  "hasMoreItems": true,         // Whether there are more items to fetch
-  "fromCache": true            // Whether the response came from cache
+  "variables": [
+    {
+      "key": "store_id",
+      "value": "54321"
+    }
+  ],
+  "tags": ["production"]
 }
 ```
 
-## Example Usage
+#### Request Body Parameters
+- `namespace-account-name` (string, required): Display name for the account
+- `namespace-account-url-override` (string, optional): Custom URL to override the namespace base URL
+- `namespace-account-header` (array, optional): Custom headers for API authentication
+  - `key` (string): Header name
+  - `value` (string): Header value
+- `variables` (array, optional): Custom variables for this account
+  - `key` (string): Variable name
+  - `value` (string): Variable value
+- `tags` (array, optional): Tags for filtering and organizing accounts
 
-### Basic Request with Cache
-```bash
-curl -X POST http://localhost:4000/api/dynamodb/tables/my-table/items/loop \
--H "Content-Type: application/json" \
--d '{
-  "pageSize": 1000,
-  "maxIterations": null,
-  "useCache": true
-}'
+#### Response (200 OK)
+```json
+{
+  "namespace-id": "abc123",
+  "namespace-account-id": "def456",
+  "namespace-account-name": "updated-store",
+  "namespace-account-url-override": "https://updated-store.myshopify.com",
+  "namespace-account-header": [
+    {
+      "key": "X-API-Key",
+      "value": "updated-api-key"
+    }
+  ],
+  "variables": [
+    {
+      "key": "store_id",
+      "value": "54321"
+    }
+  ],
+  "tags": ["production"]
+}
 ```
 
-### Force Fresh Data (No Cache)
-```bash
-curl -X POST http://localhost:4000/api/dynamodb/tables/my-table/items/loop \
--H "Content-Type: application/json" \
--d '{
-  "pageSize": 1000,
-  "maxIterations": 5,
-  "useCache": false
-}'
-```
-
-### Infinite Loop (Fetch All Items)
-```bash
-curl -X POST http://localhost:4000/api/dynamodb/tables/my-table/items/loop \
--H "Content-Type: application/json" \
--d '{
-  "pageSize": 1000,
-  "maxIterations": null
-}'
-```
-
-### Limited Iterations
-```bash
-curl -X POST http://localhost:4000/api/dynamodb/tables/my-table/items/loop \
--H "Content-Type: application/json" \
--d '{
-  "pageSize": 1000,
-  "maxIterations": 5
-}'
-```
-
-### With Filter Expression
-```bash
-curl -X POST http://localhost:4000/api/dynamodb/tables/my-table/items/loop \
--H "Content-Type: application/json" \
--d '{
-  "pageSize": 1000,
-  "maxIterations": null,
-  "filterExpression": "#status = :active",
-  "expressionAttributeNames": {
-    "#status": "status"
-  },
-  "expressionAttributeValues": {
-    ":active": "active"
-  }
-}'
-```
-
-### Pagination Example
-```bash
-# First request
-curl -X POST http://localhost:4000/api/dynamodb/tables/my-table/items/loop \
--H "Content-Type: application/json" \
--d '{
-  "pageSize": 1000,
-  "maxIterations": 2
-}'
-
-# Second request using lastEvaluatedKey from first response
-curl -X POST http://localhost:4000/api/dynamodb/tables/my-table/items/loop \
--H "Content-Type: application/json" \
--d '{
-  "pageSize": 1000,
-  "maxIterations": 2,
-  "lastEvaluatedKey": {
-    "id": "123",
-    "timestamp": "2024-01-01T00:00:00Z"
-  }
-}'
-```
-
-## Notes
-1. The endpoint will continue fetching items until either:
-   - All items are retrieved
-   - The maximum number of iterations is reached (if maxIterations is set)
-   - No more items are available
-2. Results are cached for 5 minutes by default when `useCache` is true
-3. Cache is based on the combination of tableName, filterExpression, and expression attributes
-4. Cache is bypassed when using pagination (lastEvaluatedKey)
-5. Use `lastEvaluatedKey` from the response to continue pagination
-6. Filter expressions follow DynamoDB's expression syntax
-7. The `pageSize` parameter controls how many items are fetched per iteration (maximum: 1000 items)
-8. Set `maxIterations` to `null` for infinite loop (fetch all items)
-9. The `hasMoreItems` field in the response indicates if there are more items to fetch
-
-## Error Handling
-- 400 Bad Request: Invalid request parameters
-- 404 Not Found: Table does not exist
+#### Error Responses
+- 400 Bad Request: Invalid request body
+- 404 Not Found: Account ID does not exist
 - 500 Internal Server Error: Server-side error
 
+## Namespace Methods
+
+### Update Namespace Method
+Updates an existing method with new configuration.
+
+#### Endpoint
+```
+PUT /api/methods/{methodId}
+```
+
+#### Path Parameters
+- `methodId` (string, required): The unique identifier of the method to update
+
+#### Request Body
+```json
+{
+  "namespace-method-name": "updateProduct",
+  "namespace-method-type": "PUT",
+  "namespace-method-url-override": "/admin/api/products/{id}.json",
+  "namespace-method-queryParams": [
+    {
+      "key": "fields",
+      "value": "id,title,variants"
+    }
+  ],
+  "namespace-method-header": [
+    {
+      "key": "Content-Type",
+      "value": "application/json"
+    }
+  ],
+  "save-data": true,
+  "isInitialized": true,
+  "tags": ["products", "update"],
+  "sample-request": {
+    "product": {
+      "title": "Updated Product"
+    }
+  },
+  "sample-response": {
+    "product": {
+      "id": 123,
+      "title": "Updated Product"
+    }
+  },
+  "request-schema": {},
+  "response-schema": {}
+}
+```
+
+#### Request Body Parameters
+- `namespace-method-name` (string, required): Display name for the method
+- `namespace-method-type` (string, required): HTTP method (GET, POST, PUT, DELETE, etc.)
+- `namespace-method-url-override` (string, optional): Path to append to the base URL
+- `namespace-method-queryParams` (array, optional): Default query parameters
+  - `key` (string): Parameter name
+  - `value` (string): Parameter value
+- `namespace-method-header` (array, optional): Default headers
+  - `key` (string): Header name
+  - `value` (string): Header value
+- `save-data` (boolean, optional): Whether to save response data
+- `isInitialized` (boolean, optional): Whether this method has been initialized
+- `tags` (array, optional): Tags for filtering and organizing methods
+- `sample-request` (object, optional): Example request payload
+- `sample-response` (object, optional): Example response payload
+- `request-schema` (object, optional): JSON schema for request validation
+- `response-schema` (object, optional): JSON schema for response validation
+
+#### Response (200 OK)
+```json
+{
+  "namespace-id": "abc123",
+  "namespace-method-id": "mth789",
+  "namespace-method-name": "updateProduct",
+  "namespace-method-type": "PUT",
+  "namespace-method-url-override": "/admin/api/products/{id}.json",
+  "namespace-method-queryParams": [
+    {
+      "key": "fields",
+      "value": "id,title,variants"
+    }
+  ],
+  "namespace-method-header": [
+    {
+      "key": "Content-Type",
+      "value": "application/json"
+    }
+  ],
+  "save-data": true,
+  "isInitialized": true,
+  "tags": ["products", "update"],
+  "sample-request": {
+    "product": {
+      "title": "Updated Product"
+    }
+  },
+  "sample-response": {
+    "product": {
+      "id": 123,
+      "title": "Updated Product"
+    }
+  },
+  "request-schema": {},
+  "response-schema": {}
+}
+```
+
+#### Error Responses
+- 400 Bad Request: Invalid request body
+- 404 Not Found: Method ID does not exist
+- 500 Internal Server Error: Server-side error
+
+## Implementation Examples
+
+### Update Account Example
+```javascript
+// Example using fetch API
+const updateAccount = async (accountId, accountData) => {
+  try {
+    const response = await fetch(`/api/accounts/${accountId}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(accountData)
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Error: ${response.status}`);
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error('Failed to update account:', error);
+    throw error;
+  }
+};
+
+// Example usage
+updateAccount('def456', {
+  "namespace-account-name": "updated-store",
+  "namespace-account-url-override": "https://updated-store.myshopify.com",
+  "namespace-account-header": [
+    {
+      "key": "X-API-Key",
+      "value": "updated-api-key"
+    }
+  ],
+  "variables": [
+    {
+      "key": "store_id",
+      "value": "54321"
+    }
+  ],
+  "tags": ["production"]
+}).then(updatedAccount => {
+  console.log('Account updated:', updatedAccount);
+});
+```
+
+### Update Method Example
+```javascript
+// Example using fetch API
+const updateMethod = async (methodId, methodData) => {
+  try {
+    const response = await fetch(`/api/methods/${methodId}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(methodData)
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Error: ${response.status}`);
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error('Failed to update method:', error);
+    throw error;
+  }
+};
+
+// Example usage
+updateMethod('mth789', {
+  "namespace-method-name": "updateProduct",
+  "namespace-method-type": "PUT",
+  "namespace-method-url-override": "/admin/api/products/{id}.json",
+  "namespace-method-queryParams": [
+    {
+      "key": "fields",
+      "value": "id,title,variants"
+    }
+  ],
+  "namespace-method-header": [
+    {
+      "key": "Content-Type",
+      "value": "application/json"
+    }
+  ],
+  "save-data": true,
+  "isInitialized": true,
+  "tags": ["products", "update"],
+  "sample-request": {
+    "product": {
+      "title": "Updated Product"
+    }
+  },
+  "sample-response": {
+    "product": {
+      "id": 123,
+      "title": "Updated Product"
+    }
+  }
+}).then(updatedMethod => {
+  console.log('Method updated:', updatedMethod);
+});
+```
+
 ## Best Practices
-1. Start with a smaller `pageSize` (e.g., 100) and increase if needed, but never exceed the maximum of 1000 items
-2. Use `maxIterations` to limit the number of iterations when testing or when you don't need all items
-3. Use filter expressions to narrow down results when possible
-4. Keep caching enabled for frequently accessed data that doesn't change often
-5. Disable caching when real-time data is required
-6. Use pagination with `lastEvaluatedKey` for very large datasets
-7. Monitor memory usage when fetching large datasets
-8. Consider the cache TTL (5 minutes) when planning your application's data refresh strategy
+
+### Updating Accounts
+1. **Preserve Existing Configuration**: Only include fields you want to change
+2. **Maintain Security**: Be careful when updating authentication headers
+3. **Test After Updates**: Verify the account still works correctly after changes
+4. **Use Descriptive Names**: Choose clear names that reflect the account's purpose
+5. **Consider Variables**: Use variables for values that might change between environments
+
+### Updating Methods
+1. **Test Method Changes**: Always validate method changes with a test request
+2. **Update Sample Data**: Keep sample request/response payloads up to date
+3. **Version Control**: Consider adding version information in tags
+4. **Path Parameters**: Use consistent syntax for path parameters (e.g., `{id}`)
+5. **Documentation**: Update sample requests when changing the method signature
