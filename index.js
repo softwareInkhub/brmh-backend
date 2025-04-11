@@ -1801,9 +1801,199 @@ app.get('/api/dynamodb/swagger.json', (req, res) => {
 //   );
 // });
 
+// Webhook handler functions
+async function handleIncomingWebhook(req, res) {
+  console.log('Received webhook request:', {
+    method: req.method,
+    path: req.path,
+    headers: req.headers,
+    body: req.body
+  });
 
+  try {
+    // Get all registered webhooks to find matching route
+    const webhooksResponse = await dynamodbHandlers.getItems({
+      request: {
+        params: {
+          tableName: 'webhooks'
+        }
+      }
+    });
 
+    console.log('Retrieved webhooks:', webhooksResponse.body);
 
+    if (!webhooksResponse.body || !webhooksResponse.body.items) {
+      throw new Error('Failed to fetch registered webhooks');
+    }
+
+    // Find webhook registration that matches the incoming route
+    const matchingWebhook = webhooksResponse.body.items.find(webhook => {
+      if (!webhook || !webhook.route) {
+        console.log('Invalid webhook configuration:', webhook);
+        return false;
+      }
+
+      // Get the routes for comparison and normalize them
+      const incomingRoute = req.path.trim().toLowerCase();
+      // Handle DynamoDB attribute type format and normalize
+      const registeredRoute = (webhook.route.S || webhook.route).trim().toLowerCase();
+
+      console.log('Comparing routes:', {
+        incoming: incomingRoute,
+        registered: registeredRoute,
+        matches: incomingRoute === registeredRoute
+      });
+
+      // Exact match comparison after normalization
+      return incomingRoute === registeredRoute;
+    });
+
+    if (!matchingWebhook) {
+      console.log('No matching webhook found for route:', req.path);
+      return res.status(404).json({
+        error: 'No matching webhook route found',
+        path: req.path
+      });
+    }
+
+    console.log('Found matching webhook:', matchingWebhook);
+
+    // Get target table name from the matched webhook
+    const targetTable = matchingWebhook.tableName.S || matchingWebhook.tableName;
+    if (!targetTable) {
+      throw new Error('Target table name not found in webhook registration');
+    }
+
+    // Get the webhook payload
+    const webhookPayload = req.body;
+
+    // Convert all numbers to strings recursively
+    const convertNumbersToStrings = (obj) => {
+      if (obj === null || obj === undefined) {
+        return obj;
+      }
+
+      if (typeof obj === 'number') {
+        return String(obj);
+      }
+
+      if (Array.isArray(obj)) {
+        return obj.map(item => convertNumbersToStrings(item));
+      }
+
+      if (typeof obj === 'object') {
+        const newObj = {};
+        for (const [key, value] of Object.entries(obj)) {
+          newObj[key] = convertNumbersToStrings(value);
+        }
+        return newObj;
+      }
+
+      return obj;
+    };
+
+    // Convert all numbers in the payload to strings
+    const convertedPayload = convertNumbersToStrings(webhookPayload);
+
+    // Create item to save
+    const item = {
+      id: String(convertedPayload.id || convertedPayload.product_id || convertedPayload.order_id || Date.now()),
+      ...convertedPayload
+    };
+
+    console.log('Saving item with converted values:', item);
+
+    // Save to the target table
+    await dynamodbHandlers.createItem({
+      request: {
+        params: {
+          tableName: targetTable
+        },
+        requestBody: item
+      }
+    });
+
+    console.log('Successfully saved webhook data:', {
+      table: targetTable,
+      itemId: item.id
+    });
+
+    res.status(200).json({
+      message: 'Webhook processed successfully',
+      table: targetTable,
+      itemId: item.id
+    });
+
+  } catch (error) {
+    console.error('Error processing webhook:', error);
+    res.status(500).json({
+      error: 'Failed to process webhook',
+      details: error.message
+    });
+  }
+}
+
+async function listWebhookData(req, res) {
+  console.log('Listing webhook data');
+  try {
+    const { tableName } = req.params;
+    const params = {
+      TableName: 'webhooks',
+      FilterExpression: '#tableName = :tableName',
+      ExpressionAttributeNames: {
+        '#tableName': 'tableName'
+      },
+      ExpressionAttributeValues: {
+        ':tableName': { S: tableName }
+      }
+    };
+
+    const result = await dynamodbHandlers.queryItems({
+      request: {
+        params: {
+          tableName: 'webhooks',
+          query: {
+            FilterExpression: '#tableName = :tableName',
+            ExpressionAttributeNames: {
+              '#tableName': 'tableName'
+            },
+            ExpressionAttributeValues: {
+              ':tableName': { S: tableName }
+            }
+          }
+        }
+      }
+    });
+    console.log('Webhook data retrieved successfully');
+
+    res.status(200).json({
+      message: 'Webhook data retrieved successfully',
+      items: result.body.Items.map(item => ({
+        webhookId: item.webhookId.S,
+        tableName: item.tableName.S,
+        payload: JSON.parse(item.payload.S),
+        timestamp: item.timestamp.S,
+        status: item.status.S
+      }))
+    });
+  } catch (error) {
+    console.error('Error listing webhook data:', error);
+    res.status(500).json({
+      error: 'Failed to list webhook data',
+      details: error.message
+    });
+  }
+}
+
+// Webhook routes - MOVED BEFORE CATCH-ALL ROUTE
+app.post('/api/webhooks/:tableName', handleIncomingWebhook);
+app.get('/api/webhooks/:tableName', listWebhookData);
+
+// Test route to verify webhook endpoint accessibility
+app.get('/api/webhooks/test', (req, res) => {
+  console.log('Test webhook endpoint hit');
+  res.status(200).json({ message: 'Webhook endpoint is accessible' });
+});
 
 // Handle AWS DynamoDB routes
 app.all('/api/dynamodb/*', async (req, res, next) => {
@@ -2001,7 +2191,6 @@ app.post('/pinterest/token', async (req, res) => {
       res.status(500).json({ error: 'Failed to fetch token' });
   }
 });
-
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, '0.0.0.0', () => {
