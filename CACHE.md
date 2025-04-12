@@ -63,66 +63,6 @@ scanCache.set(cacheKey, {
   - Items are updated
   - Items are deleted
 
-## DynamoDB Data Formatting
-
-### Formatting Functions
-The caching system works in conjunction with DynamoDB formatting functions that ensure proper data structure when interacting with DynamoDB:
-
-```javascript
-// Helper function to format objects for DynamoDB
-function formatDynamoDBMap(obj) {
-  const result = {};
-  for (const [key, value] of Object.entries(obj)) {
-    if (value === null || value === undefined) {
-      result[key] = { NULL: true };
-    } else if (typeof value === 'string') {
-      result[key] = { S: value };
-    } else if (typeof value === 'number') {
-      result[key] = { N: value.toString() };
-    } else if (typeof value === 'boolean') {
-      result[key] = { BOOL: value };
-    } else if (Array.isArray(value)) {
-      result[key] = { L: value.map(item => formatDynamoDBValue(item)) };
-    } else if (typeof value === 'object') {
-      result[key] = { M: formatDynamoDBMap(value) };
-    }
-  }
-  return result;
-}
-
-function formatDynamoDBValue(value) {
-  if (value === null || value === undefined) {
-    return { NULL: true };
-  } else if (typeof value === 'string') {
-    return { S: value };
-  } else if (typeof value === 'number') {
-    return { N: value.toString() };
-  } else if (typeof value === 'boolean') {
-    return { BOOL: value };
-  } else if (Array.isArray(value)) {
-    return { L: value.map(item => formatDynamoDBValue(item)) };
-  } else if (typeof value === 'object') {
-    return { M: formatDynamoDBMap(value) };
-  }
-  return { NULL: true };
-}
-```
-
-### Data Type Handling
-These functions handle the following data types:
-- **Strings**: Converted to `{ S: value }`
-- **Numbers**: Converted to `{ N: value.toString() }`
-- **Booleans**: Converted to `{ BOOL: value }`
-- **Arrays**: Converted to `{ L: [formatted values] }`
-- **Objects**: Converted to `{ M: formatted object }`
-- **Null/Undefined**: Converted to `{ NULL: true }`
-
-### Integration with Caching
-When caching DynamoDB responses:
-1. Data is stored in the cache in its original format
-2. When retrieving from cache, no additional formatting is needed
-3. When writing to DynamoDB, the formatting functions ensure proper data structure
-
 ## Usage Guidelines
 
 ### When to Use Cache
@@ -193,28 +133,6 @@ async function getCachedItems(tableName, params) {
   });
 
   return response;
-}
-
-// Writing to DynamoDB with proper formatting
-async function createItemWithFormatting(tableName, item) {
-  // Format the item for DynamoDB
-  const formattedItem = formatDynamoDBMap(item);
-  
-  // Create the item in DynamoDB
-  const command = new PutCommand({
-    TableName: tableName,
-    Item: formattedItem
-  });
-  
-  await docClient.send(command);
-  
-  // Invalidate cache for this table
-  invalidateTableCache(tableName);
-  
-  return {
-    message: 'Item created successfully',
-    item: item
-  };
 }
 ```
 
