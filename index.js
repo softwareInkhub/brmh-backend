@@ -1995,7 +1995,7 @@ app.get('/api/webhooks/test', (req, res) => {
   res.status(200).json({ message: 'Webhook endpoint is accessible' });
 });
 
-// Handle AWS DynamoDB routes
+// Handle AWS DynamoDB routesss
 app.all('/api/dynamodb/*', async (req, res, next) => {
   // Skip if this is a documentation request
   if (req.method === 'GET' && req.path === '/api/dynamodb') {
