@@ -1918,10 +1918,53 @@ async function handleIncomingWebhook(req, res) {
       itemId: item.id
     });
 
+    // Generate a UUID for the execution log
+    const execId = uuidv4();
+    
+    // Save webhook metadata to executions table
+    const timestamp = new Date().toISOString();
+    const executionLogItem = {
+      'exec-id': execId,
+      'child-exec-id': execId, // Same as execId for webhook executions
+      data: {
+        'execution-id': execId,
+        'execution-type': 'webhook',
+        'webhook-id': matchingWebhook.id || 'unknown',
+        'webhook-route': req.path,
+        'target-table': targetTable,
+        'item-id': item.id,
+        'timestamp': timestamp,
+        'status': 'completed',
+        'is-last': true,
+        'total-items-processed': 1,
+        'items-in-current-page': 1,
+        'request-url': req.originalUrl,
+        'response-status': 200,
+        'pagination-type': 'none'
+      }
+    };
+
+    // Save execution log
+    await dynamodbHandlers.createItem({
+      request: {
+        params: {
+          tableName: 'executions'
+        },
+        requestBody: executionLogItem
+      }
+    });
+
+    console.log('Successfully saved webhook execution log:', {
+      execId,
+      webhookId: matchingWebhook.id,
+      itemId: item.id
+    });
+
     res.status(200).json({
       message: 'Webhook processed successfully',
       table: targetTable,
-      itemId: item.id
+      itemId: item.id,
+      executionId: execId
     });
 
   } catch (error) {
