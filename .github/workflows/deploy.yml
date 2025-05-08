@@ -21,6 +21,9 @@ jobs:
     - name: Install dependencies
       run: npm install
       
+    - name: Build application
+      run: npm run build
+      
     - name: Deploy to AWS
       uses: appleboy/ssh-action@master
       with:
@@ -29,6 +32,10 @@ jobs:
         key: ${{ secrets.EC2_SSH_KEY }}
         script: |
           cd /home/ubuntu/brmh-backend
+          # Reset any local changes
+          git reset --hard
+          git clean -fd
+          # Pull latest changes
           git pull origin main
           npm install
           # Install PM2 globally with sudo

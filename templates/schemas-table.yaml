@@ -1,0 +1,37 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'DynamoDB table for storing schemas'
+
+Resources:
+  SchemasTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: schemas
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+        - AttributeName: methodId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: MethodIdIndex
+          KeySchema:
+            - AttributeName: methodId
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+      Tags:
+        - Key: Environment
+          Value: !Ref AWS::StackName
+        - Key: Service
+          Value: BRMH
+
+Outputs:
+  SchemasTableName:
+    Description: Name of the schemas table
+    Value: !Ref SchemasTable
+  SchemasTableArn:
+    Description: ARN of the schemas table
+    Value: !GetAtt SchemasTable.Arn 

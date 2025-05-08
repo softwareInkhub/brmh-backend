@@ -134,85 +134,195 @@ export const savePaginatedExecutionLogs = async ({
   saveData
 }) => {
   try {
-    // Save parent execution log
-    const parentExecId = execId;
-    await saveExecutionLog({
-      execId: parentExecId,
-      childExecId: parentExecId, // Same as execId for parent
+    const timestamp = new Date().toISOString();
+    const parentExecutionLogItem = {
+      'exec-id': execId,
+      'child-exec-id': execId,
       data: {
-        requestUrl: url,
-        responseStatus: 0, // Will be updated later
-        paginationType: 'paginated',
-        status: EXECUTION_STATUS.STARTED,
-        isLast: false,
-        maxIterations: maxIterations // Add maxIterations to the log data
-      },
-      isParent: true
+        'execution-id': execId,
+        'execution-type': 'paginated',
+        'timestamp': timestamp,
+        'status': 'initialized',
+        'is-last': false,
+        'total-items-processed': 0,
+        'items-in-current-page': 0,
+        'request-url': url,
+        'request-method': method,
+        'request-query-params': queryParams,
+        'request-headers': headers,
+        'max-iterations': maxIterations,
+        'target-table': tableName,
+        'save-data': saveData
+      }
+    };
+
+    const response = await dynamodbHandlers.createItem({
+      request: {
+        params: {
+          tableName: 'executions'
+        },
+        requestBody: parentExecutionLogItem
+      }
     });
 
+    // Check if the response indicates success (statusCode 200 or 201)
+    if (response.statusCode !== 200 && response.statusCode !== 201) {
+      console.error('Failed to create parent execution log:', response);
+      return null;
+    }
+
     return {
-      parentExecId,
-      updateParentStatus: async (status, isLast) => {
-        return await updateParentExecutionStatus({
-          execId: parentExecId,
-          status,
-          isLast
-        });
-      },
-      saveChildExecution: async (pageData) => {
-        const childExecId = uuidv4();
-        return await saveExecutionLog({
-          execId: parentExecId,
-          childExecId,
-          data: {
-            iterationNo: pageData.pageNumber,
-            totalItemsProcessed: pageData.totalItemsProcessed,
-            itemsInCurrentPage: pageData.itemsInCurrentPage,
-            requestUrl: pageData.url,
-            responseStatus: pageData.status,
-            paginationType: pageData.paginationType,
-            isLast: pageData.isLast,
-            itemIds: pageData.itemIds || []
+      async updateParentStatus(status, isLast) {
+        try {
+          const updateResponse = await dynamodbHandlers.getItemsByPk({
+            request: {
+              params: {
+                tableName: 'executions',
+                id: execId
+              }
+            }
+          });
+
+          if (updateResponse.statusCode === 200 && updateResponse.body.items && updateResponse.body.items.length > 0) {
+            const currentItem = updateResponse.body.items[0];
+            currentItem.data.status = status;
+            currentItem.data['is-last'] = isLast;
+
+            const saveResponse = await dynamodbHandlers.createItem({
+              request: {
+                params: {
+                  tableName: 'executions'
+                },
+                requestBody: currentItem
+              }
+            });
+
+            if (saveResponse.statusCode === 200 || saveResponse.statusCode === 201) {
+              console.log('Successfully updated parent execution status:', {
+                execId,
+                status,
+                isLast
+              });
+              return true;
+            }
           }
-        });
+          return false;
+        } catch (error) {
+          console.error('Error updating parent execution status:', error);
+          return false;
+        }
+      },
+
+      async saveChildExecution({ pageNumber, totalItemsProcessed, itemsInCurrentPage, url, status, paginationType, isLast, itemIds }) {
+        try {
+          const childExecId = `${execId}-${pageNumber}`;
+          const childExecutionLogItem = {
+            'exec-id': execId,
+            'child-exec-id': childExecId,
+            data: {
+              'execution-id': execId,
+              'child-execution-id': childExecId,
+              'execution-type': 'paginated-child',
+              'page-number': pageNumber,
+              'timestamp': new Date().toISOString(),
+              'status': status,
+              'is-last': isLast,
+              'total-items-processed': totalItemsProcessed,
+              'items-in-current-page': itemsInCurrentPage,
+              'request-url': url,
+              'pagination-type': paginationType,
+              'item-ids': itemIds || []
+            }
+          };
+
+          const response = await dynamodbHandlers.createItem({
+            request: {
+              params: {
+                tableName: 'executions'
+              },
+              requestBody: childExecutionLogItem
+            }
+          });
+
+          if (response.statusCode === 200 || response.statusCode === 201) {
+            console.log('Successfully saved child execution log:', {
+              execId,
+              childExecId,
+              pageNumber,
+              status
+            });
+            return true;
+          }
+          
+          console.error('Failed to save child execution log:', response);
+          return false;
+        } catch (error) {
+          console.error('Error saving child execution log:', error);
+          return false;
+        }
       }
     };
   } catch (error) {
-    console.error('Error saving paginated execution logs:', error);
+    console.error('Error initializing paginated execution logs:', error);
     return null;
   }
 };
 
 // Handler to save single execution log
-export const saveSingleExecutionLog = async ({
-  execId,
-  method,
-  url,
-  queryParams,
-  headers,
-  responseStatus,
-  responseData
-}) => {
+export async function saveSingleExecutionLog({ execId, method, url, queryParams, headers, responseStatus, responseData }) {
   try {
-    const parentExecId = execId;
-    await saveExecutionLog({
-      execId: parentExecId,
-      childExecId: parentExecId, // Same as execId for parent
+    const timestamp = new Date().toISOString();
+    const executionLogItem = {
+      'exec-id': execId,
+      'child-exec-id': execId,
       data: {
-        requestUrl: url,
-        responseStatus,
-        paginationType: 'single',
-        status: EXECUTION_STATUS.COMPLETED,
-        isLast: true,
-        totalItemsProcessed: responseData ? 1 : 0,
-        itemsInCurrentPage: responseData ? 1 : 0
-      },
-      isParent: true
+        'execution-id': execId,
+        'execution-type': 'single',
+        'timestamp': timestamp,
+        'status': 'completed',
+        'is-last': true,
+        'total-items-processed': 1,
+        'items-in-current-page': 1,
+        'request-url': url,
+        'request-method': method,
+        'request-query-params': queryParams,
+        'request-headers': headers,
+        'response-status': responseStatus,
+        'response-data': responseData
+      }
+    };
+
+    console.log('Saving execution log with item IDs:', {
+      execId,
+      childExecId: execId,
+      itemIdsCount: 0,
+      itemIds: []
     });
 
-    return parentExecId;
+    console.log('[DynamoDB] Creating item in table: executions');
+    const response = await dynamodbHandlers.createItem({
+      request: {
+        params: {
+          tableName: 'executions'
+        },
+        requestBody: executionLogItem
+      }
+    });
+
+    // Check if the response indicates success (statusCode 200 or 201)
+    if (response.statusCode === 200 || response.statusCode === 201) {
+      console.log('Successfully saved execution log:', {
+        execId,
+        status: 'completed',
+        timestamp
+      });
+      return true;
+    } else {
+      console.error('Failed to save execution log:', response);
+      return false;
+    }
   } catch (error) {
-    console.error('Error saving single execution log:', error);
-    return null;
+    console.error('Error saving execution log:', error);
+    return false;
   }
-}; 
+} 

@@ -1,0 +1,27 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'DynamoDB table for storing API schemas'
+
+Resources:
+  SchemasTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: brmh-schemas
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: schema-id
+          AttributeType: S
+        - AttributeName: method-id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: schema-id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: method-id-index
+          KeySchema:
+            - AttributeName: method-id
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+      Tags:
+        - Key: Environment
+          Value: !Ref AWS::StackName 

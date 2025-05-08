@@ -470,6 +470,131 @@ paths:
                   code:
                     type: string
 
+  /schema/generate:
+    post:
+      summary: Generate schema from response data
+      operationId: generateSchema
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                responseData:
+                  type: object
+                  description: The response data to generate schema from
+      responses:
+        '200':
+          description: Schema generated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  schema:
+                    type: object
+                  isArray:
+                    type: boolean
+                  originalType:
+                    type: string
+        '500':
+          description: Error generating schema
+
+  /schema/save:
+    post:
+      summary: Save schema
+      operationId: saveSchema
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                methodId:
+                  type: string
+                methodName:
+                  type: string
+                namespaceId:
+                  type: string
+                schemaType:
+                  type: string
+                schema:
+                  type: object
+                isArray:
+                  type: boolean
+                originalType:
+                  type: string
+      responses:
+        '200':
+          description: Schema saved successfully
+        '500':
+          description: Error saving schema
+
+  /schema/{schemaId}:
+    get:
+      summary: Get schema by ID
+      operationId: getSchema
+      parameters:
+        - name: schemaId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Schema retrieved successfully
+        '404':
+          description: Schema not found
+        '500':
+          description: Error getting schema
+    put:
+      summary: Update schema
+      operationId: updateSchema
+      parameters:
+        - name: schemaId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                schema:
+                  type: object
+                isArray:
+                  type: boolean
+                originalType:
+                  type: string
+      responses:
+        '200':
+          description: Schema updated successfully
+        '404':
+          description: Schema not found
+        '500':
+          description: Error updating schema
+
+  /methods/{methodId}/schemas:
+    get:
+      summary: Get schemas for a method
+      operationId: getMethodSchemas
+      parameters:
+        - name: methodId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Schemas retrieved successfully
+        '500':
+          description: Error getting method schemas
+
 components:
   schemas:
     NamespaceInput:
