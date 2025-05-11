@@ -14,8 +14,20 @@ import { handlers as dynamodbHandlers } from './lib/dynamodb-handlers.js';
 import dotenv from 'dotenv';
 import { handlers as awsMessagingHandlers } from './aws-messaging-handlers.js';
 import { saveSingleExecutionLog, savePaginatedExecutionLogs } from './executionHandler.js';
+import { handlers as schemaHandlers } from './lib/schema-handlers.js';
+import { exec } from 'child_process';
+import Ajv from 'ajv';
 
-dotenv.config();  
+// Load environment variables
+dotenv.config();
+
+// Log AWS configuration status
+console.log('AWS Configuration Check:', {
+  hasAccessKeyId: !!process.env.AWS_ACCESS_KEY_ID ? 'Yes' : 'No',
+  hasSecretKey: !!process.env.AWS_SECRET_ACCESS_KEY ? 'Yes' : 'No',
+  hasRegion: !!process.env.AWS_REGION ? 'Yes' : 'No',
+  nodeEnv: process.env.NODE_ENV
+});
 
 const app = express();
 app.use(express.json());
@@ -24,7 +36,50 @@ app.use(cors());
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+let prismProcess = null;
 
+// Utility to check if a port is in use
+async function checkPortInUse(port) {
+  const net = await import('net');
+  return new Promise((resolve) => {
+    const tester = net.createServer()
+      .once('error', err => (err.code === 'EADDRINUSE' ? resolve(true) : resolve(false)))
+      .once('listening', () => tester.once('close', () => resolve(false)).close())
+      .listen(port);
+  });
+}
+
+// Start Prism mock server
+app.post('/api/mock-server/start', async (req, res) => {
+  const { port = 4010, specPath = './openapi.yaml' } = req.body;
+  const isPortInUse = await checkPortInUse(port);
+  if (isPortInUse) {
+    return res.status(400).json({ error: `Port ${port} is already in use.` });
+  }
+  if (prismProcess) {
+    return res.status(400).json({ error: 'Mock server already running.' });
+  }
+  console.log(`[MOCK SERVER] Starting Prism mock server on port ${port} with spec: ${specPath}`);
+  prismProcess = exec(`npx prism mock ${specPath} -p ${port}`, (err) => {
+    if (err) {
+      console.error('Prism error:', err);
+      prismProcess = null;
+    }
+  });
+  res.json({ success: true, port });
+});
+
+// Stop Prism mock server
+app.post('/api/mock-server/stop', (req, res) => {
+  if (prismProcess) {
+    prismProcess.kill();
+    prismProcess = null;
+    console.log('[MOCK SERVER] Prism mock server stopped.');
+    res.json({ success: true });
+  } else {
+    res.status(400).json({ error: 'No mock server running.' });
+  }
+});
 
 app.get("/test",(req,res)=>{res.send("hello! world");
 })
@@ -42,6 +97,99 @@ const mainApi = new OpenAPIBackend({
       statusCode: 404,
       error: 'Not Found'
     }),
+
+    // Schema handlers
+    generateSchema: async (c, req, res) => {
+      try {
+        const { responseData } = c.request.requestBody;
+        const schemaResult = schemaHandlers.generateSchema(responseData);
+        return {
+          statusCode: 200,
+          body: schemaResult
+        };
+      } catch (error) {
+        console.error('Error generating schema:', error);
+        return {
+          statusCode: 500,
+          body: { error: 'Failed to generate schema' }
+        };
+      }
+    },
+
+    saveSchema: async (c, req, res) => {
+      try {
+        const schemaData = c.request.requestBody;
+        const result = await schemaHandlers.saveSchema(schemaData);
+        return {
+          statusCode: 200,
+          body: result
+        };
+      } catch (error) {
+        console.error('Error saving schema:', error);
+        return {
+          statusCode: 500,
+          body: { error: 'Failed to save schema' }
+        };
+      }
+    },
+
+    getSchema: async (c, req, res) => {
+      try {
+        const { schemaId } = c.request.params;
+        const schema = await schemaHandlers.getSchema(schemaId);
+        if (!schema) {
+          return {
+            statusCode: 404,
+            body: { error: 'Schema not found' }
+          };
+        }
+        return {
+          statusCode: 200,
+          body: schema
+        };
+      } catch (error) {
+        console.error('Error getting schema:', error);
+        return {
+          statusCode: 500,
+          body: { error: 'Failed to get schema' }
+        };
+      }
+    },
+
+    updateSchema: async (c, req, res) => {
+      try {
+        const { schemaId } = c.request.params;
+        const updates = c.request.requestBody;
+        const updatedSchema = await schemaHandlers.updateSchema(schemaId, updates);
+        return {
+          statusCode: 200,
+          body: updatedSchema
+        };
+      } catch (error) {
+        console.error('Error updating schema:', error);
+        return {
+          statusCode: 500,
+          body: { error: 'Failed to update schema' }
+        };
+      }
+    },
+
+    getMethodSchemas: async (c, req, res) => {
+      try {
+        const { methodId } = c.request.params;
+        const schemas = await schemaHandlers.getMethodSchemas(methodId);
+        return {
+          statusCode: 200,
+          body: schemas
+        };
+      } catch (error) {
+        console.error('Error getting method schemas:', error);
+        return {
+          statusCode: 500,
+          body: { error: 'Failed to get method schemas' }
+        };
+      }
+    },
 
     // Account handlers
     getAllAccounts: async (c, req, res) => {
@@ -1215,7 +1363,19 @@ const mainApi = new OpenAPIBackend({
             const saveItemsToDynamoDB = async (items, pageData) => {
               if (!saveData || !tableName || items.length === 0) return [];
 
-              console.log(`\nSaving ${items.length} items to DynamoDB table: ${tableName}`);
+              // Handle products array specifically for Shopify products endpoint
+              let processedItems = items;
+              if (items.length === 1 && items[0].products && Array.isArray(items[0].products)) {
+                processedItems = items[0].products;
+                console.log(`Extracted ${processedItems.length} products from response`);
+              }
+
+              if (processedItems.length === 0) {
+                console.log('No items to save after processing');
+                return [];
+              }
+
+              console.log(`\nSaving ${processedItems.length} items to DynamoDB table: ${tableName}`);
               
               const timestamp = new Date().toISOString();
               const baseRequestDetails = {
@@ -1230,8 +1390,8 @@ const mainApi = new OpenAPIBackend({
               const batches = [];
               const savedItemIds = [];
               
-              for (let i = 0; i < items.length; i += BATCH_SIZE) {
-                batches.push(items.slice(i, i + BATCH_SIZE));
+              for (let i = 0; i < processedItems.length; i += BATCH_SIZE) {
+                batches.push(processedItems.slice(i, i + BATCH_SIZE));
               }
 
               for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
@@ -1272,7 +1432,7 @@ const mainApi = new OpenAPIBackend({
                       requestDetails: baseRequestDetails,
                       status: pageData.status,
                       itemIndex: batchIndex * BATCH_SIZE + index,
-                      totalItems: items.length,
+                      totalItems: processedItems.length,
                       originalId: item.id
                     }
                   };
@@ -1292,7 +1452,7 @@ const mainApi = new OpenAPIBackend({
                       return null;
                     }
 
-                    console.log(`Successfully saved item ${batchIndex * BATCH_SIZE + index + 1}/${items.length} with ID: ${itemId}`);
+                    console.log(`Successfully saved item ${batchIndex * BATCH_SIZE + index + 1}/${processedItems.length} with ID: ${itemId}`);
                     savedItemIds.push(itemId);
                     return itemId;
                   } catch (error) {
@@ -1305,7 +1465,7 @@ const mainApi = new OpenAPIBackend({
                 console.log(`Completed batch ${batchIndex + 1}/${batches.length}`);
               }
 
-              console.log(`Completed saving ${items.length} items to DynamoDB. Saved IDs:`, savedItemIds);
+              console.log(`Completed saving ${processedItems.length} items to DynamoDB. Saved IDs:`, savedItemIds);
               return savedItemIds;
             };
 
@@ -1623,6 +1783,99 @@ const mainApi = new OpenAPIBackend({
           }
         };
       }
+    },
+
+    // Schema handlers
+    generateSchema: async (c, req, res) => {
+      try {
+        const { responseData } = c.request.requestBody;
+        const schemaResult = schemaHandlers.generateSchema(responseData);
+        return {
+          statusCode: 200,
+          body: schemaResult
+        };
+      } catch (error) {
+        console.error('Error generating schema:', error);
+        return {
+          statusCode: 500,
+          body: { error: 'Failed to generate schema' }
+        };
+      }
+    },
+
+    saveSchema: async (c, req, res) => {
+      try {
+        const schemaData = c.request.requestBody;
+        const result = await schemaHandlers.saveSchema(schemaData);
+        return {
+          statusCode: 200,
+          body: result
+        };
+      } catch (error) {
+        console.error('Error saving schema:', error);
+        return {
+          statusCode: 500,
+          body: { error: 'Failed to save schema' }
+        };
+      }
+    },
+
+    getSchema: async (c, req, res) => {
+      try {
+        const { schemaId } = c.request.params;
+        const schema = await schemaHandlers.getSchema(schemaId);
+        if (!schema) {
+          return {
+            statusCode: 404,
+            body: { error: 'Schema not found' }
+          };
+        }
+        return {
+          statusCode: 200,
+          body: schema
+        };
+      } catch (error) {
+        console.error('Error getting schema:', error);
+        return {
+          statusCode: 500,
+          body: { error: 'Failed to get schema' }
+        };
+      }
+    },
+
+    updateSchema: async (c, req, res) => {
+      try {
+        const { schemaId } = c.request.params;
+        const updates = c.request.requestBody;
+        const updatedSchema = await schemaHandlers.updateSchema(schemaId, updates);
+        return {
+          statusCode: 200,
+          body: updatedSchema
+        };
+      } catch (error) {
+        console.error('Error updating schema:', error);
+        return {
+          statusCode: 500,
+          body: { error: 'Failed to update schema' }
+        };
+      }
+    },
+
+    getMethodSchemas: async (c, req, res) => {
+      try {
+        const { methodId } = c.request.params;
+        const schemas = await schemaHandlers.getMethodSchemas(methodId);
+        return {
+          statusCode: 200,
+          body: schemas
+        };
+      } catch (error) {
+        console.error('Error getting method schemas:', error);
+        return {
+          statusCode: 500,
+          body: { error: 'Failed to get method schemas' }
+        };
+      }
     }
   }
 });
@@ -1712,11 +1965,182 @@ const awsMessagingApi = new OpenAPIBackend({
   }
 });
 
+// Initialize Schema OpenAPI backend
+const schemaApi = new OpenAPIBackend({
+  definition: './schema-api.yaml',
+  quick: true,
+  handlers: {
+    validationFail: async (c, req, res) => ({
+      statusCode: 400,
+      error: c.validation.errors
+    }),
+    notFound: async (c, req, res) => ({
+      statusCode: 404,
+      error: 'Not Found'
+    }),
+    // Schema handlers
+    generateSchema: async (c, req, res) => {
+      try {
+        const { responseData } = c.request.requestBody;
+        const schemaResult = schemaHandlers.generateSchema(responseData);
+        return {
+          statusCode: 200,
+          body: schemaResult
+        };
+      } catch (error) {
+        console.error('Error generating schema:', error);
+        return {
+          statusCode: 500,
+          body: { error: 'Failed to generate schema' }
+        };
+      }
+    },
+    saveSchema: async (c, req, res) => {
+      try {
+        const schemaData = c.request.requestBody;
+        const result = await schemaHandlers.saveSchema(schemaData);
+        return {
+          statusCode: 200,
+          body: result
+        };
+      } catch (error) {
+        console.error('Error saving schema:', error);
+        return {
+          statusCode: 500,
+          body: { error: 'Failed to save schema' }
+        };
+      }
+    },
+    getSchema: async (c, req, res) => {
+      try {
+        const { schemaId } = c.request.params;
+        const schema = await schemaHandlers.getSchema(schemaId);
+        if (!schema) {
+          return {
+            statusCode: 404,
+            body: { error: 'Schema not found' }
+          };
+        }
+        return {
+          statusCode: 200,
+          body: schema
+        };
+      } catch (error) {
+        console.error('Error getting schema:', error);
+        return {
+          statusCode: 500,
+          body: { error: 'Failed to get schema' }
+        };
+      }
+    },
+    updateSchema: async (c, req, res) => {
+      try {
+        const { schemaId } = c.request.params;
+        const updates = c.request.requestBody;
+        const updatedSchema = await schemaHandlers.updateSchema(schemaId, updates);
+        return {
+          statusCode: 200,
+          body: updatedSchema
+        };
+      } catch (error) {
+        console.error('Error updating schema:', error);
+        return {
+          statusCode: 500,
+          body: { error: 'Failed to update schema' }
+        };
+      }
+    },
+    deleteSchema: async (c, req, res) => {
+      try {
+        const { schemaId } = c.request.params;
+        await schemaHandlers.deleteSchema(schemaId);
+        return {
+          statusCode: 204
+        };
+      } catch (error) {
+        console.error('Error deleting schema:', error);
+        return {
+          statusCode: 500,
+          body: { error: 'Failed to delete schema' }
+        };
+      }
+    },
+    listSchemas: async (c, req, res) => {
+      try {
+        const schemas = await schemaHandlers.listSchemas();
+        return {
+          statusCode: 200,
+          body: schemas
+        };
+      } catch (error) {
+        console.error('Error listing schemas:', error);
+        return {
+          statusCode: 500,
+          body: { error: 'Failed to list schemas' }
+        };
+      }
+    },
+    createSchemasTable: async (c, req, res) => {
+      try {
+        const result = await schemaHandlers.createSchemasTable();
+        return {
+          statusCode: 200,
+          body: result
+        };
+      } catch (error) {
+        console.error('Error creating schemas table:', error);
+        return {
+          statusCode: 500,
+          body: { error: 'Failed to create schemas table' }
+        };
+      }
+    },
+    deleteSchemasTable: async (c, req, res) => {
+      try {
+        const result = await schemaHandlers.deleteSchemasTable();
+        return {
+          statusCode: 200,
+          body: result
+        };
+      } catch (error) {
+        console.error('Error deleting schemas table:', error);
+        return {
+          statusCode: 500,
+          body: { error: 'Failed to delete schemas table' }
+        };
+      }
+    },
+    validateSchema: async (c, req, res) => {
+      try {
+        const { schema, data } = c.request.requestBody;
+        if (!schema || !data) {
+          return {
+            statusCode: 400,
+            body: { error: 'schema and data are required' }
+          };
+        }
+        const result = schemaHandlers.validateSchema(schema, data);
+        return {
+          statusCode: 200,
+          body: result
+        };
+      } catch (error) {
+        console.error('Error validating schema:', error);
+        return {
+          statusCode: 500,
+          body: { error: 'Failed to validate schema', details: error.message }
+        };
+      }
+    }
+  }
+});
+
 // Initialize all APIs
 await Promise.all([
   awsApi.init(),
   // pinterestApi.init(),
-  awsMessagingApi.init()
+  awsMessagingApi.init(),
+  schemaApi.init()
 ]);
 
 // Helper function to handle requests
@@ -2235,12 +2659,182 @@ app.post('/pinterest/token', async (req, res) => {
   }
 });
 
+// --- SCHEMA ROUTES: Place these at the top, before any catch-all! ---
+
+// List all schemas (must be before /schema/:schemaId)
+app.get('/schema/list', async (req, res) => {
+  try {
+    const schemas = await schemaHandlers.listSchemas();
+    res.json(schemas);
+  } catch (error) {
+    console.error('Error in /schema/list:', error);
+    res.status(500).json({ error: 'Failed to list schemas' });
+  }
+});
+
+// Validate schema route
+app.post('/schema/validate', async (req, res) => {
+  try {
+    const { schema, data } = req.body;
+    if (!schema) {
+      return res.status(400).json({ error: 'schema is required' });
+    }
+    const ajv = new Ajv();
+    if (typeof data === 'undefined') {
+      // Only schema provided: validate schema structure
+      const valid = ajv.validateSchema(schema);
+      if (valid) {
+        return res.json({ valid: true, errors: [] });
+      } else {
+        return res.json({ valid: false, errors: ajv.errors });
+      }
+    } else {
+      // Both schema and data provided: validate data against schema
+      const validate = ajv.compile(schema);
+      const valid = validate(data);
+      return res.json({
+        valid,
+        errors: valid ? [] : (validate.errors || []).map(e => `${e.instancePath} ${e.message}`)
+      });
+    }
+  } catch (error) {
+    console.error('Error validating schema:', error);
+    res.status(500).json({ error: 'Failed to validate schema', details: error.message });
+  }
+});
+
+// DELETE /schema/:schemaId
+app.delete('/schema/:schemaId', async (req, res) => {
+  try {
+    const { schemaId } = req.params;
+    await schemaHandlers.deleteSchema(schemaId);
+    res.status(204).send();
+  } catch (error) {
+    console.error('Error deleting schema:', error);
+    res.status(404).json({ error: 'Schema not found', details: error.message });
+  }
+});
+
+app.post('/schema/generate', async (req, res) => {
+  try {
+    const { responseData } = req.body;
+    const schemaResult = schemaHandlers.generateSchema(responseData);
+    res.json(schemaResult);
+  } catch (error) {
+    console.error('Error generating schema:', error);
+    res.status(500).json({ error: 'Failed to generate schema' });
+  }
+});
+
+app.post('/schema/create', async (req, res) => {
+  try {
+    const schemaData = req.body;
+    const result = await schemaHandlers.saveSchema(schemaData);
+    res.json(result);
+  } catch (error) {
+    console.error('Error saving schema:', error);
+    res.status(500).json({ error: 'Failed to save schema' });
+  }
+});
+
+app.get('/schema/:schemaId', async (req, res) => {
+  try {
+    const { schemaId } = req.params;
+    const schema = await schemaHandlers.getSchema(schemaId);
+    if (!schema) {
+      return res.status(404).json({ error: 'Schema not found' });
+    }
+    res.json(schema);
+  } catch (error) {
+    console.error('Error getting schema:', error);
+    res.status(500).json({ error: 'Failed to get schema' });
+  }
+});
+
+app.put('/schema/:schemaId', async (req, res) => {
+  try {
+    const { schemaId } = req.params;
+    const updates = req.body;
+    const updatedSchema = await schemaHandlers.updateSchema(schemaId, updates);
+    res.json(updatedSchema);
+  } catch (error) {
+    console.error('Error updating schema:', error);
+    res.status(500).json({ error: 'Failed to update schema' });
+  }
+});
+
+app.get('/methods/:methodId/schemas', async (req, res) => {
+  try {
+    const { methodId } = req.params;
+    const schemas = await schemaHandlers.getMethodSchemas(methodId);
+    res.json(schemas);
+  } catch (error) {
+    console.error('Error getting method schemas:', error);
+    res.status(500).json({ error: 'Failed to get method schemas' });
+  }
+});
+
+app.delete('/schema/delete', async (req, res) => {
+  try {
+    const { schemaId } = req.body;
+    if (!schemaId) {
+      return res.status(400).json({ error: 'Missing schemaId' });
+    }
+    await schemaHandlers.deleteSchema(schemaId);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting schema:', error);
+    res.status(500).json({ error: 'Failed to delete schema' });
+  }
+});
+
+app.put('/schema/update', async (req, res) => {
+  try {
+    const { schemaId, ...updates } = req.body;
+    if (!schemaId) {
+      return res.status(400).json({ error: 'Missing schemaId' });
+    }
+    const updatedSchema = await schemaHandlers.updateSchema(schemaId, updates);
+    res.json(updatedSchema);
+  } catch (error) {
+    console.error('Error updating schema:', error);
+    res.status(500).json({ error: 'Failed to update schema' });
+  }
+});
+// --- END SCHEMA ROUTES ---
+
+app.post('/schema/table', async (req, res) => {
+  try {
+    const { tableName } = req.body || {};
+    if (!tableName) {
+      return res.status(400).json({ error: 'tableName is required' });
+    }
+    const result = await schemaHandlers.createSchemasTable(tableName);
+    res.json(result);
+  } catch (error) {
+    console.error('Error creating schemas table:', error);
+    res.status(500).json({ error: 'Failed to create schemas table', details: error.message });
+  }
+});
+
+app.delete('/schema/:schemaId', async (req, res) => {
+  try {
+    const { schemaId } = req.params;
+    await schemaHandlers.deleteSchema(schemaId);
+    res.status(204).send();
+  } catch (error) {
+    console.error('Error deleting schema:', error);
+    res.status(404).json({ error: 'Schema not found', details: error.message });
+  }
+});
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server listening on port ${PORT}`);
   console.log(`Main API documentation available at http://localhost:${PORT}/api-docs`);
   // console.log(`Pinterest API documentation available at http://localhost:${PORT}/pinterest-api-docs`);
   console.log(`AWS DynamoDB service available at http://localhost:${PORT}/api/dynamodb`);
+  console.log(`Schema API documentation available at http://localhost:${PORT}/schema-api-docs`);
   console.log(`AWS Messaging Service documentation available at http://localhost:${PORT}/aws-messaging-docsss`);
 });
 
@@ -2281,4 +2875,49 @@ function formatDynamoDBValue(value) {
   }
   return { NULL: true };
 }
+
+// Load Schema OpenAPI specification
+const schemaOpenapiSpec = yaml.load(fs.readFileSync(path.join(__dirname, 'schema-api.yaml'), 'utf8'));
+
+// Serve Schema API docs
+app.use('/schema-api-docs', swaggerUi.serve);
+app.get('/schema-api-docs', (req, res) => {
+  res.send(
+    swaggerUi.generateHTML(schemaOpenapiSpec, {
+      customSiteTitle: "Schema Management API Documentation",
+      customfavIcon: "/favicon.ico",
+      customCss: '.swagger-ui .topbar { display: none }',
+      swaggerUrl: "/schema-api-docs/swagger.json"
+    })
+  );
+});
+
+// Serve Schema OpenAPI specification
+app.get('/schema-api-docs/swagger.json', (req, res) => {
+  res.json(schemaOpenapiSpec);
+});
+
+// Handle Schema API routes
+app.all('/api/schema/*', async (req, res) => {
+  try {
+    const response = await schemaApi.handleRequest(
+      {
+        method: req.method,
+        path: req.path.replace('/api/schema', '') || '/',
+        body: req.body,
+        query: req.query,
+        headers: req.headers
+      },
+      req,
+      res
+    );
+    res.status(response.statusCode).json(response.body);
+  } catch (error) {
+    console.error('[Schema API] Error:', error.message);
+    res.status(500).json({
+      error: 'Failed to handle schema API request',
+      message: error.message
+    });
+  }
+});
 
