@@ -301,11 +301,15 @@ paths:
             schema:
               type: object
               required:
+                - schemaId
                 - tableName
               properties:
+                schemaId:
+                  type: string
+                  description: ID of the schema for which to create the table
                 tableName:
                   type: string
-                  description: Name of the table to create
+                  description: Name of the table to create (should match schema name)
       responses:
         '200':
           description: Table created successfully
@@ -317,6 +321,10 @@ paths:
                   message:
                     type: string
                   tableName:
+                    type: string
+                  schemaId:
+                    type: string
+                  metaId:
                     type: string
         '400':
           description: Table creation failed
@@ -367,4 +375,44 @@ paths:
                   error:
                     type: string
                   details:
+                    type: string
+
+  /schema/data:
+    post:
+      summary: Insert data into a schema's DynamoDB table
+      operationId: insertSchemaData
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tableName
+                - item
+              properties:
+                tableName:
+                  type: string
+                  description: Name of the DynamoDB table (should match schema)
+                item:
+                  type: object
+                  description: Data to insert
+      responses:
+        '200':
+          description: Data inserted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+        '400':
+          description: Insert failed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
                     type: string 

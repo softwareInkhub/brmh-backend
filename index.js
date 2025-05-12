@@ -2805,11 +2805,11 @@ app.put('/schema/update', async (req, res) => {
 
 app.post('/schema/table', async (req, res) => {
   try {
-    const { tableName } = req.body || {};
-    if (!tableName) {
-      return res.status(400).json({ error: 'tableName is required' });
+    const { schemaId, tableName } = req.body || {};
+    if (!schemaId || !tableName) {
+      return res.status(400).json({ error: 'schemaId and tableName are required' });
     }
-    const result = await schemaHandlers.createSchemasTable(tableName);
+    const result = await schemaHandlers.createSchemasTable({ schemaId, tableName });
     res.json(result);
   } catch (error) {
     console.error('Error creating schemas table:', error);
@@ -2918,6 +2918,40 @@ app.all('/api/schema/*', async (req, res) => {
       error: 'Failed to handle schema API request',
       message: error.message
     });
+  }
+});
+
+app.post('/schema/data', async (req, res) => {
+  try {
+    const { tableName, item } = req.body;
+    if (!tableName || !item) {
+      return res.status(400).json({ error: 'tableName and item are required' });
+    }
+    await schemaHandlers.insertSchemaData({ tableName, item });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/schema/table-meta/:metaId', async (req, res) => {
+  try {
+    const { metaId } = req.params;
+    const result = await schemaHandlers.getSchemaTableMeta(metaId);
+    if (!result) return res.status(404).json({ error: 'Not found' });
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/schema/table-meta/check/:metaId', async (req, res) => {
+  try {
+    const { metaId } = req.params;
+    const result = await schemaHandlers.checkAndUpdateTableStatus(metaId);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 

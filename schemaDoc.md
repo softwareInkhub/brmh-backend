@@ -209,7 +209,7 @@ The Schema Management API provides endpoints to generate, save, retrieve, update
 - **Table Name:** `schemas`
 - **Primary Key:** `id` (string, UUID)
 - **Attributes:**
-  - `id`, `methodId`, `schemaName`, `methodName`, `namespaceId`, `schemaType`, `schema`, `isArray`, `originalType`, `url`, `createdAt`, `updatedAt`
+  - `id`, `methodId`, `schemaName`, `methodName`, `namespaceId`, `schemaType`, `schema`, `isArray`, `originalType`, `url`, `createdAt`,   `updatedAt`
 
 ---
 
