@@ -415,4 +415,108 @@ paths:
                 type: object
                 properties:
                   error:
-                    type: string 
+                    type: string
+
+  /schema/table-meta:
+    get:
+      summary: List all schema table metadata
+      operationId: listSchemaTableMeta
+      responses:
+        '200':
+          description: List of schema table metadata
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '400':
+          description: Failed to list schema table metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  details:
+                    type: string
+
+  /schema/table/{tableName}/items:
+    get:
+      summary: Get all items from a schema table
+      operationId: getTableItems
+      parameters:
+        - name: tableName
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of items in the table
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '400':
+          description: Failed to fetch table items
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  details:
+                    type: string
+
+  /schema/table/{tableName}/schema:
+    get:
+      summary: Get schema for a table
+      operationId: getSchemaByTableName
+      parameters:
+        - name: tableName
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The schema for the table
+          content:
+            application/json:
+              schema:
+                type: object
+        '404':
+          description: Schema not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  details:
+                    type: string
+
+  /schema/table-meta/check-all:
+    post:
+      summary: Check and update status of all schema tables
+      operationId: checkAllTableStatuses
+      responses:
+        '200':
+          description: Statuses updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  updated:
+                    type: integer
+                  inactiveTables:
+                    type: array
+                    items:
+                      type: string 

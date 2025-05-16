@@ -17,6 +17,7 @@ import { saveSingleExecutionLog, savePaginatedExecutionLogs } from './executionH
 import { handlers as schemaHandlers } from './lib/schema-handlers.js';
 import { exec } from 'child_process';
 import Ajv from 'ajv';
+import { handlers as llmHandlers } from './lib/llm-handlers.js';
 
 // Load environment variables
 dotenv.config();
@@ -2672,6 +2673,16 @@ app.get('/schema/list', async (req, res) => {
   }
 });
 
+// List all schema table metadata
+app.get('/schema/table-meta', async (req, res) => {
+  try {
+    const items = await schemaHandlers.listSchemaTableMeta();
+    res.json(items);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to list schema table metadata', details: error.message });
+  }
+});
+
 // Validate schema route
 app.post('/schema/validate', async (req, res) => {
   try {
@@ -2835,6 +2846,7 @@ app.listen(PORT, '0.0.0.0', () => {
   // console.log(`Pinterest API documentation available at http://localhost:${PORT}/pinterest-api-docs`);
   console.log(`AWS DynamoDB service available at http://localhost:${PORT}/api/dynamodb`);
   console.log(`Schema API documentation available at http://localhost:${PORT}/schema-api-docs`);
+  console.log(`llm API documentation available at http://localhost:${PORT}/llm-api-docs`);
   console.log(`AWS Messaging Service documentation available at http://localhost:${PORT}/aws-messaging-docsss`);
 });
 
@@ -2953,5 +2965,61 @@ app.post('/schema/table-meta/check/:metaId', async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
+});
+
+// Get all items from a table
+app.get('/schema/table/:tableName/items', async (req, res) => {
+  try {
+    const { tableName } = req.params;
+    const items = await schemaHandlers.getTableItems(tableName);
+    res.json(items);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch table items', details: error.message });
+  }
+});
+
+// Get schema for a table by tableName
+app.get('/schema/table/:tableName/schema', async (req, res) => {
+  try {
+    const { tableName } = req.params;
+    const schema = await schemaHandlers.getSchemaByTableName(tableName);
+    res.json(schema);
+  } catch (error) {
+    res.status(404).json({ error: 'Schema not found', details: error.message });
+  }
+});
+
+app.post('/schema/table-meta/check-all', async (req, res) => {
+  try {
+    const result = await schemaHandlers.checkAllTableStatuses();
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to check all table statuses', details: error.message });
+  }
+});
+
+// Load BRMH LLM SERVICE OpenAPI specification
+const llmOpenapiSpec = yaml.load(fs.readFileSync(path.join(__dirname, 'brmh-llm-service.yaml'), 'utf8'));
+
+// Serve LLM API docs
+app.use('/llm-api-docs', swaggerUi.serve);
+app.get('/llm-api-docs', (req, res) => {
+  res.send(
+    swaggerUi.generateHTML(llmOpenapiSpec, {
+      customSiteTitle: "BRMH LLM SERVICE API Documentation",
+      customfavIcon: "/favicon.ico",
+      customCss: '.swagger-ui .topbar { display: none }',
+      swaggerUrl: "/llm-api-docs/swagger.json"
+    })
+  );
+});
+app.get('/llm-api-docs/swagger.json', (req, res) => {
+  res.json(llmOpenapiSpec);
+});
+
+// LLM route
+app.post('/llm/generate-schema', async (req, res) => {
+  const result = await llmHandlers.generateSchemaWithLLM({ request: { requestBody: req.body } }, req, res);
+  res.status(result.statusCode).json(result.body);
 });
 

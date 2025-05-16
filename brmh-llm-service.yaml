@@ -1,0 +1,70 @@
+openapi: 3.0.0
+info:
+  title: BRMH LLM SERVICE
+  version: 1.0.0
+  description: LLM-powered schema generation for BRMH
+
+paths:
+  /llm/generate-schema:
+    post:
+      summary: Generate schema from prompt using LLM
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                prompt:
+                  type: string
+                  example: "Generate a JSON schema for a project management app with users, projects, tasks, and comments."
+      responses:
+        '200':
+          description: Generated schema
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  schema:
+                    type: object
+                  llm_output:
+                    type: string
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+  /llm/generate-schema/stream:
+    post:
+      summary: Generate schema from prompt using LLM (streaming)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                prompt:
+                  type: string
+                  example: "Generate a JSON schema for a project management app with users, projects, tasks, and comments."
+      responses:
+        '200':
+          description: Streamed generated schema
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string 
