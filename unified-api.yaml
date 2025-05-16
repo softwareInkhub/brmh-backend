@@ -1,0 +1,689 @@
+openapi: 3.0.0
+info:
+  title: Unified API
+  version: 1.0.0
+  description: Unified API for handling schemas, namespaces, and API execution
+
+servers:
+  - url: /unified
+    description: Unified API server
+
+paths:
+  # Schema Operations
+  /schema/generate:
+    post:
+      operationId: generateSchema
+      summary: Generate schema from data
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["data"]
+              properties:
+                data:
+                  type: object
+                  description: Data to generate schema from
+      responses:
+        '200':
+          description: Schema generated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                required: ["schema", "isArray", "originalType"]
+                properties:
+                  schema:
+                    type: object
+                  isArray:
+                    type: boolean
+                  originalType:
+                    type: string
+
+  /schema/validate:
+    post:
+      operationId: validateSchema
+      summary: Validate data against schema
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["schema", "data"]
+              properties:
+                schema:
+                  type: object
+                data:
+                  type: object
+      responses:
+        '200':
+          description: Validation result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: ["valid", "errors"]
+                properties:
+                  valid:
+                    type: boolean
+                  errors:
+                    type: array
+                    items:
+                      type: string
+
+  /schema:
+    post:
+      operationId: saveSchema
+      summary: Save schema
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["methodId", "schemaName", "methodName", "namespaceId", "schemaType", "schema"]
+              properties:
+                methodId:
+                  type: string
+                schemaName:
+                  type: string
+                methodName:
+                  type: string
+                namespaceId:
+                  type: string
+                schemaType:
+                  type: string
+                schema:
+                  type: object
+                isArray:
+                  type: boolean
+                originalType:
+                  type: string
+                url:
+                  type: string
+      responses:
+        '200':
+          description: Schema saved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                required: ["schemaId"]
+                properties:
+                  schemaId:
+                    type: string
+
+    get:
+      operationId: listSchemas
+      summary: List all schemas
+      responses:
+        '200':
+          description: List of schemas
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+
+  /schema/{schemaId}:
+    parameters:
+      - name: schemaId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getSchema
+      summary: Get schema by ID
+      responses:
+        '200':
+          description: Schema retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+
+    put:
+      operationId: updateSchema
+      summary: Update schema
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Schema updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+
+    delete:
+      operationId: deleteSchema
+      summary: Delete schema
+      responses:
+        '204':
+          description: Schema deleted successfully
+
+  # Table Operations
+  /schema/table:
+    post:
+      operationId: createSchemasTable
+      summary: Create schema table
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["schemaId", "tableName"]
+              properties:
+                schemaId:
+                  type: string
+                tableName:
+                  type: string
+      responses:
+        '200':
+          description: Table created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                required: ["message", "tableName", "schemaId", "metaId"]
+                properties:
+                  message:
+                    type: string
+                  tableName:
+                    type: string
+                  schemaId:
+                    type: string
+                  metaId:
+                    type: string
+
+  /schema/table-meta:
+    get:
+      operationId: listSchemaTableMeta
+      summary: List schema table metadata
+      responses:
+        '200':
+          description: List of table metadata
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+
+  /schema/table-meta/{metaId}:
+    parameters:
+      - name: metaId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getSchemaTableMeta
+      summary: Get schema table metadata
+      responses:
+        '200':
+          description: Table metadata retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /schema/table-meta/check/{metaId}:
+    parameters:
+      - name: metaId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: checkAndUpdateTableStatus
+      summary: Check and update table status
+      responses:
+        '200':
+          description: Table status checked and updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: ["id", "tableName", "status"]
+                properties:
+                  id:
+                    type: string
+                  tableName:
+                    type: string
+                  status:
+                    type: string
+
+  /schema/table/{tableName}/items:
+    parameters:
+      - name: tableName
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getTableItems
+      summary: Get table items
+      responses:
+        '200':
+          description: Table items retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+
+  # API Execution
+  /execute:
+    post:
+      operationId: executeNamespaceRequest
+      summary: Execute namespace request
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["method", "url"]
+              properties:
+                method:
+                  type: string
+                url:
+                  type: string
+                queryParams:
+                  type: object
+                headers:
+                  type: object
+                body:
+                  type: object
+      responses:
+        '200':
+          description: Request executed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /execute/paginated:
+    post:
+      operationId: executeNamespacePaginatedRequest
+      summary: Execute paginated namespace request
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["method", "url"]
+              properties:
+                method:
+                  type: string
+                url:
+                  type: string
+                maxIterations:
+                  type: integer
+                paginationType:
+                  type: string
+                queryParams:
+                  type: object
+                headers:
+                  type: object
+                body:
+                  type: object
+      responses:
+        '200':
+          description: Paginated request executed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                required: ["status", "metadata", "data"]
+                properties:
+                  status:
+                    type: integer
+                  metadata:
+                    type: object
+                  data:
+                    type: array
+
+  # Namespace Operations
+  /namespaces:
+    get:
+      operationId: getNamespaces
+      summary: Get all namespaces
+      responses:
+        '200':
+          description: List of namespaces
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+
+    post:
+      operationId: createNamespace
+      summary: Create namespace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["namespace-name", "namespace-url"]
+              properties:
+                namespace-name:
+                  type: string
+                namespace-url:
+                  type: string
+                tags:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Namespace created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /namespaces/{namespaceId}:
+    parameters:
+      - name: namespaceId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getNamespaceById
+      summary: Get namespace by ID
+      responses:
+        '200':
+          description: Namespace retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+
+    put:
+      operationId: updateNamespace
+      summary: Update namespace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["namespace-name", "namespace-url"]
+              properties:
+                namespace-name:
+                  type: string
+                namespace-url:
+                  type: string
+                tags:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Namespace updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+
+    delete:
+      operationId: deleteNamespace
+      summary: Delete namespace
+      responses:
+        '204':
+          description: Namespace deleted successfully
+
+  # Namespace Account Operations
+  /namespaces/{namespaceId}/accounts:
+    parameters:
+      - name: namespaceId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getNamespaceAccounts
+      summary: Get namespace accounts
+      responses:
+        '200':
+          description: List of namespace accounts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+
+    post:
+      operationId: createNamespaceAccount
+      summary: Create namespace account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["namespace-account-name"]
+              properties:
+                namespace-account-name:
+                  type: string
+                namespace-account-url-override:
+                  type: string
+                namespace-account-header:
+                  type: array
+                  items:
+                    type: object
+                variables:
+                  type: array
+                  items:
+                    type: object
+                tags:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Account created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /accounts/{accountId}:
+    parameters:
+      - name: accountId
+        in: path
+        required: true
+        schema:
+          type: string
+    put:
+      operationId: updateNamespaceAccount
+      summary: Update namespace account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["namespace-account-name"]
+              properties:
+                namespace-account-name:
+                  type: string
+                namespace-account-url-override:
+                  type: string
+                namespace-account-header:
+                  type: array
+                  items:
+                    type: object
+                variables:
+                  type: array
+                  items:
+                    type: object
+                tags:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Account updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+
+    delete:
+      operationId: deleteNamespaceAccount
+      summary: Delete namespace account
+      responses:
+        '204':
+          description: Account deleted successfully
+
+  # Namespace Method Operations
+  /namespaces/{namespaceId}/methods:
+    parameters:
+      - name: namespaceId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getNamespaceMethods
+      summary: Get namespace methods
+      responses:
+        '200':
+          description: List of namespace methods
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+
+    post:
+      operationId: createNamespaceMethod
+      summary: Create namespace method
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["namespace-method-name", "namespace-method-type"]
+              properties:
+                namespace-method-name:
+                  type: string
+                namespace-method-type:
+                  type: string
+                namespace-method-url-override:
+                  type: string
+                namespace-method-queryParams:
+                  type: array
+                  items:
+                    type: object
+                namespace-method-header:
+                  type: array
+                  items:
+                    type: object
+                save-data:
+                  type: boolean
+                isInitialized:
+                  type: boolean
+                tags:
+                  type: array
+                  items:
+                    type: string
+                sample-request:
+                  type: object
+                sample-response:
+                  type: object
+                request-schema:
+                  type: object
+                response-schema:
+                  type: object
+      responses:
+        '200':
+          description: Method created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /methods/{methodId}:
+    parameters:
+      - name: methodId
+        in: path
+        required: true
+        schema:
+          type: string
+    put:
+      operationId: updateNamespaceMethod
+      summary: Update namespace method
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["namespace-method-name", "namespace-method-type"]
+              properties:
+                namespace-method-name:
+                  type: string
+                namespace-method-type:
+                  type: string
+                namespace-method-url-override:
+                  type: string
+                namespace-method-queryParams:
+                  type: array
+                  items:
+                    type: object
+                namespace-method-header:
+                  type: array
+                  items:
+                    type: object
+                save-data:
+                  type: boolean
+                isInitialized:
+                  type: boolean
+                tags:
+                  type: array
+                  items:
+                    type: string
+                sample-request:
+                  type: object
+                sample-response:
+                  type: object
+                request-schema:
+                  type: object
+                response-schema:
+                  type: object
+      responses:
+        '200':
+          description: Method updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+
+    delete:
+      operationId: deleteNamespaceMethod
+      summary: Delete namespace method
+      responses:
+        '204':
+          description: Method deleted successfully 

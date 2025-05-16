@@ -18,6 +18,7 @@ import { handlers as schemaHandlers } from './lib/schema-handlers.js';
 import { exec } from 'child_process';
 import Ajv from 'ajv';
 import { handlers as llmHandlers } from './lib/llm-handlers.js';
+import { handlers as unifiedHandlers } from './lib/unified-handlers.js';
 
 // Load environment variables
 dotenv.config();
@@ -2136,12 +2137,71 @@ const schemaApi = new OpenAPIBackend({
   }
 });
 
+// Initialize Unified OpenAPI backend
+const unifiedApi = new OpenAPIBackend({
+  definition: './unified-api.yaml',
+  quick: true,
+  handlers: {
+    validationFail: async (c, req, res) => ({
+      statusCode: 400,
+      error: c.validation.errors
+    }),
+    notFound: async (c, req, res) => ({
+      statusCode: 404,
+      error: 'Not Found'
+    }),
+    // Schema Operations
+    generateSchema: unifiedHandlers.generateSchema,
+    validateSchema: unifiedHandlers.validateSchema,
+    saveSchema: unifiedHandlers.saveSchema,
+    getSchema: unifiedHandlers.getSchema,
+    updateSchema: unifiedHandlers.updateSchema,
+    deleteSchema: unifiedHandlers.deleteSchema,
+    listSchemas: unifiedHandlers.listSchemas,
+
+    // Table Operations
+    createSchemasTable: unifiedHandlers.createSchemasTable,
+    deleteSchemasTable: unifiedHandlers.deleteSchemasTable,
+    insertSchemaData: unifiedHandlers.insertSchemaData,
+    listSchemaTableMeta: unifiedHandlers.listSchemaTableMeta,
+    getSchemaTableMeta: unifiedHandlers.getSchemaTableMeta,
+    checkAndUpdateTableStatus: unifiedHandlers.checkAndUpdateTableStatus,
+    getTableItems: unifiedHandlers.getTableItems,
+    getSchemaByTableName: unifiedHandlers.getSchemaByTableName,
+    checkAllTableStatuses: unifiedHandlers.checkAllTableStatuses,
+
+    // API Execution
+    executeNamespaceRequest: unifiedHandlers.executeNamespaceRequest,
+    executeNamespacePaginatedRequest: unifiedHandlers.executeNamespacePaginatedRequest,
+
+    // Namespace Operations
+    getNamespaces: unifiedHandlers.getNamespaces,
+    getNamespaceById: unifiedHandlers.getNamespaceById,
+    createNamespace: unifiedHandlers.createNamespace,
+    updateNamespace: unifiedHandlers.updateNamespace,
+    deleteNamespace: unifiedHandlers.deleteNamespace,
+
+    // Namespace Account Operations
+    getNamespaceAccounts: unifiedHandlers.getNamespaceAccounts,
+    createNamespaceAccount: unifiedHandlers.createNamespaceAccount,
+    updateNamespaceAccount: unifiedHandlers.updateNamespaceAccount,
+    deleteNamespaceAccount: unifiedHandlers.deleteNamespaceAccount,
+
+    // Namespace Method Operations
+    getNamespaceMethods: unifiedHandlers.getNamespaceMethods,
+    createNamespaceMethod: unifiedHandlers.createNamespaceMethod,
+    updateNamespaceMethod: unifiedHandlers.updateNamespaceMethod,
+    deleteNamespaceMethod: unifiedHandlers.deleteNamespaceMethod
+  }
+});
+
 // Initialize all APIs
 await Promise.all([
   awsApi.init(),
   // pinterestApi.init(),
   awsMessagingApi.init(),
-  schemaApi.init()
+  schemaApi.init(),
+  unifiedApi.init()
 ]);
 
 // Helper function to handle requests
@@ -2839,16 +2899,7 @@ app.delete('/schema/:schemaId', async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server listening on port ${PORT}`);
-  console.log(`Main API documentation available at http://localhost:${PORT}/api-docs`);
-  // console.log(`Pinterest API documentation available at http://localhost:${PORT}/pinterest-api-docs`);
-  console.log(`AWS DynamoDB service available at http://localhost:${PORT}/api/dynamodb`);
-  console.log(`Schema API documentation available at http://localhost:${PORT}/schema-api-docs`);
-  console.log(`llm API documentation available at http://localhost:${PORT}/llm-api-docs`);
-  console.log(`AWS Messaging Service documentation available at http://localhost:${PORT}/aws-messaging-docsss`);
-});
+
 
 // Helper function to format objects for DynamoDB
 function formatDynamoDBMap(obj) {
@@ -3023,3 +3074,59 @@ app.post('/llm/generate-schema', async (req, res) => {
   res.status(result.statusCode).json(result.body);
 });
 
+// Load Unified OpenAPI specification
+const unifiedOpenapiSpec = yaml.load(fs.readFileSync(path.join(__dirname, 'unified-api.yaml'), 'utf8'));
+
+// Serve Unified API docs
+app.use('/unified-api-docs', swaggerUi.serve);
+app.get('/unified-api-docs', (req, res) => {
+  res.send(
+    swaggerUi.generateHTML(unifiedOpenapiSpec, {
+      customSiteTitle: "Unified API Documentation",
+      customfavIcon: "/favicon.ico",
+      customCss: '.swagger-ui .topbar { display: none }',
+      swaggerUrl: "/unified-api-docs/swagger.json"
+    })
+  );
+});
+
+// Serve Unified OpenAPI specification
+app.get('/unified-api-docs/swagger.json', (req, res) => {
+  res.json(unifiedOpenapiSpec);
+});
+
+// Handle Unified API routes
+app.all('/unified/*', async (req, res) => {
+  try {
+    const response = await unifiedApi.handleRequest(
+      {
+        method: req.method,
+        path: req.path.replace('/unified', '') || '/',
+        body: req.body,
+        query: req.query,
+        headers: req.headers
+      },
+      req,
+      res
+    );
+    res.status(response.statusCode).json(response.body);
+  } catch (error) {
+    console.error('[Unified API] Error:', error.message);
+    res.status(500).json({
+      error: 'Failed to handle unified API request',
+      message: error.message
+    });
+  }
+});
+
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Server listening on port ${PORT}`);
+  console.log(`Main API documentation available at http://localhost:${PORT}/api-docs`);
+  // console.log(`Pinterest API documentation available at http://localhost:${PORT}/pinterest-api-docs`);
+  console.log(`AWS DynamoDB service available at http://localhost:${PORT}/api/dynamodb`);
+  console.log(`Schema API documentation available at http://localhost:${PORT}/schema-api-docs`);
+  console.log(`llm API documentation available at http://localhost:${PORT}/llm-api-docs`);
+  console.log(`AWS Messaging Service documentation available at http://localhost:${PORT}/aws-messaging-docsss`);
+  console.log(`Unified API documentation available at http://localhost:${PORT}/unified-api-docs`);
+});
