@@ -67,4 +67,68 @@ paths:
                 type: object
                 properties:
                   error:
-                    type: string 
+                    type: string
+  /llm/templates:
+    get:
+      summary: List all prompt templates
+      responses:
+        '200':
+          description: List of templates
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id: { type: string }
+                    name: { type: string }
+                    context: { type: string }
+                    message: { type: string }
+    post:
+      summary: Save a new prompt template
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                context: { type: string }
+                message: { type: string }
+      responses:
+        '201':
+          description: Template saved
+
+  /llm/history:
+    get:
+      summary: List LLM output history
+      responses:
+        '200':
+          description: List of history items
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id: { type: string }
+                    prompt: { type: string }
+                    output: { type: string }
+                    timestamp: { type: string }
+    post:
+      summary: Save LLM output history
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                prompt: { type: string }
+                output: { type: string }
+      responses:
+        '201':
+          description: History saved 

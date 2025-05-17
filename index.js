@@ -3130,3 +3130,20 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`AWS Messaging Service documentation available at http://localhost:${PORT}/aws-messaging-docsss`);
   console.log(`Unified API documentation available at http://localhost:${PORT}/unified-api-docs`);
 });
+
+app.get('/llm/templates', async (req, res) => {
+  const result = await llmHandlers.listPromptTemplates();
+  res.status(result.statusCode).json(result.body);
+});
+app.post('/llm/templates', async (req, res) => {
+  const result = await llmHandlers.savePromptTemplate({ request: { requestBody: req.body } }, req, res);
+  res.status(result.statusCode).json(result.body);
+});
+app.get('/llm/history', async (req, res) => {
+  const result = await llmHandlers.listLLMHistory();
+  res.status(result.statusCode).json(result.body);
+});
+app.post('/llm/history', async (req, res) => {
+  const result = await llmHandlers.saveLLMHistory({ request: { requestBody: req.body } }, req, res);
+  res.status(result.statusCode).json(result.body);
+});
