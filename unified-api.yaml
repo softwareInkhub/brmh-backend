@@ -83,20 +83,25 @@ paths:
           application/json:
             schema:
               type: object
-              required: ["methodId", "schemaName", "methodName", "namespaceId", "schemaType", "schema"]
               properties:
                 methodId:
                   type: string
+                  nullable: true
                 schemaName:
                   type: string
+                  nullable: true
                 methodName:
                   type: string
+                  nullable: true
                 namespaceId:
                   type: string
+                  nullable: true
                 schemaType:
                   type: string
+                  nullable: true
                 schema:
                   type: object
+                  nullable: true
                 isArray:
                   type: boolean
                 originalType:
