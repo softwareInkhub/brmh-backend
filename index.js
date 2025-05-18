@@ -9,7 +9,6 @@ import yaml from 'js-yaml';
 import { v4 as uuidv4 } from 'uuid';
 import cors from 'cors'
 import axios from 'axios';
-// import { handlers as pinterestHandlers } from './pinterest-handlers.js';
 import { handlers as dynamodbHandlers } from './lib/dynamodb-handlers.js';
 import dotenv from 'dotenv';
 import { handlers as awsMessagingHandlers } from './aws-messaging-handlers.js';
@@ -17,6 +16,8 @@ import { saveSingleExecutionLog, savePaginatedExecutionLogs } from './executionH
 import { handlers as schemaHandlers } from './lib/schema-handlers.js';
 import { exec } from 'child_process';
 import Ajv from 'ajv';
+import filebrowserRouter from './lib/filebrowser-handlers.js';
+
 
 // Load environment variables
 dotenv.config();
@@ -31,7 +32,11 @@ console.log('AWS Configuration Check:', {
 
 const app = express();
 app.use(express.json());
-app.use(cors());
+app.use(cors({
+  origin: 'http://localhost:3000', // Your frontend URL
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 // File storage configuration
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -1880,6 +1885,29 @@ const mainApi = new OpenAPIBackend({
   }
 });
 
+// Initialize file browser OpenAPI backend
+const filebrowserSpec = yaml.load(fs.readFileSync('./filebrowser-api.yaml', 'utf8'));
+const filebrowserApi = new OpenAPIBackend({
+  definition: filebrowserSpec,
+  quick: true,
+  handlers: {
+    validationFail: async (c, req, res) => ({
+      statusCode: 400,
+      error: c.validation.errors
+    }),
+    notFound: async (c, req, res) => ({
+      statusCode: 404,
+      error: 'Not Found'
+    })
+  }
+});
+
+// Mount file browser routes
+app.use('/api/filebrowser', filebrowserRouter);
+
+// Mount file browser Swagger UI
+app.use('/api/filebrowser/docs', swaggerUi.serve, swaggerUi.setup(filebrowserSpec));
+
 // Initialize the OpenAPI backend
 await mainApi.init();
 
@@ -2835,7 +2863,8 @@ app.listen(PORT, '0.0.0.0', () => {
   // console.log(`Pinterest API documentation available at http://localhost:${PORT}/pinterest-api-docs`);
   console.log(`AWS DynamoDB service available at http://localhost:${PORT}/api/dynamodb`);
   console.log(`Schema API documentation available at http://localhost:${PORT}/schema-api-docs`);
-  console.log(`AWS Messaging Service documentation available at http://localhost:${PORT}/aws-messaging-docsss`);
+  console.log(`AWS Messaging Service documentation available at http://localhost:${PORT}/aws-messaging-docs`);
+  console.log(`File Browser API documentation available at http://localhost:${PORT}/api/filebrowser/docs/#/`);
 });
 
 // Helper function to format objects for DynamoDB
@@ -2920,4 +2949,8 @@ app.all('/api/schema/*', async (req, res) => {
     });
   }
 });
+
+
+
+export default app;
 

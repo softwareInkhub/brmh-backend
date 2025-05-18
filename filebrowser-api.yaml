@@ -1,0 +1,710 @@
+openapi: 3.0.0
+info:
+  title: File Browser API
+  version: 1.0.0
+  description: API for managing files and folders
+
+servers:
+  - url: /api/filebrowser
+    description: File Browser API server
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+
+    LoginRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+      required:
+        - email
+        - password
+
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique identifier for the user
+        email:
+          type: string
+          format: email
+          description: User's email address
+        name:
+          type: string
+          description: User's full name
+      required:
+        - id
+        - email
+        - name
+
+    LoginResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          description: JWT authentication token
+        user:
+          $ref: '#/components/schemas/User'
+      required:
+        - token
+        - user
+
+    RegisterRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+        name:
+          type: string
+      required:
+        - email
+        - password
+        - name
+
+    RegisterResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          description: Success message
+        token:
+          type: string
+          description: JWT authentication token
+        user:
+          $ref: '#/components/schemas/User'
+      required:
+        - message
+        - token
+        - user
+
+    File:
+      type: object
+      properties:
+        fileId:
+          type: string
+        fileName:
+          type: string
+        s3Key:
+          type: string
+        size:
+          type: integer
+        mimeType:
+          type: string
+        userId:
+          type: string
+        parentFolderId:
+          type: string
+        sharedWith:
+          type: array
+          items:
+            type: string
+        isReadOnly:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - fileId
+        - fileName
+        - s3Key
+        - userId
+        - createdAt
+
+    Folder:
+      type: object
+      properties:
+        folderId:
+          type: string
+        folderName:
+          type: string
+        userId:
+          type: string
+        parentFolderId:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - folderId
+        - folderName
+        - userId
+        - createdAt
+
+    Link:
+      type: object
+      properties:
+        id:
+          type: string
+        userId:
+          type: string
+        name:
+          type: string
+        url:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - userId
+        - name
+        - url
+        - createdAt
+
+paths:
+  /auth/login:
+    post:
+      summary: Login user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Successful login
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/register:
+    post:
+      summary: Register new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: User registered successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisterResponse'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /folders:
+    post:
+      summary: Create a folder
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                folderName:
+                  type: string
+                parentFolderId:
+                  type: string
+              required:
+                - folderName
+      responses:
+        '201':
+          description: Folder created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Folder'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    get:
+      summary: List all folders for the user
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: parentFolderId
+          schema:
+            type: string
+          required: false
+          description: Filter by parent folder
+      responses:
+        '200':
+          description: List of folders
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  folders:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Folder'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /folders/{folderId}:
+    get:
+      summary: Get folder info
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: folderId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Folder info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Folder'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Folder not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    delete:
+      summary: Delete a folder
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: folderId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Folder deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Folder not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /files:
+    get:
+      summary: Get all files
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: List of files
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    name:
+                      type: string
+                    userId:
+                      type: string
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /files/upload:
+    post:
+      summary: Upload a file (metadata only)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                fileName:
+                  type: string
+                mimeType:
+                  type: string
+                parentFolderId:
+                  type: string
+                size:
+                  type: integer
+                isReadOnly:
+                  type: boolean
+              required:
+                - fileName
+      responses:
+        '201':
+          description: File uploaded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/File'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /files/list:
+    get:
+      summary: List all files for the user
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: parentFolderId
+          schema:
+            type: string
+          required: false
+          description: Filter by parent folder
+      responses:
+        '200':
+          description: List of files
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  files:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/File'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /files/content/{fileId}:
+    get:
+      summary: Get file content (placeholder)
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: fileId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: File content (placeholder)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  content:
+                    type: string
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: File not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /files/{fileId}:
+    delete:
+      summary: Delete a file
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: fileId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: File deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: File not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /files/{fileId}/rename:
+    patch:
+      summary: Rename a file
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: fileId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                newName:
+                  type: string
+              required:
+                - newName
+      responses:
+        '200':
+          description: File renamed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: File not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /files/{fileId}/share:
+    post:
+      summary: Share a file with another user
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: fileId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                shareWithUserId:
+                  type: string
+              required:
+                - shareWithUserId
+      responses:
+        '200':
+          description: File shared
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  sharedWith:
+                    type: array
+                    items:
+                      type: string
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: File not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /links:
+    post:
+      summary: Create a new link
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                url:
+                  type: string
+              required:
+                - name
+                - url
+      responses:
+        '201':
+          description: Link created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Link'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    get:
+      summary: List all links for the user
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: List of links
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  links:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Link'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /links/{id}:
+    delete:
+      summary: Delete a link
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Link deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Link not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /health:
+    get:
+      summary: Health check
+      responses:
+        '200':
+          description: Server is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
