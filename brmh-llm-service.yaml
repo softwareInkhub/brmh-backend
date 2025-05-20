@@ -7,7 +7,9 @@ info:
 paths:
   /llm/generate-schema:
     post:
-      summary: Generate schema from prompt using LLM
+      summary: Generate schema or code from prompt using LLM
+      description: |
+        The LLM will return ONLY code (for code prompts) or ONLY valid JSON/YAML (for schema/config prompts), with no explanations or markdown. The response is always the raw code or object.
       requestBody:
         required: true
         content:
@@ -41,7 +43,9 @@ paths:
                     type: string
   /llm/generate-schema/stream:
     post:
-      summary: Generate schema from prompt using LLM (streaming)
+      summary: Generate schema or code from prompt using LLM (streaming)
+      description: |
+        The LLM will return ONLY code (for code prompts) or ONLY valid JSON/YAML (for schema/config prompts), with no explanations or markdown. The response is always the raw code or object.
       requestBody:
         required: true
         content:
@@ -67,7 +71,7 @@ paths:
                 type: object
                 properties:
                   error:
-                    type: string
+                    type: string 
   /llm/templates:
     get:
       summary: List all prompt templates
@@ -131,4 +135,108 @@ paths:
                 output: { type: string }
       responses:
         '201':
-          description: History saved 
+          description: History saved
+
+  /generate-schema/stream:
+    post:
+      operationId: generateSchemaWithLLMStream
+      summary: Generate schema with streaming response
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["prompt"]
+              properties:
+                prompt:
+                  type: string
+                  description: The prompt to generate schema from
+      responses:
+        '200':
+          description: Schema generation stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: Server-sent events stream
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+
+  /generate-schema:
+    post:
+      operationId: generateSchemaWithLLM
+      summary: Generate schema
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["prompt"]
+              properties:
+                prompt:
+                  type: string
+                  description: The prompt to generate schema from
+      responses:
+        '200':
+          description: Schema generated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  schema:
+                    type: object
+                  isArray:
+                    type: boolean
+                  originalType:
+                    type: string
+
+  /llm/count-tokens:
+    post:
+      summary: Count tokens in a text
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                text:
+                  type: string
+      responses:
+        '200':
+          description: Token count
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tokenCount:
+                    type: integer
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string 

@@ -2167,6 +2167,7 @@ const unifiedApi = new OpenAPIBackend({
     getSchemaTableMeta: unifiedHandlers.getSchemaTableMeta,
     checkAndUpdateTableStatus: unifiedHandlers.checkAndUpdateTableStatus,
     getTableItems: unifiedHandlers.getTableItems,
+    createTableItem: unifiedHandlers.createTableItem,
     getSchemaByTableName: unifiedHandlers.getSchemaByTableName,
     checkAllTableStatuses: unifiedHandlers.checkAllTableStatuses,
 
@@ -2379,7 +2380,6 @@ async function handleIncomingWebhook(req, res) {
 
     // Convert all numbers in the payload to strings
     const convertedPayload = convertNumbersToStrings(webhookPayload);
-
     // Create item to save
     const item = {
       id: String(convertedPayload.id || convertedPayload.product_id || convertedPayload.order_id || Date.now()),
@@ -3074,6 +3074,21 @@ app.post('/llm/generate-schema', async (req, res) => {
   res.status(result.statusCode).json(result.body);
 });
 
+// LLM routes
+app.post('/llm/generate-schema/stream', async (req, res) => {
+  try {
+    const result = await llmHandlers.generateSchemaWithLLMStream(
+      { request: { requestBody: req.body } },
+      req,
+      res
+    );
+    // Note: The handler will handle the streaming response directly
+  } catch (error) {
+    console.error('LLM streaming error:', error);
+    res.status(500).json({ error: 'Failed to generate schema stream' });
+  }
+});
+
 // Load Unified OpenAPI specification
 const unifiedOpenapiSpec = yaml.load(fs.readFileSync(path.join(__dirname, 'unified-api.yaml'), 'utf8'));
 
@@ -3130,7 +3145,6 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`AWS Messaging Service documentation available at http://localhost:${PORT}/aws-messaging-docsss`);
   console.log(`Unified API documentation available at http://localhost:${PORT}/unified-api-docs`);
 });
-
 app.get('/llm/templates', async (req, res) => {
   const result = await llmHandlers.listPromptTemplates();
   res.status(result.statusCode).json(result.body);
@@ -3147,3 +3161,6 @@ app.post('/llm/history', async (req, res) => {
   const result = await llmHandlers.saveLLMHistory({ request: { requestBody: req.body } }, req, res);
   res.status(result.statusCode).json(result.body);
 });
+
+
+

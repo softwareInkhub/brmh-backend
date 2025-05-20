@@ -44,34 +44,40 @@ paths:
   /schema/validate:
     post:
       operationId: validateSchema
-      summary: Validate data against schema
+      summary: Validate schema
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: ["schema", "data"]
+              required: ["schema"]  # Only require schema
               properties:
                 schema:
                   type: object
                 data:
                   type: object
+                  nullable: true
       responses:
         '200':
-          description: Validation result
+          description: Schema validation result
           content:
             application/json:
               schema:
                 type: object
-                required: ["valid", "errors"]
+                required: ["valid"]
                 properties:
                   valid:
                     type: boolean
                   errors:
                     type: array
                     items:
-                      type: string
+                      type: object
+                      properties:
+                        message:
+                          type: string
+                        instancePath:
+                          type: string
 
   /schema:
     post:
@@ -83,31 +89,33 @@ paths:
           application/json:
             schema:
               type: object
+              required: ["schemaName", "schema"]
               properties:
                 methodId:
-                  type: string
+                  type: ["string", "null"]
                   nullable: true
                 schemaName:
                   type: string
-                  nullable: true
                 methodName:
-                  type: string
+                  type: ["string", "null"]
                   nullable: true
                 namespaceId:
-                  type: string
+                  type: ["string", "null"]
                   nullable: true
                 schemaType:
-                  type: string
+                  type: ["string", "null"]
                   nullable: true
                 schema:
                   type: object
-                  nullable: true
                 isArray:
                   type: boolean
+                  default: false
                 originalType:
-                  type: string
+                  type: ["string", "null"]
+                  nullable: true
                 url:
                   type: string
+                  default: ""
       responses:
         '200':
           description: Schema saved successfully
@@ -287,6 +295,32 @@ paths:
                 type: array
                 items:
                   type: object
+
+    post:
+      operationId: createTableItem
+      summary: Create a new item in the table
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["item"]
+              properties:
+                item:
+                  type: object
+                  description: The item to create
+      responses:
+        '200':
+          description: Item created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                required: ["success"]
+                properties:
+                  success:
+                    type: boolean
 
   # API Execution
   /execute:
