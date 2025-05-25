@@ -1,5 +1,11 @@
 import { v4 as uuidv4 } from 'uuid';
+import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { DynamoDBDocumentClient, PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { handlers as dynamodbHandlers } from './lib/dynamodb-handlers.js';
+
+// Initialize DynamoDB clients
+const client = new DynamoDBClient({});
+const docClient = DynamoDBDocumentClient.from(client);
 
 // Execution status constants
 const EXECUTION_STATUS = {
@@ -56,20 +62,15 @@ export const saveExecutionLog = async ({
       itemIds: formattedItemIds
     });
 
-    const response = await dynamodbHandlers.createItem({
-      request: {
-        params: {
-          tableName: 'executions'
-        },
-        requestBody: logItem
-      }
+    // Create the DynamoDB command directly
+    const command = new PutCommand({
+      TableName: 'executions',
+      Item: logItem
     });
 
-    if (!response.ok) {
-      console.error('Failed to save execution log:', response);
-      return null;
-    }
-
+    // Send the command directly using docClient
+    await docClient.send(command);
+    console.log('Successfully saved execution log');
     return logItem;
   } catch (error) {
     console.error('Error saving execution log:', error);
@@ -84,7 +85,12 @@ export const updateParentExecutionStatus = async ({
   isLast = false
 }) => {
   try {
-    const updateExpression = {
+    const command = new UpdateCommand({
+      TableName: 'executions',
+      Key: {
+        'exec-id': execId,
+        'child-exec-id': execId
+      },
       UpdateExpression: "SET #data.#status = :status, #data.#isLast = :isLast",
       ExpressionAttributeNames: {
         "#data": "data",
@@ -94,28 +100,13 @@ export const updateParentExecutionStatus = async ({
       ExpressionAttributeValues: {
         ":status": status,
         ":isLast": isLast
-      }
-    };
-
-    const response = await dynamodbHandlers.updateItemsByPk({
-      request: {
-        params: {
-          tableName: 'executions',
-          id: execId
-        },
-        query: {
-          sortKey: execId // Pass sortKey as a query parameter
-        },
-        requestBody: updateExpression
-      }
+      },
+      ReturnValues: 'ALL_NEW'
     });
 
-    if (!response.ok) {
-      console.error('Failed to update parent execution status:', response);
-      return null;
-    }
-
-    return response.body;
+    const response = await docClient.send(command);
+    console.log('Successfully updated parent execution status');
+    return response.Attributes;
   } catch (error) {
     console.error('Error updating parent execution status:', error);
     return null;
@@ -194,23 +185,44 @@ export const saveSingleExecutionLog = async ({
   responseData
 }) => {
   try {
-    const parentExecId = execId;
-    await saveExecutionLog({
-      execId: parentExecId,
-      childExecId: parentExecId, // Same as execId for parent
+    const timestamp = new Date().toISOString();
+    
+    const logItem = {
+      'exec-id': execId,
+      'child-exec-id': execId, // Same as execId for single executions
       data: {
-        requestUrl: url,
-        responseStatus,
-        paginationType: 'single',
-        status: EXECUTION_STATUS.COMPLETED,
-        isLast: true,
-        totalItemsProcessed: responseData ? 1 : 0,
-        itemsInCurrentPage: responseData ? 1 : 0
-      },
-      isParent: true
+        'execution-id': execId,
+        'request-url': url,
+        'response-status': responseStatus,
+        'pagination-type': 'single',
+        'status': EXECUTION_STATUS.COMPLETED,
+        'is-last': true,
+        'total-items-processed': responseData ? 1 : 0,
+        'items-in-current-page': responseData ? 1 : 0,
+        'timestamp': timestamp,
+        'method': method,
+        'query-params': queryParams || {},
+        'headers': headers || {},
+        'response-data': responseData || null
+      }
+    };
+
+    console.log('Saving single execution log:', {
+      execId,
+      url,
+      status: responseStatus
     });
 
-    return parentExecId;
+    // Create the DynamoDB command directly
+    const command = new PutCommand({
+      TableName: 'executions',
+      Item: logItem
+    });
+
+    // Send the command directly using docClient
+    await docClient.send(command);
+    console.log('Successfully saved execution log');
+    return execId;
   } catch (error) {
     console.error('Error saving single execution log:', error);
     return null;

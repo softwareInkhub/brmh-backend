@@ -656,6 +656,11 @@ paths:
                   type: object
                 response-schema:
                   type: object
+                schemaId:
+                  type: ["string", "null"]
+                  nullable: true
+                  description: Reference to the schema for this namespace or method
+                  default: null
       responses:
         '200':
           description: Method created successfully
@@ -671,6 +676,16 @@ paths:
         required: true
         schema:
           type: string
+    get:
+      operationId: getNamespaceMethodById
+      summary: Get method by ID
+      responses:
+        '200':
+          description: Method retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
     put:
       operationId: updateNamespaceMethod
       summary: Update namespace method
@@ -712,6 +727,11 @@ paths:
                   type: object
                 response-schema:
                   type: object
+                schemaId:
+                  type: ["string", "null"]
+                  nullable: true
+                  description: Reference to the schema for this namespace or method
+                  default: null
       responses:
         '200':
           description: Method updated successfully
