@@ -148,6 +148,8 @@ const unifiedApi = new OpenAPIBackend({
     getTableItems: unifiedHandlers.getTableItems,
     getSchemaByTableName: unifiedHandlers.getSchemaByTableName,
     checkAllTableStatuses: unifiedHandlers.checkAllTableStatuses,
+    createTableByName: unifiedHandlers.createTableByName,
+    getTableItemCount: unifiedHandlers.getTableItemCount,
 
     // API Execution
     executeNamespaceRequest: unifiedHandlers.executeNamespaceRequest,
@@ -171,7 +173,8 @@ const unifiedApi = new OpenAPIBackend({
     createNamespaceMethod: unifiedHandlers.createNamespaceMethod,
     updateNamespaceMethod: unifiedHandlers.updateNamespaceMethod,
     deleteNamespaceMethod: unifiedHandlers.deleteNamespaceMethod,
-    getNamespaceMethodById: unifiedHandlers.getNamespaceMethodById
+    getNamespaceMethodById: unifiedHandlers.getNamespaceMethodById,
+    createTableItem: unifiedHandlers.createTableItem
   }
 });
 
@@ -802,6 +805,12 @@ app.get('/unified-api-docs/swagger.json', (req, res) => {
 // Handle Unified API routes
 app.all('/unified/*', async (req, res) => {
   try {
+    console.log('[Unified API Request]:', {
+      method: req.method,
+      path: req.path,
+      body: req.body
+    });
+
     const response = await unifiedApi.handleRequest(
       {
         method: req.method,
@@ -813,6 +822,12 @@ app.all('/unified/*', async (req, res) => {
       req,
       res
     );
+
+    console.log('[Unified API Response]:', {
+      statusCode: response.statusCode,
+      body: response.body
+    });
+
     res.status(response.statusCode).json(response.body);
   } catch (error) {
     console.error('[Unified API] Error:', error.message);
@@ -840,7 +855,14 @@ app.post('/llm/history', async (req, res) => {
   res.status(result.statusCode).json(result.body);
 });
 
-
+// Add this before the catch-all /unified/* route
+app.post('/unified/schema/table/:tableName/items', async (req, res) => {
+  return unifiedHandlers.createTableItem(
+    { request: { params: req.params, requestBody: req.body } },
+    req,
+    res
+  );
+});
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, '0.0.0.0', () => {
