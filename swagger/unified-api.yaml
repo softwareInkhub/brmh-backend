@@ -310,6 +310,32 @@ paths:
                 item:
                   type: object
                   description: The item to create
+                requestDetails:
+                  type: object
+                  description: Details of the API request that generated this data
+                  properties:
+                    method:
+                      type: string
+                    url:
+                      type: string
+                    queryParams:
+                      type: object
+                    headers:
+                      type: object
+                    body:
+                      type: object
+                status:
+                  type: integer
+                  description: HTTP status code of the API response
+                itemIndex:
+                  type: integer
+                  description: Index of the item in the batch
+                totalItems:
+                  type: integer
+                  description: Total number of items in the batch
+                originalId:
+                  type: string
+                  description: Original ID of the item from the API
       responses:
         '200':
           description: Item created successfully
@@ -321,6 +347,9 @@ paths:
                 properties:
                   success:
                     type: boolean
+                  itemId:
+                    type: string
+                    description: ID of the created item
 
   # API Execution
   /execute:
@@ -732,6 +761,16 @@ paths:
                   nullable: true
                   description: Reference to the schema for this namespace or method
                   default: null
+                namespace-method-tableName:
+                  type: ["string", "null"]
+                  nullable: true
+                  description: Table name for this method
+                  default: null
+                tableName:
+                  type: ["string", "null"]
+                  nullable: true
+                  description: Table name for this method (backward compatibility)
+                  default: null
       responses:
         '200':
           description: Method updated successfully
@@ -745,7 +784,7 @@ paths:
       summary: Delete namespace method
       responses:
         '204':
-          description: Method deleted successfully 
+          description: Method deleted successfully
 
   /table/create:
     post:
