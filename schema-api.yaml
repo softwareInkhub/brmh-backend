@@ -1,0 +1,370 @@
+openapi: 3.0.0
+info:
+  title: Schema Management API
+  version: 1.0.0
+  description: API for managing schemas in DynamoDB
+
+servers:
+  - url: /
+    description: API server
+
+paths:
+  /schema/generate:
+    post:
+      summary: Generate schema from JSON data
+      operationId: generateSchema
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                responseData:
+                  type: object
+                  description: JSON data to generate schema from
+              required:
+                - responseData
+      responses:
+        '200':
+          description: Schema generated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  schema:
+                    type: object
+                  isArray:
+                    type: boolean
+                  originalType:
+                    type: string
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  details:
+                    type: string
+
+  /schema/validate:
+    post:
+      summary: Validate data against a schema
+      operationId: validateSchema
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - schema
+                - data
+              properties:
+                schema:
+                  type: object
+                  description: The JSON schema to validate against
+                data:
+                  type: object
+                  description: The data to validate
+      responses:
+        '200':
+          description: Validation result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid:
+                    type: boolean
+                  errors:
+                    type: array
+                    items:
+                      type: string
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  details:
+                    type: string
+
+  /schema/create:
+    post:
+      summary: Save schema to DynamoDB
+      operationId: saveSchema
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                methodId:
+                  type: string
+                schemaName:
+                  type: string
+                methodName:
+                  type: string
+                namespaceId:
+                  type: string
+                schemaType:
+                  type: string
+                schema:
+                  type: object
+                isArray:
+                  type: boolean
+                originalType:
+                  type: string
+                url:
+                  type: string
+              required:
+                - methodId
+                - schema
+      responses:
+        '200':
+          description: Schema saved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  schemaId:
+                    type: string
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  details:
+                    type: string
+
+  /schema/{schemaId}:
+    get:
+      summary: Get schema by ID
+      operationId: getSchema
+      parameters:
+        - name: schemaId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Schema retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  schema:
+                    type: object
+                  isArray:
+                    type: boolean
+                  originalType:
+                    type: string
+        '404':
+          description: Schema not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  details:
+                    type: string
+
+    put:
+      summary: Update schema
+      operationId: updateSchema
+      parameters:
+        - name: schemaId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                schemaName:
+                  type: string
+                schema:
+                  type: object
+                isArray:
+                  type: boolean
+                originalType:
+                  type: string
+                url:
+                  type: string
+      responses:
+        '200':
+          description: Schema updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  schema:
+                    type: object
+                  isArray:
+                    type: boolean
+                  originalType:
+                    type: string
+        '404':
+          description: Schema not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  details:
+                    type: string
+
+    delete:
+      summary: Delete schema
+      operationId: deleteSchema
+      parameters:
+        - name: schemaId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Schema deleted successfully
+        '404':
+          description: Schema not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  details:
+                    type: string
+
+  /schema/list:
+    get:
+      summary: Get all schemas
+      operationId: listSchemas
+      responses:
+        '200':
+          description: List of schemas retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    schema:
+                      type: object
+                    isArray:
+                      type: boolean
+                    originalType:
+                      type: string
+
+  /schema/table:
+    post:
+      summary: Create schemas table in DynamoDB
+      operationId: createSchemasTable
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tableName
+              properties:
+                tableName:
+                  type: string
+                  description: Name of the table to create
+      responses:
+        '200':
+          description: Table created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  tableName:
+                    type: string
+        '400':
+          description: Table creation failed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  details:
+                    type: string
+
+    delete:
+      summary: Delete schemas table from DynamoDB
+      operationId: deleteSchemasTable
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tableName
+              properties:
+                tableName:
+                  type: string
+                  description: Name of the table to delete
+      responses:
+        '200':
+          description: Table deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  tableName:
+                    type: string
+        '400':
+          description: Table deletion failed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  details:
+                    type: string 
