@@ -767,6 +767,43 @@ app.post('/llm/generate-schema', async (req, res) => {
   res.status(result.statusCode).json(result.body);
 });
 
+// New LLM routes for automated schema creation
+app.post('/llm/generate-schema-from-prompt', async (req, res) => {
+  const result = await llmHandlers.generateSchemaFromPrompt({ request: { requestBody: req.body } }, req, res);
+  res.status(result.statusCode).json(result.body);
+});
+
+app.post('/llm/generate-lambda-with-url', async (req, res) => {
+  const result = await llmHandlers.generateLambdaWithURL({ request: { requestBody: req.body } }, req, res);
+  res.status(result.statusCode).json(result.body);
+});
+
+app.post('/llm/automate-namespace-creation', async (req, res) => {
+  const result = await llmHandlers.automateNamespaceCreation({ request: { requestBody: req.body } }, req, res);
+  res.status(result.statusCode).json(result.body);
+});
+
+// New LLM routes for method creation and external namespace fetching
+app.post('/llm/generate-method', async (req, res) => {
+  const result = await llmHandlers.generateMethod({ request: { requestBody: req.body } }, req, res);
+  res.status(result.statusCode).json(result.body);
+});
+
+app.post('/llm/fetch-external-namespace-methods', async (req, res) => {
+  const result = await llmHandlers.fetchExternalNamespaceMethods({ request: { requestBody: req.body } }, req, res);
+  res.status(result.statusCode).json(result.body);
+});
+
+app.post('/llm/fetch-methods-from-external-api', async (req, res) => {
+  const result = await llmHandlers.importMethodsFromExternalAPI({ request: { requestBody: req.body } }, req, res);
+  res.status(result.statusCode).json(result.body);
+});
+
+app.post('/llm/add-methods-to-namespace', async (req, res) => {
+  const result = await llmHandlers.addMethodsToNamespace({ request: { requestBody: req.body } }, req, res);
+  res.status(result.statusCode).json(result.body);
+});
+
 // LLM routes
 app.post('/llm/generate-schema/stream', async (req, res) => {
   try {
@@ -873,5 +910,3 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`llm API documentation available at http://localhost:${PORT}/llm-api-docs`);
   console.log(`Unified API documentation available at http://localhost:${PORT}/unified-api-docs`);
 });
-
-

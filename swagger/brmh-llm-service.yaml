@@ -41,6 +41,684 @@ paths:
                 properties:
                   error:
                     type: string
+
+  /llm/generate-schema-from-prompt:
+    post:
+      operationId: generateSchemaFromPrompt
+      summary: Generate comprehensive schema from user prompt
+      description: |
+        Generate a complete API schema including request/response schemas, method configuration, and Lambda handler code from a natural language prompt.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["userPrompt"]
+              properties:
+                userPrompt:
+                  type: string
+                  description: Natural language description of the API endpoint
+                  example: "Create an API endpoint for user registration that accepts email, password, and name"
+                namespaceName:
+                  type: string
+                  description: Name of the namespace this method belongs to
+                  example: "UserManagement"
+                methodName:
+                  type: string
+                  description: Name for the method
+                  example: "registerUser"
+      responses:
+        '200':
+          description: Generated schema and configuration
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      requestSchema:
+                        type: object
+                      responseSchema:
+                        type: object
+                      methodConfig:
+                        type: object
+                        properties:
+                          method:
+                            type: string
+                          path:
+                            type: string
+                          description:
+                            type: string
+                      lambdaHandler:
+                        type: string
+                      schemaName:
+                        type: string
+                  raw_output:
+                    type: string
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+
+  /llm/generate-lambda-with-url:
+    post:
+      operationId: generateLambdaWithURL
+      summary: Generate Lambda function with URL from schema data
+      description: |
+        Create a Lambda function configuration and generate a function URL based on schema data.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["schemaData", "namespaceName", "methodName"]
+              properties:
+                schemaData:
+                  type: object
+                  description: Schema data containing Lambda handler code
+                namespaceName:
+                  type: string
+                  description: Name of the namespace
+                methodName:
+                  type: string
+                  description: Name of the method
+      responses:
+        '200':
+          description: Lambda function configuration and URL
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  lambdaConfig:
+                    type: object
+                    properties:
+                      functionName:
+                        type: string
+                      runtime:
+                        type: string
+                      handler:
+                        type: string
+                      code:
+                        type: string
+                      memorySize:
+                        type: integer
+                      timeout:
+                        type: integer
+                      environment:
+                        type: object
+                  functionName:
+                    type: string
+                  estimatedUrl:
+                    type: string
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+
+  /llm/automate-namespace-creation:
+    post:
+      operationId: automateNamespaceCreation
+      summary: Automate complete namespace creation from user prompt
+      description: |
+        Generate a complete namespace setup including multiple methods, schemas, and Lambda handlers from a natural language description.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["userPrompt", "namespaceName"]
+              properties:
+                userPrompt:
+                  type: string
+                  description: Natural language description of the complete API system
+                  example: "Create a complete e-commerce API with user management, product catalog, and order processing"
+                namespaceName:
+                  type: string
+                  description: Name for the namespace
+                  example: "ECommerceAPI"
+      responses:
+        '200':
+          description: Complete namespace configuration
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      namespace:
+                        type: object
+                        properties:
+                          name:
+                            type: string
+                          description:
+                            type: string
+                          baseUrl:
+                            type: string
+                      methods:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            name:
+                              type: string
+                            method:
+                              type: string
+                            path:
+                              type: string
+                            description:
+                              type: string
+                            requestSchema:
+                              type: object
+                            responseSchema:
+                              type: object
+                            lambdaHandler:
+                              type: string
+                      schemas:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            name:
+                              type: string
+                            schema:
+                              type: object
+                  raw_output:
+                    type: string
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+
+  /llm/generate-method:
+    post:
+      operationId: generateMethod
+      summary: Generate method configuration from user prompt
+      description: |
+        Generate a complete method configuration including request/response schemas, method details, and Lambda handler code from a natural language description.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["userPrompt", "methodName"]
+              properties:
+                userPrompt:
+                  type: string
+                  description: Natural language description of the method
+                  example: "Create a method for user authentication that accepts email and password"
+                methodName:
+                  type: string
+                  description: Name for the method
+                  example: "authenticateUser"
+                namespaceName:
+                  type: string
+                  description: Name of the namespace this method belongs to
+                  example: "UserManagement"
+      responses:
+        '200':
+          description: Generated method configuration
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      methodConfig:
+                        type: object
+                        properties:
+                          method:
+                            type: string
+                          path:
+                            type: string
+                          description:
+                            type: string
+                          parameters:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                name:
+                                  type: string
+                                type:
+                                  type: string
+                                required:
+                                  type: boolean
+                                description:
+                                  type: string
+                      requestSchema:
+                        type: object
+                      responseSchema:
+                        type: object
+                      lambdaHandler:
+                        type: string
+                      methodName:
+                        type: string
+                  raw_output:
+                    type: string
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+
+  /llm/fetch-external-namespace-methods:
+    post:
+      operationId: fetchExternalNamespaceMethods
+      summary: Fetch methods from external namespace using AI agents
+      description: |
+        Analyze an external API specification and extract all available methods, schemas, and documentation using AI agents.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["namespaceUrl", "namespaceName"]
+              properties:
+                namespaceUrl:
+                  type: string
+                  description: URL to the external API specification (Swagger/OpenAPI)
+                  example: "https://api.example.com/swagger.json"
+                namespaceName:
+                  type: string
+                  description: Name for the namespace to store the extracted methods
+                  example: "ExternalAPI"
+                userPrompt:
+                  type: string
+                  description: Optional instructions for analyzing the external API
+                  example: "Focus on user management endpoints and extract authentication methods"
+      responses:
+        '200':
+          description: Extracted methods and schemas from external namespace
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      namespace:
+                        type: object
+                        properties:
+                          name:
+                            type: string
+                          url:
+                            type: string
+                          description:
+                            type: string
+                      methods:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            method:
+                              type: string
+                            path:
+                              type: string
+                            description:
+                              type: string
+                            parameters:
+                              type: array
+                              items:
+                                type: object
+                                properties:
+                                  name:
+                                    type: string
+                                  type:
+                                    type: string
+                                  required:
+                                    type: boolean
+                                  description:
+                                    type: string
+                            requestSchema:
+                              type: object
+                            responseSchema:
+                              type: object
+                      schemas:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            name:
+                              type: string
+                            schema:
+                              type: object
+                      summary:
+                        type: string
+                  raw_output:
+                    type: string
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+
+  /llm/fetch-methods-from-external-api:
+    post:
+      operationId: fetchMethodsFromExternalAPI
+      summary: Fetch and import methods from external API documentation
+      description: |
+        Fetch API documentation from a URL, extract methods using LLM, and save them to a namespace in the database.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["url"]
+              properties:
+                url:
+                  type: string
+                  description: URL to the external API documentation
+                  example: "https://shopify.dev/api/admin-rest/2024-01/resources/product"
+                targetNamespaceName:
+                  type: string
+                  description: Name for the namespace to store the extracted methods
+                  example: "Shopify Products"
+      responses:
+        '200':
+          description: Successfully imported methods from external API
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  namespaceId:
+                    type: string
+                  namespaceName:
+                    type: string
+                  totalMethods:
+                    type: integer
+                  savedMethods:
+                    type: integer
+                  failedMethods:
+                    type: integer
+                  failedMethodDetails:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        method:
+                          type: string
+                        error:
+                          type: string
+                  contentAnalysis:
+                    type: object
+                    properties:
+                      contentType:
+                        type: string
+                      contentLength:
+                        type: integer
+                      url:
+                        type: string
+                  extractedMethods:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                        httpMethod:
+                          type: string
+                        endpoint:
+                          type: string
+                        description:
+                          type: string
+                        queryParams:
+                          type: array
+                          items:
+                            type: object
+                        headers:
+                          type: array
+                          items:
+                            type: object
+                        requestSchema:
+                          type: object
+                        responseSchema:
+                          type: object
+                        sampleRequest:
+                          type: object
+                        sampleResponse:
+                          type: object
+                        tags:
+                          type: array
+                          items:
+                            type: string
+        '400':
+          description: Invalid request or failed to import
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  error:
+                    type: string
+
+  /llm/create-method-with-ai:
+    post:
+      operationId: createMethodWithAI
+      summary: Create method with AI assistance
+      description: |
+        Generate a complete API method configuration using AI based on a natural language description.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["methodDescription"]
+              properties:
+                methodDescription:
+                  type: string
+                  description: Natural language description of the method
+                  example: "Create a method for user authentication that accepts email and password"
+                namespaceName:
+                  type: string
+                  description: Name of the namespace this method belongs to
+                  example: "UserManagement"
+                methodName:
+                  type: string
+                  description: Name for the method
+                  example: "authenticateUser"
+      responses:
+        '200':
+          description: Generated method configuration
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  methodConfig:
+                    type: object
+                    properties:
+                      method:
+                        type: string
+                      endpoint:
+                        type: string
+                      description:
+                        type: string
+                      queryParams:
+                        type: array
+                        items:
+                          type: object
+                      headers:
+                        type: array
+                        items:
+                          type: object
+                      requestSchema:
+                        type: object
+                      responseSchema:
+                        type: object
+                      sampleRequest:
+                        type: object
+                      sampleResponse:
+                        type: object
+                      tags:
+                        type: array
+                        items:
+                          type: string
+                  raw_output:
+                    type: string
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  error:
+                    type: string
+
+  /llm/add-methods-to-namespace:
+    post:
+      operationId: addMethodsToNamespace
+      summary: Add selected methods from external namespace to target namespace
+      description: |
+        Add selected methods from an external namespace analysis to a target namespace in the system.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["namespaceName", "methods"]
+              properties:
+                namespaceName:
+                  type: string
+                  description: Name of the target namespace where methods will be added
+                  example: "MyShopifyIntegration"
+                methods:
+                  type: array
+                  description: Array of selected methods to add to the namespace
+                  items:
+                    type: object
+                    properties:
+                      method:
+                        type: string
+                      path:
+                        type: string
+                      description:
+                        type: string
+                      parameters:
+                        type: array
+                        items:
+                          type: object
+                      requestSchema:
+                        type: object
+                      responseSchema:
+                        type: object
+                sourceNamespace:
+                  type: string
+                  description: Name of the source namespace where methods were extracted from
+                  example: "ShopifyAPI"
+      responses:
+        '200':
+          description: Methods successfully added to namespace
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      namespaceName:
+                        type: string
+                      addedMethods:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            methodId:
+                              type: string
+                            methodName:
+                              type: string
+                            methodType:
+                              type: string
+                            path:
+                              type: string
+                            status:
+                              type: string
+                      errors:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            method:
+                              type: string
+                            error:
+                              type: string
+                      totalMethods:
+                        type: integer
+                      successfulAdds:
+                        type: integer
+                      failedAdds:
+                        type: integer
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+
   /llm/generate-schema/stream:
     post:
       summary: Generate schema or code from prompt using LLM (streaming)
@@ -71,7 +749,8 @@ paths:
                 type: object
                 properties:
                   error:
-                    type: string 
+                    type: string
+
   /llm/templates:
     get:
       summary: List all prompt templates
@@ -202,25 +881,43 @@ paths:
               schema:
                 type: object
                 properties:
-                  schema:
-                    type: object
-                  isArray:
-                    type: boolean
-                  originalType:
+                  llm_output:
+                    type: string
+                    description: Generated schema or code
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
                     type: string
 
-  /llm/count-tokens:
+  /count-tokens:
     post:
-      summary: Count tokens in a text
+      operationId: countTokens
+      summary: Count tokens in text
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              required: ["text"]
               properties:
                 text:
                   type: string
+                  description: Text to count tokens in
       responses:
         '200':
           description: Token count
@@ -231,8 +928,18 @@ paths:
                 properties:
                   tokenCount:
                     type: integer
+                    description: Number of tokens
         '400':
-          description: Invalid request
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        '500':
+          description: Server error
           content:
             application/json:
               schema:
