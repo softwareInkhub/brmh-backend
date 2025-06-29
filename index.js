@@ -778,6 +778,11 @@ app.post('/llm/generate-lambda-with-url', async (req, res) => {
   res.status(result.statusCode).json(result.body);
 });
 
+app.post('/llm/generate-lambda-code', async (req, res) => {
+  const result = await llmHandlers.generateLambdaCode({ request: { requestBody: req.body } }, req, res);
+  res.status(result.statusCode).json(result.body);
+});
+
 app.post('/llm/automate-namespace-creation', async (req, res) => {
   const result = await llmHandlers.automateNamespaceCreation({ request: { requestBody: req.body } }, req, res);
   res.status(result.statusCode).json(result.body);
