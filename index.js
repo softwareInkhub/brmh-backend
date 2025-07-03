@@ -14,6 +14,13 @@ import dotenv from 'dotenv';
 import { exec } from 'child_process';
 import { handlers as llmHandlers } from './lib/llm-handlers.js';
 import { handlers as unifiedHandlers } from './lib/unified-handlers.js';
+import {
+  enhancedLLMHandler,
+  getConversationHistory,
+  clearConversationHistory,
+  getUserSessions,
+  createSession
+} from './lib/enhanced-llm-handlers.js';
 
 // Load environment variables
 dotenv.config();
@@ -117,57 +124,22 @@ const awsApi = new OpenAPIBackend({
 });
 
 
-// Initialize Unified OpenAPI backend
-const unifiedApi = new OpenAPIBackend({
-  definition: './swagger/unified-api.yaml',
-  quick: true,
-  handlers: {
-    validationFail: async (c, req, res) => ({
-      statusCode: 400,
-      error: c.validation.errors
-    }),
-    notFound: async (c, req, res) => ({
-      statusCode: 404,
-      error: 'Not Found'
-    }),
-    // Schema Operations
-    generateSchema: unifiedHandlers.generateSchema,
-    validateSchema: unifiedHandlers.validateSchema,
-    saveSchema: unifiedHandlers.saveSchema,
-    getSchema: unifiedHandlers.getSchema,
-    updateSchema: unifiedHandlers.updateSchema,
-    deleteSchema: unifiedHandlers.deleteSchema,
-    listSchemas: unifiedHandlers.listSchemas,
-
-    // Table Operations
-    createSchemasTable: unifiedHandlers.createSchemasTable,
-    deleteSchemasTable: unifiedHandlers.deleteSchemasTable,
-    insertSchemaData: unifiedHandlers.insertSchemaData,
-    listSchemaTableMeta: unifiedHandlers.listSchemaTableMeta,
-    getSchemaTableMeta: unifiedHandlers.getSchemaTableMeta,
-    checkAndUpdateTableStatus: unifiedHandlers.checkAndUpdateTableStatus,
-    getTableItems: unifiedHandlers.getTableItems,
-    getSchemaByTableName: unifiedHandlers.getSchemaByTableName,
-    checkAllTableStatuses: unifiedHandlers.checkAllTableStatuses,
-    createTableByName: unifiedHandlers.createTableByName,
-    getTableItemCount: unifiedHandlers.getTableItemCount,
-
-    // API Execution
-    executeNamespaceRequest: unifiedHandlers.executeNamespaceRequest,
-    executeNamespacePaginatedRequest: unifiedHandlers.executeNamespacePaginatedRequest,
-
+// Define unifiedApiHandlers FIRST
+const unifiedApiHandlers = {
     // Namespace Operations
     getNamespaces: unifiedHandlers.getNamespaces,
-    getNamespaceById: unifiedHandlers.getNamespaceById,
     createNamespace: unifiedHandlers.createNamespace,
     updateNamespace: unifiedHandlers.updateNamespace,
     deleteNamespace: unifiedHandlers.deleteNamespace,
+  getNamespaceById: unifiedHandlers.getNamespaceById,
 
-    // Namespace Account Operations
-    getNamespaceAccounts: unifiedHandlers.getNamespaceAccounts,
-    createNamespaceAccount: unifiedHandlers.createNamespaceAccount,
-    updateNamespaceAccount: unifiedHandlers.updateNamespaceAccount,
-    deleteNamespaceAccount: unifiedHandlers.deleteNamespaceAccount,
+  // Schema Operations
+  listSchemas: unifiedHandlers.listSchemas,
+  getSchemas: unifiedHandlers.getSchemas,
+  createSchema: unifiedHandlers.createSchema,
+  updateSchema: unifiedHandlers.updateSchema,
+  deleteSchema: unifiedHandlers.deleteSchema,
+  getSchemaById: unifiedHandlers.getSchemaById,
 
     // Namespace Method Operations
     getNamespaceMethods: unifiedHandlers.getNamespaceMethods,
@@ -175,8 +147,26 @@ const unifiedApi = new OpenAPIBackend({
     updateNamespaceMethod: unifiedHandlers.updateNamespaceMethod,
     deleteNamespaceMethod: unifiedHandlers.deleteNamespaceMethod,
     getNamespaceMethodById: unifiedHandlers.getNamespaceMethodById,
-    createTableItem: unifiedHandlers.createTableItem
-  }
+  createTableItem: unifiedHandlers.createTableItem,
+
+  // Memory-enabled LLM Operations
+  generateSchemaWithMemory: enhancedLLMHandler,
+  generateSchemaFromPromptWithMemory: enhancedLLMHandler,
+  conversationalChat: enhancedLLMHandler,
+  getConversationHistory: getConversationHistory,
+  clearConversationHistory: clearConversationHistory,
+  getUserSessions: getUserSessions,
+  generateLambdaWithMemory: enhancedLLMHandler,
+  getContextualAssistance: enhancedLLMHandler,
+
+  // AI Agent Operations
+  aiAgent: unifiedHandlers.aiAgent,
+};
+
+// THEN initialize OpenAPIBackend
+const unifiedApi = new OpenAPIBackend({
+  definition: path.join(__dirname, 'swagger/unified-api.yaml'),
+  handlers: unifiedApiHandlers,
 });
 
 // Initialize all APIs
@@ -189,6 +179,7 @@ await Promise.all([
 
 // Serve Swagger UI for all APIs
 const awsOpenapiSpec = yaml.load(fs.readFileSync(path.join(__dirname, 'swagger/aws-dynamodb.yaml'), 'utf8'));
+const mainOpenapiSpec = yaml.load(fs.readFileSync(path.join(__dirname, 'swagger/unified-api.yaml'), 'utf8'));
 
 // Serve main API docs
 app.use('/api-docs', swaggerUi.serve);

@@ -1,0 +1,497 @@
+openapi: 3.0.0
+info:
+  title: BRHM LLM Memory API
+  description: Enhanced LLM endpoints with conversational memory using LangChain
+  version: 1.0.0
+  contact:
+    name: BRHM Team
+    email: support@brhm.com
+
+servers:
+  - url: http://localhost:5001
+    description: Development server
+
+paths:
+  /llm/memory/schema:
+    post:
+      summary: Generate schema with conversational memory
+      description: Generate JSON schemas with context from previous conversations
+      tags:
+        - Memory LLM
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - prompt
+              properties:
+                prompt:
+                  type: string
+                  description: User prompt for schema generation
+                sessionId:
+                  type: string
+                  description: Session ID for conversation continuity
+                userId:
+                  type: string
+                  description: User identifier
+                  default: default-user
+                context:
+                  type: string
+                  description: Conversation context
+                  default: schema-generation
+                  enum:
+                    - schema-generation
+                    - lambda-creation
+                    - namespace-management
+                    - aws-resources
+                    - general
+                namespaceName:
+                  type: string
+                  description: Namespace name for context
+                methodName:
+                  type: string
+                  description: Method name for context
+      responses:
+        '200':
+          description: Schema generated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  llm_output:
+                    type: string
+                    description: Generated schema output
+                  sessionId:
+                    type: string
+                    description: Session ID
+                  context:
+                    type: object
+                    description: Session context
+                  metadata:
+                    type: object
+                    description: Response metadata
+                  full_response:
+                    type: string
+                    description: Full LLM response
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+
+  /llm/memory/schema-from-prompt:
+    post:
+      summary: Generate schema from prompt with memory
+      description: Generate comprehensive JSON schemas from natural language with conversation memory
+      tags:
+        - Memory LLM
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - userPrompt
+              properties:
+                userPrompt:
+                  type: string
+                  description: Natural language description of the API endpoint
+                namespaceName:
+                  type: string
+                  description: Namespace name
+                methodName:
+                  type: string
+                  description: Method name
+                sessionId:
+                  type: string
+                  description: Session ID for conversation continuity
+                userId:
+                  type: string
+                  description: User identifier
+                  default: default-user
+                context:
+                  type: string
+                  description: Conversation context
+                  default: schema-generation
+      responses:
+        '200':
+          description: Schema generated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    description: Generated schema data
+                  sessionId:
+                    type: string
+                    description: Session ID
+                  context:
+                    type: object
+                    description: Session context
+                  metadata:
+                    type: object
+                    description: Response metadata
+        '400':
+          description: Bad request
+        '500':
+          description: Internal server error
+
+  /llm/memory/chat:
+    post:
+      summary: Conversational chat with memory
+      description: General conversational chat with persistent memory
+      tags:
+        - Memory LLM
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - message
+              properties:
+                message:
+                  type: string
+                  description: User message
+                sessionId:
+                  type: string
+                  description: Session ID for conversation continuity
+                userId:
+                  type: string
+                  description: User identifier
+                  default: default-user
+                context:
+                  type: string
+                  description: Conversation context
+                  default: general
+                metadata:
+                  type: object
+                  description: Additional metadata
+      responses:
+        '200':
+          description: Chat response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  sessionId:
+                    type: string
+                  response:
+                    type: string
+                    description: AI response
+                  context:
+                    type: object
+                    description: Session context
+                  metadata:
+                    type: object
+                    description: Response metadata
+        '400':
+          description: Bad request
+        '500':
+          description: Internal server error
+
+  /llm/memory/history:
+    post:
+      summary: Get conversation history
+      description: Retrieve conversation history for a session
+      tags:
+        - Memory LLM
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - sessionId
+              properties:
+                sessionId:
+                  type: string
+                  description: Session ID
+                limit:
+                  type: integer
+                  description: Number of messages to retrieve
+                  default: 50
+      responses:
+        '200':
+          description: Conversation history
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessionId:
+                    type: string
+                  history:
+                    type: array
+                    items:
+                      type: object
+                  count:
+                    type: integer
+        '400':
+          description: Bad request
+        '500':
+          description: Internal server error
+
+  /llm/memory/clear:
+    post:
+      summary: Clear conversation history
+      description: Clear conversation history for a session
+      tags:
+        - Memory LLM
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - sessionId
+              properties:
+                sessionId:
+                  type: string
+                  description: Session ID
+      responses:
+        '200':
+          description: History cleared
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  sessionId:
+                    type: string
+                  message:
+                    type: string
+        '400':
+          description: Bad request
+        '500':
+          description: Internal server error
+
+  /llm/memory/sessions:
+    post:
+      summary: Get user sessions
+      description: Get all active sessions for a user
+      tags:
+        - Memory LLM
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                userId:
+                  type: string
+                  description: User identifier
+                  default: default-user
+      responses:
+        '200':
+          description: User sessions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  userId:
+                    type: string
+                  sessions:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        sessionId:
+                          type: string
+                        context:
+                          type: string
+                        createdAt:
+                          type: string
+                        lastActivity:
+                          type: string
+                  count:
+                    type: integer
+        '500':
+          description: Internal server error
+
+  /llm/memory/lambda:
+    post:
+      summary: Generate Lambda with memory
+      description: Generate Lambda functions with conversation memory
+      tags:
+        - Memory LLM
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - schemaData
+                - namespaceName
+                - methodName
+              properties:
+                schemaData:
+                  type: object
+                  description: Schema data for Lambda generation
+                namespaceName:
+                  type: string
+                  description: Namespace name
+                methodName:
+                  type: string
+                  description: Method name
+                sessionId:
+                  type: string
+                  description: Session ID for conversation continuity
+                userId:
+                  type: string
+                  description: User identifier
+                  default: default-user
+                context:
+                  type: string
+                  description: Conversation context
+                  default: lambda-creation
+      responses:
+        '200':
+          description: Lambda generated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  functionName:
+                    type: string
+                  lambdaCode:
+                    type: string
+                  sessionId:
+                    type: string
+                  context:
+                    type: object
+                  metadata:
+                    type: object
+                  full_response:
+                    type: string
+        '400':
+          description: Bad request
+        '500':
+          description: Internal server error
+
+  /llm/memory/assistance:
+    post:
+      summary: Get contextual assistance
+      description: Get context-aware assistance for specific domains
+      tags:
+        - Memory LLM
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - question
+                - context
+              properties:
+                question:
+                  type: string
+                  description: User question
+                context:
+                  type: string
+                  description: Context for the question
+                  enum:
+                    - schema-generation
+                    - lambda-creation
+                    - namespace-management
+                    - aws-resources
+                    - general
+                sessionId:
+                  type: string
+                  description: Session ID for conversation continuity
+                userId:
+                  type: string
+                  description: User identifier
+                  default: default-user
+                metadata:
+                  type: object
+                  description: Additional metadata
+      responses:
+        '200':
+          description: Contextual assistance
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  sessionId:
+                    type: string
+                  response:
+                    type: string
+                    description: AI response
+                  context:
+                    type: object
+                  metadata:
+                    type: object
+        '400':
+          description: Bad request
+        '500':
+          description: Internal server error
+
+components:
+  schemas:
+    SessionContext:
+      type: object
+      properties:
+        sessionId:
+          type: string
+        userId:
+          type: string
+        context:
+          type: string
+        messageCount:
+          type: integer
+        lastActivity:
+          type: string
+
+    ResponseMetadata:
+      type: object
+      properties:
+        model:
+          type: string
+        timestamp:
+          type: string
+        additionalProperties:
+          type: object
+
+tags:
+  - name: Memory LLM
+    description: LLM endpoints with conversational memory 
