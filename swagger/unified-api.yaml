@@ -1183,6 +1183,18 @@ paths:
                   type: string
                   nullable: true
                   description: Optional action type
+                history:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      role:
+                        type: string
+                      content:
+                        type: string
+                stream:
+                  type: boolean
+                  description: Enable streaming response
       responses:
         '200':
           description: AI Agent response
@@ -1194,6 +1206,12 @@ paths:
                   content:
                     type: string
                     description: AI response message
+                  output:
+                    type: string
+                    description: Structured output
+                  type:
+                    type: string
+                    description: Output type
                   metadata:
                     type: object
                     properties:
@@ -1202,4 +1220,86 @@ paths:
                         enum: ['api', 'schema', 'test', 'auth', 'general']
                       data:
                         type: object
-                        description: Structured data from AI response 
+                        description: Structured data from AI response
+
+  # File Operations
+  /file-operations:
+    post:
+      operationId: fileOperations
+      summary: File operations for workspace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["operation", "namespaceId"]
+              properties:
+                operation:
+                  type: string
+                  enum: [create, read, update, delete, list, tree]
+                  description: File operation to perform
+                namespaceId:
+                  type: string
+                  description: Namespace ID
+                filePath:
+                  type: string
+                  description: File path (for create, read, update, delete)
+                content:
+                  type: string
+                  description: File content (for create, update)
+      responses:
+        '200':
+          description: File operation result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  path:
+                    type: string
+                  content:
+                    type: string
+                  size:
+                    type: integer
+                  error:
+                    type: string
+
+  # File Tree Operations
+  /file-tree/{namespaceId}:
+    parameters:
+      - name: namespaceId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getFileTree
+      summary: Get file tree for namespace
+      responses:
+        '200':
+          description: File tree retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  tree:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        name:
+                          type: string
+                        type:
+                          type: string
+                        path:
+                          type: string
+                        children:
+                          type: array 

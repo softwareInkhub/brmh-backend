@@ -12,7 +12,7 @@ import axios from 'axios';
 import { handlers as dynamodbHandlers } from './lib/dynamodb-handlers.js';
 import dotenv from 'dotenv';
 import { exec } from 'child_process';
-import { handlers as llmHandlers } from './lib/llm-handlers.js';
+
 import { handlers as unifiedHandlers } from './lib/unified-handlers.js';
 import {
   enhancedLLMHandler,
@@ -158,9 +158,11 @@ const unifiedApiHandlers = {
   getUserSessions: getUserSessions,
   generateLambdaWithMemory: enhancedLLMHandler,
   getContextualAssistance: enhancedLLMHandler,
-
-  // AI Agent Operations
   aiAgent: unifiedHandlers.aiAgent,
+  fileOperations: unifiedHandlers.fileOperations,
+  getFileTree: unifiedHandlers.getFileTree,
+
+
 };
 
 // THEN initialize OpenAPIBackend
@@ -774,10 +776,7 @@ app.post('/llm/generate-lambda-code', async (req, res) => {
   res.status(result.statusCode).json(result.body);
 });
 
-app.post('/llm/automate-namespace-creation', async (req, res) => {
-  const result = await llmHandlers.automateNamespaceCreation({ request: { requestBody: req.body } }, req, res);
-  res.status(result.statusCode).json(result.body);
-});
+
 
 // New LLM routes for method creation and external namespace fetching
 app.post('/llm/generate-method', async (req, res) => {
@@ -884,10 +883,7 @@ app.get('/llm/history', async (req, res) => {
   const result = await llmHandlers.listLLMHistory();
   res.status(result.statusCode).json(result.body);
 });
-app.post('/llm/history', async (req, res) => {
-  const result = await llmHandlers.saveLLMHistory({ request: { requestBody: req.body } }, req, res);
-  res.status(result.statusCode).json(result.body);
-});
+
 
 // Add this before the catch-all /unified/* route
 app.post('/unified/schema/table/:tableName/items', async (req, res) => {
