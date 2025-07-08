@@ -1,0 +1,99 @@
+openapi: 3.0.0
+info:
+  title: AI Agent API
+  version: 1.0.0
+  description: Endpoints for AI Agent Workspace, LLM integration, and related features
+
+paths:
+  /ai-agent:
+    post:
+      operationId: aiAgent
+      summary: AI Agent endpoint
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                message:
+                  type: string
+                  description: User message to the AI agent
+                namespace:
+                  type: object
+                  nullable: true
+                  description: Optional namespace context
+                action:
+                  type: string
+                  nullable: true
+                  description: Optional action type
+                history:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      role:
+                        type: string
+                      content:
+                        type: string
+                stream:
+                  type: boolean
+                  description: Enable streaming response
+      responses:
+        '200':
+          description: AI Agent response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  content:
+                    type: string
+                    description: AI response message
+                  actions:
+                    type: array
+                    items:
+                      type: object
+                  type:
+                    type: string
+                    description: Output type
+  /ai-agent/stream:
+    post:
+      operationId: aiAgentStream
+      summary: Streaming AI Agent endpoint
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                message:
+                  type: string
+                  description: User message to the AI agent
+                namespace:
+                  type: object
+                  nullable: true
+                  description: Optional namespace context
+                action:
+                  type: string
+                  nullable: true
+                  description: Optional action type
+                history:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      role:
+                        type: string
+                      content:
+                        type: string
+      responses:
+        '200':
+          description: Streaming AI Agent response
+          content:
+            text/plain:
+              schema:
+                type: string
+                description: Server-sent events stream
+# ... 

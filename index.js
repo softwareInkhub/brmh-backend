@@ -21,6 +21,7 @@ import {
   getUserSessions,
   createSession
 } from './lib/enhanced-llm-handlers.js';
+import { aiAgentHandler, aiAgentStreamHandler } from './lib/ai-agent-handlers.js';
 
 // Load environment variables
 dotenv.config();
@@ -34,9 +35,9 @@ console.log('AWS Configuration Check:', {
 });
 
 const app = express();
+app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
-app.use(cors());
 // File storage configuration
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -159,6 +160,7 @@ const unifiedApiHandlers = {
   generateLambdaWithMemory: enhancedLLMHandler,
   getContextualAssistance: enhancedLLMHandler,
   aiAgent: unifiedHandlers.aiAgent,
+  aiAgentStream: unifiedHandlers.aiAgentStream,
   fileOperations: unifiedHandlers.fileOperations,
   getFileTree: unifiedHandlers.getFileTree,
 
@@ -171,10 +173,24 @@ const unifiedApi = new OpenAPIBackend({
   handlers: unifiedApiHandlers,
 });
 
+// Define AI Agent API Handlers
+const aiAgentApiHandlers = {
+  aiAgent: aiAgentHandler,
+  aiAgentStream: aiAgentStreamHandler,
+  // Add more as needed
+};
+
+// Initialize AI Agent OpenAPI backend
+const aiAgentApi = new OpenAPIBackend({
+  definition: path.join(__dirname, 'swagger/ai-agent-api.yaml'),
+  handlers: aiAgentApiHandlers,
+});
+
 // Initialize all APIs
 await Promise.all([
   awsApi.init(),
-  unifiedApi.init()
+  unifiedApi.init(),
+  aiAgentApi.init()
 ]);
 
 
@@ -228,6 +244,25 @@ app.get('/api/dynamodb', (req, res) => {
 app.get('/api/dynamodb/swagger.json', (req, res) => {
   res.json(awsOpenapiSpec);
 });
+
+// Serve AI Agent API docs
+const aiAgentOpenapiSpec = yaml.load(fs.readFileSync(path.join(__dirname, 'swagger/ai-agent-api.yaml'), 'utf8'));
+app.use('/ai-agent-docs', swaggerUi.serve);
+app.get('/ai-agent-docs', (req, res) => {
+  res.send(
+    swaggerUi.generateHTML(aiAgentOpenapiSpec, {
+      customSiteTitle: "AI Agent API Documentation",
+      customfavIcon: "/favicon.ico",
+      customCss: '.swagger-ui .topbar { display: none }',
+      swaggerUrl: "/ai-agent-docs/swagger.json"
+    })
+  );
+});
+
+// Route AI Agent endpoints
+app.post('/ai-agent', (req, res) => aiAgentApi.handleRequest(req, req, res));
+app.post('/ai-agent/stream', (req, res) => aiAgentApi.handleRequest(req, req, res));
+
 // Webhook handler functions
 async function handleIncomingWebhook(req, res) {
   console.log('Received webhook request:', {
@@ -856,6 +891,11 @@ app.all('/unified/*', async (req, res) => {
       res
     );
 
+    // Check if response is null (streaming response handled by handler)
+    if (response === null) {
+      return; // Response already handled by the handler
+    }
+
     console.log('[Unified API Response]:', {
       statusCode: response.statusCode,
       body: response.body
@@ -901,4 +941,5 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`AWS DynamoDB service available at http://localhost:${PORT}/api/dynamodb`);
   console.log(`llm API documentation available at http://localhost:${PORT}/llm-api-docs`);
   console.log(`Unified API documentation available at http://localhost:${PORT}/unified-api-docs`);
+  console.log(`AI Agent API documentation available at http://localhost:${PORT}/ai-agent-docs`);
 });
