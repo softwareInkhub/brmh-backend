@@ -877,84 +877,285 @@ paths:
                   error:
                     type: string
 
-  # File Operations
-  /file-operations:
+# Webhook Operations
+  /webhooks:
+    get:
+      operationId: listWebhooks
+      summary: List all webhooks
+      responses:
+        '200':
+          description: List of webhooks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    webhook-id:
+                      type: string
+                    webhook-name:
+                      type: string
+                    pre-exec-url:
+                      type: string
+                    post-exec-url:
+                      type: string
+                    method-id:
+                      type: string
+                      nullable: true
+                    namespace-id:
+                      type: string
+                      nullable: true
+                    account-id:
+                      type: string
+                      nullable: true
+                    table-name:
+                      type: string
+                    status:
+                      type: string
+                      enum: ['active', 'inactive']
+                    tags:
+                      type: array
+                      items:
+                        type: string
+                    created-at:
+                      type: string
+                    updated-at:
+                      type: string
+
     post:
-      operationId: fileOperations
-      summary: File operations for workspace
+      operationId: createWebhook
+      summary: Create a new webhook
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: ["operation", "namespaceId"]
+              required: ["webhook-name", "tableName"]
               properties:
-                operation:
+                webhook-name:
                   type: string
-                  enum: [create, read, update, delete, list, tree]
-                  description: File operation to perform
-                namespaceId:
+                  description: Name of the webhook
+                pre-exec-url:
                   type: string
-                  description: Namespace ID
-                filePath:
+                  description: URL to call before main webhook execution
+                post-exec-url:
                   type: string
-                  description: File path (for create, read, update, delete)
-                content:
+                  description: URL where webhook data will be posted
+                method-id:
                   type: string
-                  description: File content (for create, update)
+                  nullable: true
+                  description: Associated method ID
+                namespace-id:
+                  type: string
+                  nullable: true
+                  description: Associated namespace ID
+                account-id:
+                  type: string
+                  nullable: true
+                  description: Associated account ID
+                tableName:
+                  type: string
+                  description: Target table name for webhook data
+                status:
+                  type: string
+                  enum: ['active', 'inactive']
+                  default: 'active'
+                  description: Webhook status
+                tags:
+                  type: array
+                  items:
+                    type: string
+                  description: Tags for the webhook
       responses:
-        '200':
-          description: File operation result
+        '201':
+          description: Webhook created successfully
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  success:
-                    type: boolean
-                  path:
+                  webhook-id:
                     type: string
-                  content:
+                  webhook-name:
                     type: string
-                  size:
-                    type: integer
+                  pre-exec-url:
+                    type: string
+                  post-exec-url:
+                    type: string
+                  method-id:
+                    type: string
+                    nullable: true
+                  namespace-id:
+                    type: string
+                    nullable: true
+                  account-id:
+                    type: string
+                    nullable: true
+                  table-name:
+                    type: string
+                  status:
+                    type: string
+                  tags:
+                    type: array
+                    items:
+                      type: string
+                  created-at:
+                    type: string
+                  updated-at:
+                    type: string
+
+  /webhooks/active:
+    get:
+      operationId: getActiveWebhooks
+      summary: Get all active webhooks
+      responses:
+        '200':
+          description: List of active webhooks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+
+  /webhooks/{webhookId}:
+    parameters:
+      - name: webhookId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Webhook ID
+    get:
+      operationId: getWebhookById
+      summary: Get webhook by ID
+      responses:
+        '200':
+          description: Webhook retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+        '404':
+          description: Webhook not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
                   error:
                     type: string
 
-  # File Tree Operations
-  /file-tree/{namespaceId}:
+    put:
+      operationId: updateWebhook
+      summary: Update webhook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                webhook-name:
+                  type: string
+                pre-exec-url:
+                  type: string
+                post-exec-url:
+                  type: string
+                method-id:
+                  type: string
+                  nullable: true
+                namespace-id:
+                  type: string
+                  nullable: true
+                account-id:
+                  type: string
+                  nullable: true
+                tableName:
+                  type: string
+                status:
+                  type: string
+                  enum: ['active', 'inactive']
+                tags:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Webhook updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+
+    delete:
+      operationId: deleteWebhook
+      summary: Delete webhook
+      responses:
+        '204':
+          description: Webhook deleted successfully
+
+  /webhooks/table/{tableName}:
+    parameters:
+      - name: tableName
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Table name
+    get:
+      operationId: getWebhooksByTableName
+      summary: Get webhooks by table name
+      responses:
+        '200':
+          description: List of webhooks for the table
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+
+  /webhooks/namespace/{namespaceId}:
     parameters:
       - name: namespaceId
         in: path
         required: true
         schema:
           type: string
+        description: Namespace ID
     get:
-      operationId: getFileTree
-      summary: Get file tree for namespace
+      operationId: getWebhooksByNamespace
+      summary: Get webhooks by namespace
       responses:
         '200':
-          description: File tree retrieved successfully
+          description: List of webhooks for the namespace
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                  tree:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        id:
-                          type: string
-                        name:
-                          type: string
-                        type:
-                          type: string
-                        path:
-                          type: string
-                        children:
-                          type: array 
+                type: array
+                items:
+                  type: object
+
+  /webhooks/method/{methodId}:
+    parameters:
+      - name: methodId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Method ID
+    get:
+      operationId: getWebhooksByMethod
+      summary: Get webhooks by method
+      responses:
+        '200':
+          description: List of webhooks for the method
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object 
