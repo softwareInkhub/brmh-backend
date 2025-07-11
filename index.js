@@ -14,14 +14,9 @@ import dotenv from 'dotenv';
 import { exec } from 'child_process';
 
 import { handlers as unifiedHandlers } from './lib/unified-handlers.js';
-import {
-  enhancedLLMHandler,
-  getConversationHistory,
-  clearConversationHistory,
-  getUserSessions,
-  createSession
-} from './lib/enhanced-llm-handlers.js';
+
 import { aiAgentHandler, aiAgentStreamHandler } from './lib/ai-agent-handlers.js';
+import { registerCodeGenerationHandlers } from './lib/code-generation-handlers.js';
 
 // Load environment variables
 dotenv.config();
@@ -171,16 +166,7 @@ const unifiedApiHandlers = {
   getWebhooksByMethod: unifiedHandlers.getWebhooksByMethod,
   getActiveWebhooks: unifiedHandlers.getActiveWebhooks,
 
-  // Memory-enabled LLM Operations
-  generateSchemaWithMemory: enhancedLLMHandler,
-  generateSchemaFromPromptWithMemory: enhancedLLMHandler,
-  conversationalChat: enhancedLLMHandler,
-  getConversationHistory: getConversationHistory,
-  clearConversationHistory: clearConversationHistory,
-  getUserSessions: getUserSessions,
-  generateLambdaWithMemory: enhancedLLMHandler,
-  getContextualAssistance: enhancedLLMHandler,
- 
+
 }; 
 
 // THEN initialize OpenAPIBackend
@@ -335,7 +321,7 @@ app.all('/api/dynamodb/*', async (req, res, next) => {
 // Handle main API routes
 app.all('/api/*', async (req, res) => {
   try {
-    const response = await mainApi.handleRequest(
+    const response = await unifiedApi.handleRequest(
       {
         method: req.method,
         path: req.path.replace('/api', '') || '/',
@@ -441,7 +427,7 @@ function formatDynamoDBValue(value) {
 // Handle Schema API routes
 app.all('/api/schema/*', async (req, res) => {
   try {
-    const response = await schemaApi.handleRequest(
+    const response = await unifiedApi.handleRequest(
       {
         method: req.method,
         path: req.path.replace('/api/schema', '') || '/',
@@ -468,7 +454,8 @@ app.post('/schema/data', async (req, res) => {
     if (!tableName || !item) {
       return res.status(400).json({ error: 'tableName and item are required' });
     }
-    await schemaHandlers.insertSchemaData({ tableName, item });
+    // This part of the code was removed as per the edit hint.
+    // await schemaHandlers.insertSchemaData({ tableName, item });
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -478,7 +465,8 @@ app.post('/schema/data', async (req, res) => {
 app.get('/schema/table-meta/:metaId', async (req, res) => {
   try {
     const { metaId } = req.params;
-    const result = await schemaHandlers.getSchemaTableMeta(metaId);
+    // This part of the code was removed as per the edit hint.
+    // const result = await schemaHandlers.getSchemaTableMeta(metaId);
     if (!result) return res.status(404).json({ error: 'Not found' });
     res.json(result);
   } catch (error) {
@@ -489,7 +477,8 @@ app.get('/schema/table-meta/:metaId', async (req, res) => {
 app.post('/schema/table-meta/check/:metaId', async (req, res) => {
   try {
     const { metaId } = req.params;
-    const result = await schemaHandlers.checkAndUpdateTableStatus(metaId);
+    // This part of the code was removed as per the edit hint.
+    // const result = await schemaHandlers.checkAndUpdateTableStatus(metaId);
     res.json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -500,7 +489,8 @@ app.post('/schema/table-meta/check/:metaId', async (req, res) => {
 app.get('/schema/table/:tableName/items', async (req, res) => {
   try {
     const { tableName } = req.params;
-    const items = await schemaHandlers.getTableItems(tableName);
+    // This part of the code was removed as per the edit hint.
+    // const items = await schemaHandlers.getTableItems(tableName);
     res.json(items);
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch table items', details: error.message });
@@ -511,7 +501,8 @@ app.get('/schema/table/:tableName/items', async (req, res) => {
 app.get('/schema/table/:tableName/schema', async (req, res) => {
   try {
     const { tableName } = req.params;
-    const schema = await schemaHandlers.getSchemaByTableName(tableName);
+    // This part of the code was removed as per the edit hint.
+    // const schema = await schemaHandlers.getSchemaByTableName(tableName);
     res.json(schema);
   } catch (error) {
     res.status(404).json({ error: 'Schema not found', details: error.message });
@@ -520,89 +511,11 @@ app.get('/schema/table/:tableName/schema', async (req, res) => {
 
 app.post('/schema/table-meta/check-all', async (req, res) => {
   try {
-    const result = await schemaHandlers.checkAllTableStatuses();
+    // This part of the code was removed as per the edit hint.
+    // const result = await schemaHandlers.checkAllTableStatuses();
     res.json(result);
   } catch (error) {
     res.status(500).json({ error: 'Failed to check all table statuses', details: error.message });
-  }
-});
-
-// Load BRMH LLM SERVICE OpenAPI specification
-const llmOpenapiSpec = yaml.load(fs.readFileSync(path.join(__dirname, 'swagger/brmh-llm-service.yaml'), 'utf8'));
-
-// Serve LLM API docs
-app.use('/llm-api-docs', swaggerUi.serve);
-app.get('/llm-api-docs', (req, res) => {
-  res.send(
-    swaggerUi.generateHTML(llmOpenapiSpec, {
-      customSiteTitle: "BRMH LLM SERVICE API Documentation",
-      customfavIcon: "/favicon.ico",
-      customCss: '.swagger-ui .topbar { display: none }',
-      swaggerUrl: "/llm-api-docs/swagger.json"
-    })
-  );
-});
-app.get('/llm-api-docs/swagger.json', (req, res) => {
-  res.json(llmOpenapiSpec);
-});
-
-// LLM route
-app.post('/llm/generate-schema', async (req, res) => {
-  const result = await llmHandlers.generateSchemaWithLLM({ request: { requestBody: req.body } }, req, res);
-  res.status(result.statusCode).json(result.body);
-});
-
-// New LLM routes for automated schema creation
-app.post('/llm/generate-schema-from-prompt', async (req, res) => {
-  const result = await llmHandlers.generateSchemaFromPrompt({ request: { requestBody: req.body } }, req, res);
-  res.status(result.statusCode).json(result.body);
-});
-
-app.post('/llm/generate-lambda-with-url', async (req, res) => {
-  const result = await llmHandlers.generateLambdaWithURL({ request: { requestBody: req.body } }, req, res);
-  res.status(result.statusCode).json(result.body);
-});
-
-app.post('/llm/generate-lambda-code', async (req, res) => {
-  const result = await llmHandlers.generateLambdaCode({ request: { requestBody: req.body } }, req, res);
-  res.status(result.statusCode).json(result.body);
-});
-
-
-
-// New LLM routes for method creation and external namespace fetching
-app.post('/llm/generate-method', async (req, res) => {
-  const result = await llmHandlers.generateMethod({ request: { requestBody: req.body } }, req, res);
-  res.status(result.statusCode).json(result.body);
-});
-
-app.post('/llm/fetch-external-namespace-methods', async (req, res) => {
-  const result = await llmHandlers.fetchExternalNamespaceMethods({ request: { requestBody: req.body } }, req, res);
-  res.status(result.statusCode).json(result.body);
-});
-
-app.post('/llm/fetch-methods-from-external-api', async (req, res) => {
-  const result = await llmHandlers.importMethodsFromExternalAPI({ request: { requestBody: req.body } }, req, res);
-  res.status(result.statusCode).json(result.body);
-});
-
-app.post('/llm/add-methods-to-namespace', async (req, res) => {
-  const result = await llmHandlers.addMethodsToNamespace({ request: { requestBody: req.body } }, req, res);
-  res.status(result.statusCode).json(result.body);
-});
-
-// LLM routes
-app.post('/llm/generate-schema/stream', async (req, res) => {
-  try {
-    const result = await llmHandlers.generateSchemaWithLLMStream(
-      { request: { requestBody: req.body } },
-      req,
-      res
-    );
-    // Note: The handler will handle the streaming response directly
-  } catch (error) {
-    console.error('LLM streaming error:', error);
-    res.status(500).json({ error: 'Failed to generate schema stream' });
   }
 });
 
@@ -669,16 +582,19 @@ app.all('/unified/*', async (req, res) => {
 });
 
 app.get('/llm/templates', async (req, res) => {
-  const result = await llmHandlers.listPromptTemplates();
-  res.status(result.statusCode).json(result.body);
+  // This part of the code was removed as per the edit hint.
+  // const result = await llmHandlers.listPromptTemplates();
+  res.status(200).json({ message: "LLM templates endpoint removed." });
 });
 app.post('/llm/templates', async (req, res) => {
-  const result = await llmHandlers.savePromptTemplate({ request: { requestBody: req.body } }, req, res);
-  res.status(result.statusCode).json(result.body);
+  // This part of the code was removed as per the edit hint.
+  // const result = await llmHandlers.savePromptTemplate({ request: { requestBody: req.body } }, req, res);
+  res.status(200).json({ message: "LLM templates endpoint removed." });
 });
 app.get('/llm/history', async (req, res) => {
-  const result = await llmHandlers.listLLMHistory();
-  res.status(result.statusCode).json(result.body);
+  // This part of the code was removed as per the edit hint.
+  // const result = await llmHandlers.listLLMHistory();
+  res.status(200).json({ message: "LLM history endpoint removed." });
 });
 
 
@@ -691,6 +607,9 @@ app.post('/unified/schema/table/:tableName/items', async (req, res) => {
   );
 });
 
+// Register code generation handlers
+registerCodeGenerationHandlers(app);
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server listening on port ${PORT}`);
@@ -699,4 +618,5 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`llm API documentation available at http://localhost:${PORT}/llm-api-docs`);
   console.log(`Unified API documentation available at http://localhost:${PORT}/unified-api-docs`);
   console.log(`AI Agent API documentation available at http://localhost:${PORT}/ai-agent-docs`);
+  console.log(`Code Generation API available at http://localhost:${PORT}/code-generation/*`);
 });
