@@ -384,14 +384,21 @@ app.post('/pinterest/token', async (req, res) => {
           }
       });
      
+      console.log(response.data.access_token);
       res.json(response.data.access_token); // Send the response data back to the client
-  
   
   } catch (error) {
       console.error('Error fetching token:', error.response ? error.response.data : error.message);
       res.status(500).json({ error: 'Failed to fetch token' });
   }
 });
+
+
+
+
+
+
+
 
 // Helper function to format objects for DynamoDB
 function formatDynamoDBMap(obj) {
@@ -623,11 +630,11 @@ app.get('/unified-api-docs/swagger.json', (req, res) => {
 // Handle Unified API routes
 app.all('/unified/*', async (req, res) => {
   try {
-    console.log('[Unified API Request]:', {
-      method: req.method,
-      path: req.path,
-      body: req.body
-    });
+    // console.log('[Unified API Request]:', {
+    //   method: req.method,
+    //   path: req.path,
+    //   body: req.body
+    // });
 
     const response = await unifiedApi.handleRequest(
       {
@@ -646,10 +653,10 @@ app.all('/unified/*', async (req, res) => {
       return; // Response already handled by the handler
     }
 
-    console.log('[Unified API Response]:', {
-      statusCode: response.statusCode,
-      body: response.body
-    });
+    // console.log('[Unified API Response]:', {
+    //   statusCode: response.statusCode,
+    //   body: response.body
+    // });
 
     res.status(response.statusCode).json(response.body);
   } catch (error) {
