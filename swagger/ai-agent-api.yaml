@@ -1,14 +1,17 @@
 openapi: 3.0.0
 info:
-  title: AI Agent API
+  title: Unified AI Agent API
   version: 1.0.0
-  description: Endpoints for AI Agent Workspace, LLM integration, and related features
-
+  description: |
+    Unified AI agent endpoint. Handles chat, schema, API, and codegen requests and actions.
+servers:
+  - url: http://localhost:5001
 paths:
   /ai-agent:
     post:
-      operationId: aiAgent
-      summary: AI Agent endpoint
+      summary: AI Agent (non-streaming)
+      description: |
+        Unified AI agent endpoint. Handles chat, schema, API, and codegen requests.
       requestBody:
         required: true
         content:
@@ -18,30 +21,15 @@ paths:
               properties:
                 message:
                   type: string
-                  description: User message to the AI agent
                 namespace:
                   type: object
-                  nullable: true
-                  description: Optional namespace context
-                action:
-                  type: string
-                  nullable: true
-                  description: Optional action type
                 history:
                   type: array
                   items:
                     type: object
-                    properties:
-                      role:
-                        type: string
-                      content:
-                        type: string
-                stream:
-                  type: boolean
-                  description: Enable streaming response
       responses:
         '200':
-          description: AI Agent response
+          description: AI agent response
           content:
             application/json:
               schema:
@@ -49,18 +37,17 @@ paths:
                 properties:
                   content:
                     type: string
-                    description: AI response message
                   actions:
                     type: array
                     items:
-                      type: object
+                      $ref: '#/components/schemas/AgentAction'
                   type:
                     type: string
-                    description: Output type
   /ai-agent/stream:
     post:
-      operationId: aiAgentStream
-      summary: Streaming AI Agent endpoint
+      summary: AI Agent (streaming)
+      description: |
+        Unified AI agent streaming endpoint. Streams chat, schema, API, and codegen actions.
       requestBody:
         required: true
         content:
@@ -70,30 +57,29 @@ paths:
               properties:
                 message:
                   type: string
-                  description: User message to the AI agent
                 namespace:
                   type: object
-                  nullable: true
-                  description: Optional namespace context
-                action:
-                  type: string
-                  nullable: true
-                  description: Optional action type
                 history:
                   type: array
                   items:
                     type: object
-                    properties:
-                      role:
-                        type: string
-                      content:
-                        type: string
       responses:
         '200':
-          description: Streaming AI Agent response
+          description: Streamed AI agent response
           content:
             text/plain:
               schema:
                 type: string
-                description: Server-sent events stream
-# ... 
+components:
+  schemas:
+    AgentAction:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [generate_schema, generate_api, generate_code, chat]
+        status:
+          type: string
+          enum: [pending, complete, error]
+        data:
+          type: object 

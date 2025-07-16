@@ -262,8 +262,8 @@ app.get('/ai-agent-docs', (req, res) => {
 });
 
 // Route AI Agent endpoints
-app.post('/ai-agent', (req, res) => aiAgentApi.handleRequest(req, req, res));
-app.post('/ai-agent/stream', (req, res) => aiAgentApi.handleRequest(req, req, res));
+app.post('/ai-agent', (req, res) => aiAgentHandler({ request: { requestBody: req.body } }, req, res));
+app.post('/ai-agent/stream', (req, res) => aiAgentStreamHandler({ request: { requestBody: req.body } }, req, res));
 
 
 
@@ -609,6 +609,61 @@ app.post('/unified/schema/table/:tableName/items', async (req, res) => {
 
 // Register code generation handlers
 registerCodeGenerationHandlers(app);
+
+// --- API Testing Endpoint: Test OpenAPI endpoint and stream result to frontend console ---
+app.post('/api/test-openapi-endpoint', async (req, res) => {
+  try {
+    const { openapiJson, path: testPath, method, body, headers, query } = req.body;
+    if (!openapiJson || !testPath || !method) {
+      return res.status(400).json({ error: 'Missing required parameters' });
+    }
+
+    // Validate request against OpenAPI spec
+    const tempApi = new OpenAPIBackend({ definition: openapiJson, quick: true });
+    await tempApi.init();
+    const validation = tempApi.validateRequest({
+      method: method.toLowerCase(),
+      path: testPath,
+      body,
+      query,
+      headers
+    });
+    if (!validation.valid) {
+      return res.status(400).json({ error: 'Request does not match OpenAPI spec', details: validation.errors });
+    }
+
+    // Make the real HTTP request (assume baseUrl is in servers[0].url)
+    const baseUrl = openapiJson.servers && openapiJson.servers[0] && openapiJson.servers[0].url ? openapiJson.servers[0].url : '';
+    if (!baseUrl) {
+      return res.status(400).json({ error: 'No baseUrl found in OpenAPI spec' });
+    }
+    const url = baseUrl.replace(/\/$/, '') + testPath;
+
+    // Stream response
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Transfer-Encoding': 'chunked',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    });
+    try {
+      const response = await axios({
+        method: method.toLowerCase(),
+        url,
+        headers,
+        params: query,
+        data: body,
+        validateStatus: () => true // Don't throw on any status
+      });
+      res.write(JSON.stringify({ status: response.status, statusText: response.statusText, headers: response.headers, body: response.data }) + '\n');
+    } catch (err) {
+      res.write(JSON.stringify({ error: err.message }) + '\n');
+    }
+    res.end();
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, '0.0.0.0', () => {
