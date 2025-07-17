@@ -17,6 +17,22 @@ import { handlers as unifiedHandlers } from './lib/unified-handlers.js';
 
 import { aiAgentHandler, aiAgentStreamHandler } from './lib/ai-agent-handlers.js';
 import { registerCodeGenerationHandlers } from './lib/code-generation-handlers.js';
+import { 
+  cacheTableHandler, 
+  getCachedDataHandler, 
+  clearCacheHandler, 
+  getCacheStatsHandler, 
+  cacheHealthHandler,
+  testCacheConnection
+} from './utils/cache.js';
+
+import {
+  indexTableHandler,
+  searchIndexHandler,
+  listIndicesHandler,
+  deleteIndicesHandler,
+  searchHealthHandler
+} from './utils/search-indexing.js';
 
 // Load environment variables
 dotenv.config();
@@ -33,6 +49,7 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+app.use(express.text({ limit: '50mb' })); // Add support for text/plain
 // File storage configuration
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -49,6 +66,8 @@ async function checkPortInUse(port) {
       .listen(port);
   });
 }
+
+
 
 // Start Prism mock server
 app.post('/api/mock-server/start', async (req, res) => {
@@ -610,6 +629,14 @@ app.post('/unified/schema/table/:tableName/items', async (req, res) => {
 // Register code generation handlers
 registerCodeGenerationHandlers(app);
 
+// // --- Cache API Routes ---
+// app.post('/api/cache/table', cacheTableHandler);
+// app.get('/api/cache/data', getCachedDataHandler);
+// app.get('/api/cache/clear', clearCacheHandler);
+// app.get('/api/cache/stats', getCacheStatsHandler);
+// app.get('/api/cache/health', cacheHealthHandler);
+// app.get('/api/cache/test', testCacheConnection);
+
 // --- API Testing Endpoint: Test OpenAPI endpoint and stream result to frontend console ---
 app.post('/api/test-openapi-endpoint', async (req, res) => {
   try {
@@ -664,6 +691,21 @@ app.post('/api/test-openapi-endpoint', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+app.post('/cache/table', cacheTableHandler);
+app.get('/cache/data', getCachedDataHandler);
+app.get('/cache/clear', clearCacheHandler);
+app.get('/cache/stats', getCacheStatsHandler);
+app.get('/cache/health', cacheHealthHandler);
+app.get('/cache/test', testCacheConnection);
+
+// --- Search Indexing API Routes ---
+app.post('/search/index', indexTableHandler);
+app.post('/search/query', searchIndexHandler);
+app.post('/search/indices', listIndicesHandler);
+app.post('/search/delete', deleteIndicesHandler);
+app.get('/search/health', searchHealthHandler);
+
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, '0.0.0.0', () => {
