@@ -184,19 +184,24 @@ paths:
   /schema/table:
     post:
       operationId: createSchemasTable
-      summary: Create schema table
+      summary: Create schema table for a specific account and method
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: ["schemaId", "tableName"]
+              required: [schemaId, accountId, methodName]
               properties:
                 schemaId:
                   type: string
+                accountId:
+                  type: string
+                methodName:
+                  type: string
                 tableName:
                   type: string
+                  description: Optional. If not provided, will be generated as namespace-name+account-name+method-name
       responses:
         '201':
           description: Table created successfully
@@ -208,6 +213,30 @@ paths:
                   message:
                     type: string
                   tableName:
+                    type: string
+                  schemaId:
+                    type: string
+                  accountId:
+                    type: string
+                  methodName:
+                    type: string
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
                     type: string
 
   /schema/table-meta:

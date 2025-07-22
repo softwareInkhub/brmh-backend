@@ -24,12 +24,10 @@ export const saveExecutionLog = async ({
 }) => {
   try {
     const timestamp = new Date().toISOString();
-    
-    // Format item IDs as DynamoDB list type
-    const formattedItemIds = (data.itemIds || []).map(id => ({
-      S: id.toString() // Convert each ID to string type for DynamoDB
-    }));
-
+    // Ensure itemIds is a plain array of strings
+    const plainItemIds = (data.itemIds || []).map(id =>
+      typeof id === 'object' && id !== null && 'S' in id ? id.S : id.toString()
+    );
     const logItem = {
       'exec-id': execId,
       'child-exec-id': childExecId,
@@ -44,31 +42,28 @@ export const saveExecutionLog = async ({
         'timestamp': timestamp,
         'is-last': data.isLast || false,
         'max-iterations': data.maxIterations,
-        'item-ids': {
-          L: formattedItemIds // Use DynamoDB list type for item IDs
-        }
+        'item-ids': plainItemIds // Use plain array of strings
       }
     };
-
-    // Only add status field for parent execution logs
     if (isParent) {
       logItem.data.status = data.status || EXECUTION_STATUS.STARTED;
     }
-
     console.log('Saving execution log with item IDs:', {
       execId,
       childExecId,
-      itemIdsCount: formattedItemIds.length,
-      itemIds: formattedItemIds
+      itemIdsCount: plainItemIds.length,
+      itemIds: plainItemIds
     });
-
-    // Create the DynamoDB command directly
+    // Remove undefined values from logItem.data
+    Object.keys(logItem.data).forEach(key => {
+      if (logItem.data[key] === undefined) {
+        delete logItem.data[key];
+      }
+    });
     const command = new PutCommand({
       TableName: 'executions',
       Item: logItem
     });
-
-    // Send the command directly using docClient
     await docClient.send(command);
     console.log('Successfully saved execution log');
     return logItem;

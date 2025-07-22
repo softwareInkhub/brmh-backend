@@ -34,6 +34,8 @@ import {
   searchHealthHandler
 } from './utils/search-indexing.js';
 
+import * as crud from './utils/crud.js';
+
 // Load environment variables
 dotenv.config();
 
@@ -155,6 +157,9 @@ const unifiedApiHandlers = {
   updateSchema: unifiedHandlers.updateSchema,
   deleteSchema: unifiedHandlers.deleteSchema,
   getSchemaById: unifiedHandlers.getSchemaById,
+  saveSchema: unifiedHandlers.saveSchema,
+  // Register the createSchemasTable handler
+  createSchemasTable: unifiedHandlers.createSchemasTable,
 
     // Namespace Method Operations
     getNamespaceMethods: unifiedHandlers.getNamespaceMethods,
@@ -705,6 +710,35 @@ app.post('/search/query', searchIndexHandler);
 app.post('/search/indices', listIndicesHandler);
 app.post('/search/delete', deleteIndicesHandler);
 app.get('/search/health', searchHealthHandler);
+
+/**
+ * Generic CRUD endpoint for DynamoDB tables
+ * Usage:
+ *   - GET    /api/crud?tableName=...&partitionKey=...&sortKey=... (single item or paginated)
+ *   - POST   /api/crud?tableName=...   (body: { item: ... })
+ *   - PUT    /api/crud?tableName=...   (body: { key: ..., updates: ... })
+ *   - DELETE /api/crud?tableName=...   (body: { partitionKey: ..., sortKey: ... })
+ */
+app.all('/crud', async (req, res) => {
+  try {
+    const event = {
+      httpMethod: req.method,
+      requestContext: req.requestContext || {},
+      queryStringParameters: req.query,
+      body: typeof req.body === 'string' ? req.body : JSON.stringify(req.body)
+    };
+    const result = await crud.handler(event);
+    res.status(result.statusCode || 200);
+    // If result.body is a string, parse if possible
+    let body = result.body;
+    try {
+      body = JSON.parse(result.body);
+    } catch {}
+    res.json(body);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 
 const PORT = process.env.PORT || 5000;
