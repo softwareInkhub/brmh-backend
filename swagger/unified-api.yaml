@@ -3,7 +3,8 @@ info:
   title: Unified API
   version: 1.0.0
   description: Unified API for handling schemas, namespaces, and API execution
-
+servers:
+  - url: /unified
 
 paths:
   # Schema Operations
