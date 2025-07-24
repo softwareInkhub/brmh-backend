@@ -16,15 +16,14 @@ import { exec } from 'child_process';
 import { handlers as unifiedHandlers } from './lib/unified-handlers.js';
 
 import { aiAgentHandler, aiAgentStreamHandler } from './lib/ai-agent-handlers.js';
-import { registerCodeGenerationHandlers } from './lib/code-generation-handlers.js';
-// import { 
-//   cacheTableHandler, 
-//   getCachedDataHandler, 
-//   clearCacheHandler, 
-//   getCacheStatsHandler, 
-//   cacheHealthHandler,
-//   testCacheConnection
-// } from './utils/cache.js';
+import { 
+  cacheTableHandler, 
+  getCachedDataHandler, 
+  clearCacheHandler, 
+  getCacheStatsHandler, 
+  cacheHealthHandler,
+  testCacheConnection
+} from './utils/cache.js';
 
 import {
   indexTableHandler,
@@ -342,6 +341,68 @@ app.all('/api/dynamodb/*', async (req, res, next) => {
   }
 });
 
+// Dynamic API routes - for testing generated APIs (MUST come before main API handler)
+// app.use('/dynamic-api', createDynamicApiRouter()); // Removed
+
+// API management endpoints (MUST come before main API handler)
+// app.get('/api/dynamic-apis', (req, res) => { // Removed
+//   const apis = getDynamicApis(); // Removed
+//   res.json(apis); // Removed
+// }); // Removed
+
+// Debug endpoint to see registered APIs
+// app.get('/api/debug/dynamic-apis', (req, res) => { // Removed
+//   const apis = getDynamicApis(); // Removed
+//   const debugInfo = { // Removed
+//     totalApis: apis.length, // Removed
+//     apis: apis.map(api => ({ // Removed
+//       apiId: api.apiId, // Removed
+//       routesCount: api.routesCount, // Removed
+//       routes: api.spec.paths ? Object.keys(api.spec.paths).map(path => { // Removed
+//         const methods = Object.keys(api.spec.paths[path]); // Removed
+//         return { path, methods }; // Removed
+//       }) : [] // Removed
+//     })) // Removed
+//   }; // Removed
+//   res.json(debugInfo); // Removed
+// }); // Removed
+
+// app.post('/api/dynamic-apis', (req, res) => { // Removed
+//   try { // Removed
+//     const { openApiSpec, apiId } = req.body; // Removed
+//     if (!openApiSpec || !apiId) { // Removed
+//       return res.status(400).json({ error: 'Missing openApiSpec or apiId' }); // Removed
+//     } // Removed
+    
+//     const routes = registerDynamicApi(openApiSpec, apiId); // Removed
+//     res.json({ // Removed
+//       success: true, // Removed
+//       apiId, // Removed
+//       routesCount: routes.length, // Removed
+//       message: `Registered ${routes.length} endpoints` // Removed
+//     }); // Removed
+//   } catch (error) { // Removed
+//     res.status(500).json({ error: error.message }); // Removed
+//   } // Removed
+// }); // Removed
+
+// app.delete('/api/dynamic-apis/:apiId', (req, res) => { // Removed
+//   try { // Removed
+//     const { apiId } = req.params; // Removed
+//     const removed = removeDynamicApi(apiId); // Removed
+//     if (removed) { // Removed
+//       res.json({ success: true, message: `API ${apiId} removed` }); // Removed
+//     } else { // Removed
+//       res.status(404).json({ error: `API ${apiId} not found` }); // Removed
+//     } // Removed
+//   } catch (error) { // Removed
+//     res.status(500).json({ error: error.message }); // Removed
+//   } // Removed
+// }); // Removed
+
+// Save API to namespace
+
+
 // Handle main API routes
 app.all('/api/*', async (req, res) => {
   try {
@@ -402,12 +463,6 @@ app.post('/pinterest/token', async (req, res) => {
       res.status(500).json({ error: 'Failed to fetch token' });
   }
 });
-
-
-
-
-
-
 
 
 // Helper function to format objects for DynamoDB
@@ -621,6 +676,31 @@ app.get('/llm/history', async (req, res) => {
   res.status(200).json({ message: "LLM history endpoint removed." });
 });
 
+// Implement a stub endpoint for Lambda generation
+app.post('/llm/generate-lambda-with-url', async (req, res) => {
+  // Extract relevant fields from the request body
+  const { schemaData, functionName, runtime, handler, memorySize, timeout, environment } = req.body;
+
+  // For now, just return a placeholder response
+  // You can add real Lambda code generation logic here later
+  if (!schemaData || !functionName || !runtime || !handler) {
+    return res.status(400).json({ success: false, error: 'Missing required fields.' });
+  }
+
+  // Simulate a generated Lambda config and URL
+  const lambdaConfig = {
+    functionName,
+    runtime,
+    handler,
+    memorySize,
+    timeout,
+    environment,
+    code: '// Lambda handler code would go here',
+  };
+  const estimatedUrl = `https://lambda-url.example.com/${functionName}`;
+
+  return res.json({ success: true, lambdaConfig, estimatedUrl });
+});
 
 // Add this before the catch-all /unified/* route
 app.post('/unified/schema/table/:tableName/items', async (req, res) => {
@@ -631,16 +711,53 @@ app.post('/unified/schema/table/:tableName/items', async (req, res) => {
   );
 });
 
-// Register code generation handlers
-registerCodeGenerationHandlers(app);
+// Add endpoint to list all saved schemas for a given namespaceId
+app.get('/unified/schema', async (req, res) => {
+  try {
+    const result = await unifiedHandlers.listSchemasByNamespace({ request: { query: req.query } }, req, res);
+    res.status(result.statusCode).json(result.body);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
-// // --- Cache API Routes ---
-// app.post('/api/cache/table', cacheTableHandler);
-// app.get('/api/cache/data', getCachedDataHandler);
-// app.get('/api/cache/clear', clearCacheHandler);
-// app.get('/api/cache/stats', getCacheStatsHandler);
-// app.get('/api/cache/health', cacheHealthHandler);
-// app.get('/api/cache/test', testCacheConnection);
+// Endpoint to save a schema to a namespace
+app.post('/save-schema-to-namespace', async (req, res) => {
+  try {
+    console.log('Received /save-schema-to-namespace:', req.body);
+    const { namespaceId, schemaName, schemaType, schema, isArray, originalType, url } = req.body;
+    if (!namespaceId || !schemaName || !schemaType || !schema) {
+      return res.status(400).json({ success: false, error: 'Missing required fields' });
+    }
+    // Use the unifiedHandlers.saveSchema handler
+    const result = await unifiedHandlers.saveSchema({ request: { requestBody: { namespaceId, schemaName, schemaType, schema, isArray, originalType, url } } }, req, res);
+    console.log('Result from saveSchema:', result);
+    if (result.statusCode === 200) {
+      return res.json({ success: true, schemaId: result.body.schemaId });
+    } else {
+      return res.status(result.statusCode).json({ success: false, error: result.body.error });
+    }
+  } catch (error) {
+    console.error('Error in /save-schema-to-namespace:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Endpoint to add a schemaId to a namespace's schemaIds array
+debugger;
+app.post('/unified/namespace/:namespaceId/add-schema', async (req, res) => {
+  try {
+    const { namespaceId } = req.params;
+    const { schemaId } = req.body;
+    if (!namespaceId || !schemaId) {
+      return res.status(400).json({ success: false, error: 'Missing namespaceId or schemaId' });
+    }
+    const result = await unifiedHandlers.updateNamespace(namespaceId, { schemaId });
+    return res.json({ success: true, updatedNamespace: result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
 // --- API Testing Endpoint: Test OpenAPI endpoint and stream result to frontend console ---
 app.post('/api/test-openapi-endpoint', async (req, res) => {
@@ -697,12 +814,12 @@ app.post('/api/test-openapi-endpoint', async (req, res) => {
   }
 });
 
-// app.post('/cache/table', cacheTableHandler);
-// app.get('/cache/data', getCachedDataHandler);
-// app.get('/cache/clear', clearCacheHandler);
-// app.get('/cache/stats', getCacheStatsHandler);
-// app.get('/cache/health', cacheHealthHandler);
-// app.get('/cache/test', testCacheConnection);
+app.post('/cache/table', cacheTableHandler);
+app.get('/cache/data', getCachedDataHandler);
+app.get('/cache/clear', clearCacheHandler);
+app.get('/cache/stats', getCacheStatsHandler);
+app.get('/cache/health', cacheHealthHandler);
+app.get('/cache/test', testCacheConnection);
 
 // --- Search Indexing API Routes ---
 app.post('/search/index', indexTableHandler);
@@ -741,7 +858,7 @@ app.all('/crud', async (req, res) => {
 });
 
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5001;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server listening on port ${PORT}`);
   console.log(`Main API documentation available at http://localhost:${PORT}/api-docs`);
@@ -749,5 +866,4 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`llm API documentation available at http://localhost:${PORT}/llm-api-docs`);
   console.log(`Unified API documentation available at http://localhost:${PORT}/unified-api-docs`);
   console.log(`AI Agent API documentation available at http://localhost:${PORT}/ai-agent-docs`);
-  console.log(`Code Generation API available at http://localhost:${PORT}/code-generation/*`);
 });
