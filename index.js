@@ -34,6 +34,7 @@ import {
 } from './utils/search-indexing.js';
 
 import * as crud from './utils/crud.js';
+import { signupHandler, loginHandler } from './utils/brmh-auth.js';
 
 // Load environment variables
 dotenv.config();
@@ -828,6 +829,11 @@ app.post('/search/indices', listIndicesHandler);
 app.post('/search/delete', deleteIndicesHandler);
 app.get('/search/health', searchHealthHandler);
 
+
+// Add authentication routes for signup and login
+app.post('/auth/signup', signupHandler);
+app.post('/auth/login', loginHandler);
+
 /**
  * Generic CRUD endpoint for DynamoDB tables
  * Usage:
@@ -867,3 +873,4 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`Unified API documentation available at http://localhost:${PORT}/unified-api-docs`);
   console.log(`AI Agent API documentation available at http://localhost:${PORT}/ai-agent-docs`);
 });
+
