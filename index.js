@@ -35,6 +35,9 @@ import {
 
 import * as crud from './utils/crud.js';
 
+import { handleLambdaCodegen } from './lib/llm-agent-system.js';
+import { agentSystem } from './lib/llm-agent-system.js';
+
 // Load environment variables
 dotenv.config();
 
@@ -286,8 +289,43 @@ app.get('/ai-agent-docs', (req, res) => {
 
 // Route AI Agent endpoints
 app.post('/ai-agent', (req, res) => aiAgentHandler({ request: { requestBody: req.body } }, req, res));
-app.post('/ai-agent/stream', (req, res) => aiAgentStreamHandler({ request: { requestBody: req.body } }, req, res));
+// Chat and schema editing endpoint
+app.post('/ai-agent/stream', async (req, res) => {
+  const { message, namespace, history, schema } = req.body;
+  try {
+    await agentSystem.handleStreamingWithAgents(res, namespace, message, history, schema);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+// Lambda codegen endpoint
+app.post('/llm/generate-lambda', async (req, res) => {
+  const { message, selectedSchema, functionName, runtime, handler, memory, timeout, environment } = req.body;
+  try {
+    const result = await handleLambdaCodegen({ message, selectedSchema, functionName, runtime, handler, memory, timeout, environment });
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
+// Endpoint to clear all unsaved/generated schemas for a namespace/session
+app.post('/ai-agent/clear-generated-schemas', async (req, res) => {
+  try {
+    const { sessionId, namespaceId } = req.body;
+    if (!sessionId || !namespaceId) {
+      return res.status(400).json({ success: false, error: 'Missing sessionId or namespaceId' });
+    }
+    // Clear the workspace state for this session/namespace (in-memory/session store)
+    // If you use a DB or cache for workspace state, clear it here
+    // For now, respond as if successful (implement actual clearing logic as needed)
+    // Example: await workspaceStateStore.clear(sessionId, namespaceId);
+    return res.json({ success: true });
+  } catch (error) {
+    console.error('Error clearing generated schemas:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
 
 // Handle AWS DynamoDB routesss
@@ -678,28 +716,26 @@ app.get('/llm/history', async (req, res) => {
 
 // Implement a stub endpoint for Lambda generation
 app.post('/llm/generate-lambda-with-url', async (req, res) => {
-  // Extract relevant fields from the request body
   const { schemaData, functionName, runtime, handler, memorySize, timeout, environment } = req.body;
-
-  // For now, just return a placeholder response
-  // You can add real Lambda code generation logic here later
   if (!schemaData || !functionName || !runtime || !handler) {
     return res.status(400).json({ success: false, error: 'Missing required fields.' });
   }
-
-  // Simulate a generated Lambda config and URL
-  const lambdaConfig = {
-    functionName,
-    runtime,
-    handler,
-    memorySize,
-    timeout,
-    environment,
-    code: '// Lambda handler code would go here',
-  };
-  const estimatedUrl = `https://lambda-url.example.com/${functionName}`;
-
-  return res.json({ success: true, lambdaConfig, estimatedUrl });
+  try {
+    const result = await handleLambdaCodegen({ message: 'Generate Lambda', selectedSchema: schemaData, functionName, runtime, handler, memory: memorySize, timeout, environment });
+    const lambdaConfig = {
+      functionName,
+      runtime,
+      handler,
+      memorySize,
+      timeout,
+      environment,
+      code: result.generatedCode,
+    };
+    const estimatedUrl = `https://lambda-url.example.com/${functionName}`;
+    return res.json({ success: true, lambdaConfig, estimatedUrl });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 // Add this before the catch-all /unified/* route
