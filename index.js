@@ -39,6 +39,8 @@ import { signupHandler, loginHandler } from './utils/brmh-auth.js';
 import { handleLambdaCodegen } from './lib/llm-agent-system.js';
 import { agentSystem } from './lib/llm-agent-system.js';
 
+import { errorHandler } from './middleware/errorHandler.js';
+
 // Load environment variables
 dotenv.config();
 
@@ -748,10 +750,10 @@ app.post('/unified/schema/table/:tableName/items', async (req, res) => {
   );
 });
 
-// Add endpoint to list all saved schemas for a given namespaceId
+// Add endpoint to list all saved schemas
 app.get('/unified/schema', async (req, res) => {
   try {
-    const result = await unifiedHandlers.listSchemasByNamespace({ request: { query: req.query } }, req, res);
+    const result = await unifiedHandlers.listSchemas({ request: { query: req.query } }, req, res);
     res.status(result.statusCode).json(result.body);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -909,4 +911,6 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`Unified API documentation available at http://localhost:${PORT}/unified-api-docs`);
   console.log(`AI Agent API documentation available at http://localhost:${PORT}/ai-agent-docs`);
 });
+
+app.use(errorHandler);
 
