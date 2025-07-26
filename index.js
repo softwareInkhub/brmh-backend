@@ -872,14 +872,7 @@ app.get('/search/health', searchHealthHandler);
 app.post('/auth/signup', signupHandler);
 app.post('/auth/login', loginHandler);
 
-/**
- * Generic CRUD endpoint for DynamoDB tables
- * Usage:
- *   - GET    /api/crud?tableName=...&partitionKey=...&sortKey=... (single item or paginated)
- *   - POST   /api/crud?tableName=...   (body: { item: ... })
- *   - PUT    /api/crud?tableName=...   (body: { key: ..., updates: ... })
- *   - DELETE /api/crud?tableName=...   (body: { partitionKey: ..., sortKey: ... })
- */
+
 app.all('/crud', async (req, res) => {
   try {
     const event = {
