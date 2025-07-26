@@ -3,10 +3,8 @@ info:
   title: Unified API
   version: 1.0.0
   description: Unified API for handling schemas, namespaces, and API execution
-
 servers:
   - url: /unified
-    description: Unified API server
 
 paths:
   # Schema Operations
@@ -92,18 +90,18 @@ paths:
               required: ["schemaName", "schema"]
               properties:
                 methodId:
-                  type: ["string", "null"]
+                  type: string
                   nullable: true
                 schemaName:
                   type: string
                 methodName:
-                  type: ["string", "null"]
+                  type: string
                   nullable: true
                 namespaceId:
-                  type: ["string", "null"]
+                  type: string
                   nullable: true
                 schemaType:
-                  type: ["string", "null"]
+                  type: string
                   nullable: true
                 schema:
                   type: object
@@ -111,7 +109,7 @@ paths:
                   type: boolean
                   default: false
                 originalType:
-                  type: ["string", "null"]
+                  type: string
                   nullable: true
                 url:
                   type: string
@@ -187,27 +185,31 @@ paths:
   /schema/table:
     post:
       operationId: createSchemasTable
-      summary: Create schema table
+      summary: Create schema table for a specific account and method
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: ["schemaId", "tableName"]
+              required: [schemaId, accountId, methodName]
               properties:
                 schemaId:
                   type: string
+                accountId:
+                  type: string
+                methodName:
+                  type: string
                 tableName:
                   type: string
+                  description: Optional. If not provided, will be generated as namespace-name+account-name+method-name
       responses:
-        '200':
+        '201':
           description: Table created successfully
           content:
             application/json:
               schema:
                 type: object
-                required: ["message", "tableName", "schemaId", "metaId"]
                 properties:
                   message:
                     type: string
@@ -215,7 +217,27 @@ paths:
                     type: string
                   schemaId:
                     type: string
-                  metaId:
+                  accountId:
+                    type: string
+                  methodName:
+                    type: string
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
                     type: string
 
   /schema/table-meta:
@@ -686,7 +708,7 @@ paths:
                 response-schema:
                   type: object
                 schemaId:
-                  type: ["string", "null"]
+                  type: string
                   nullable: true
                   description: Reference to the schema for this namespace or method
                   default: null
@@ -757,17 +779,17 @@ paths:
                 response-schema:
                   type: object
                 schemaId:
-                  type: ["string", "null"]
+                  type: string
                   nullable: true
                   description: Reference to the schema for this namespace or method
                   default: null
                 namespace-method-tableName:
-                  type: ["string", "null"]
+                  type: string
                   nullable: true
                   description: Table name for this method
                   default: null
                 tableName:
-                  type: ["string", "null"]
+                  type: string
                   nullable: true
                   description: Table name for this method (backward compatibility)
                   default: null
@@ -883,4 +905,287 @@ paths:
                 type: object
                 properties:
                   error:
-                    type: string 
+                    type: string
+
+# Webhook Operations
+  /webhooks:
+    get:
+      operationId: listWebhooks
+      summary: List all webhooks
+      responses:
+        '200':
+          description: List of webhooks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    webhook-id:
+                      type: string
+                    webhook-name:
+                      type: string
+                    pre-exec-url:
+                      type: string
+                    post-exec-url:
+                      type: string
+                    method-id:
+                      type: string
+                      nullable: true
+                    namespace-id:
+                      type: string
+                      nullable: true
+                    account-id:
+                      type: string
+                      nullable: true
+                    table-name:
+                      type: string
+                    status:
+                      type: string
+                      enum: ['active', 'inactive']
+                    tags:
+                      type: array
+                      items:
+                        type: string
+                    created-at:
+                      type: string
+                    updated-at:
+                      type: string
+
+    post:
+      operationId: createWebhook
+      summary: Create a new webhook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["webhook-name", "tableName"]
+              properties:
+                webhook-name:
+                  type: string
+                  description: Name of the webhook
+                pre-exec-url:
+                  type: string
+                  description: URL to call before main webhook execution
+                post-exec-url:
+                  type: string
+                  description: URL where webhook data will be posted
+                method-id:
+                  type: string
+                  nullable: true
+                  description: Associated method ID
+                namespace-id:
+                  type: string
+                  nullable: true
+                  description: Associated namespace ID
+                account-id:
+                  type: string
+                  nullable: true
+                  description: Associated account ID
+                tableName:
+                  type: string
+                  description: Target table name for webhook data
+                status:
+                  type: string
+                  enum: ['active', 'inactive']
+                  default: 'active'
+                  description: Webhook status
+                tags:
+                  type: array
+                  items:
+                    type: string
+                  description: Tags for the webhook
+      responses:
+        '201':
+          description: Webhook created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  webhook-id:
+                    type: string
+                  webhook-name:
+                    type: string
+                  pre-exec-url:
+                    type: string
+                  post-exec-url:
+                    type: string
+                  method-id:
+                    type: string
+                    nullable: true
+                  namespace-id:
+                    type: string
+                    nullable: true
+                  account-id:
+                    type: string
+                    nullable: true
+                  table-name:
+                    type: string
+                  status:
+                    type: string
+                  tags:
+                    type: array
+                    items:
+                      type: string
+                  created-at:
+                    type: string
+                  updated-at:
+                    type: string
+
+  /webhooks/active:
+    get:
+      operationId: getActiveWebhooks
+      summary: Get all active webhooks
+      responses:
+        '200':
+          description: List of active webhooks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+
+  /webhooks/{webhookId}:
+    parameters:
+      - name: webhookId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Webhook ID
+    get:
+      operationId: getWebhookById
+      summary: Get webhook by ID
+      responses:
+        '200':
+          description: Webhook retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+        '404':
+          description: Webhook not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+
+    put:
+      operationId: updateWebhook
+      summary: Update webhook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                webhook-name:
+                  type: string
+                pre-exec-url:
+                  type: string
+                post-exec-url:
+                  type: string
+                method-id:
+                  type: string
+                  nullable: true
+                namespace-id:
+                  type: string
+                  nullable: true
+                account-id:
+                  type: string
+                  nullable: true
+                tableName:
+                  type: string
+                status:
+                  type: string
+                  enum: ['active', 'inactive']
+                tags:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Webhook updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+
+    delete:
+      operationId: deleteWebhook
+      summary: Delete webhook
+      responses:
+        '204':
+          description: Webhook deleted successfully
+
+  /webhooks/table/{tableName}:
+    parameters:
+      - name: tableName
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Table name
+    get:
+      operationId: getWebhooksByTableName
+      summary: Get webhooks by table name
+      responses:
+        '200':
+          description: List of webhooks for the table
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+
+  /webhooks/namespace/{namespaceId}:
+    parameters:
+      - name: namespaceId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Namespace ID
+    get:
+      operationId: getWebhooksByNamespace
+      summary: Get webhooks by namespace
+      responses:
+        '200':
+          description: List of webhooks for the namespace
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+
+  /webhooks/method/{methodId}:
+    parameters:
+      - name: methodId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Method ID
+    get:
+      operationId: getWebhooksByMethod
+      summary: Get webhooks by method
+      responses:
+        '200':
+          description: List of webhooks for the method
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object 

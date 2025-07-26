@@ -1,0 +1,85 @@
+openapi: 3.0.0
+info:
+  title: Unified AI Agent API
+  version: 1.0.0
+  description: |
+    Unified AI agent endpoint. Handles chat, schema, API, and codegen requests and actions.
+servers:
+  - url: http://localhost:5001
+paths:
+  /ai-agent:
+    post:
+      summary: AI Agent (non-streaming)
+      description: |
+        Unified AI agent endpoint. Handles chat, schema, API, and codegen requests.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                message:
+                  type: string
+                namespace:
+                  type: object
+                history:
+                  type: array
+                  items:
+                    type: object
+      responses:
+        '200':
+          description: AI agent response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  content:
+                    type: string
+                  actions:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AgentAction'
+                  type:
+                    type: string
+  /ai-agent/stream:
+    post:
+      summary: AI Agent (streaming)
+      description: |
+        Unified AI agent streaming endpoint. Streams chat, schema, API, and codegen actions.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                message:
+                  type: string
+                namespace:
+                  type: object
+                history:
+                  type: array
+                  items:
+                    type: object
+      responses:
+        '200':
+          description: Streamed AI agent response
+          content:
+            text/plain:
+              schema:
+                type: string
+components:
+  schemas:
+    AgentAction:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [generate_schema, generate_api, generate_code, chat]
+        status:
+          type: string
+          enum: [pending, complete, error]
+        data:
+          type: object 
