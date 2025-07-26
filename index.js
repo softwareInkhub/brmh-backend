@@ -16,14 +16,14 @@ import { exec } from 'child_process';
 import { handlers as unifiedHandlers } from './lib/unified-handlers.js';
 
 import { aiAgentHandler, aiAgentStreamHandler } from './lib/ai-agent-handlers.js';
-import { 
-  cacheTableHandler, 
-  getCachedDataHandler, 
-  clearCacheHandler, 
-  getCacheStatsHandler, 
-  cacheHealthHandler,
-  testCacheConnection
-} from './utils/cache.js';
+// import { 
+//   cacheTableHandler, 
+//   getCachedDataHandler, 
+//   clearCacheHandler, 
+//   getCacheStatsHandler, 
+//   cacheHealthHandler,
+//   testCacheConnection
+// } from './utils/cache.js';
 
 import {
   indexTableHandler,
@@ -853,12 +853,12 @@ app.post('/api/test-openapi-endpoint', async (req, res) => {
   }
 });
 
-app.post('/cache/table', cacheTableHandler);
-app.get('/cache/data', getCachedDataHandler);
-app.get('/cache/clear', clearCacheHandler);
-app.get('/cache/stats', getCacheStatsHandler);
-app.get('/cache/health', cacheHealthHandler);
-app.get('/cache/test', testCacheConnection);
+// app.post('/cache/table', cacheTableHandler);
+// app.get('/cache/data', getCachedDataHandler);
+// app.get('/cache/clear', clearCacheHandler);
+// app.get('/cache/stats', getCacheStatsHandler);
+// app.get('/cache/health', cacheHealthHandler);
+// app.get('/cache/test', testCacheConnection);
 
 // --- Search Indexing API Routes ---
 app.post('/search/index', indexTableHandler);
