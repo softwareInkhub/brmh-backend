@@ -17,6 +17,7 @@ import { handlers as unifiedHandlers } from './lib/unified-handlers.js';
 
 import { aiAgentHandler, aiAgentStreamHandler } from './lib/ai-agent-handlers.js';
 import { agentSystem } from './lib/llm-agent-system.js';
+import { lambdaDeploymentManager } from './lib/lambda-deployment.js';
 import { 
   cacheTableHandler, 
   getCachedDataHandler, 
@@ -931,6 +932,125 @@ app.post('/search/query', searchIndexHandler);
 app.post('/search/indices', listIndicesHandler);
 app.post('/search/delete', deleteIndicesHandler);
 app.get('/search/health', searchHealthHandler);
+
+// Test endpoint
+app.get('/test', (req, res) => {
+  res.json({ message: 'Server is working!' });
+});
+
+// --- Lambda Deployment API Routes ---
+app.post('/lambda/deploy', async (req, res) => {
+  try {
+    const { functionName, code, runtime = 'nodejs18.x', handler = 'index.handler', memorySize = 128, timeout = 30 } = req.body;
+    
+    if (!functionName || !code) {
+      return res.status(400).json({ error: 'functionName and code are required' });
+    }
+
+    console.log(`[Lambda Deployment] Deploying function: ${functionName}`);
+    console.log(`[Lambda Deployment] Request body:`, { functionName, runtime, handler, memorySize, timeout });
+    
+    // For now, return a mock response to test the endpoint
+    const mockResult = {
+      success: true,
+      functionArn: `arn:aws:lambda:us-east-1:123456789012:function:${functionName}`,
+      functionName: functionName,
+      runtime: runtime,
+      handler: handler,
+      codeSize: code.length,
+      description: `Generated Lambda function: ${functionName}`,
+      timeout: timeout,
+      memorySize: memorySize,
+      lastModified: new Date().toISOString()
+    };
+
+    console.log(`[Lambda Deployment] Mock result:`, mockResult);
+    res.json(mockResult);
+    
+    // TODO: Uncomment when AWS credentials are properly configured
+    /*
+    const result = await lambdaDeploymentManager.deployLambdaFunction(
+      functionName, 
+      code, 
+      runtime, 
+      handler, 
+      memorySize, 
+      timeout
+    );
+
+    res.json(result);
+    */
+  } catch (error) {
+    console.error('[Lambda Deployment] Error:', error);
+    res.status(500).json({ 
+      error: 'Failed to deploy Lambda function', 
+      details: error.message 
+    });
+  }
+});
+
+app.post('/lambda/invoke', async (req, res) => {
+  try {
+    const { functionName, payload = {} } = req.body;
+    
+    if (!functionName) {
+      return res.status(400).json({ error: 'functionName is required' });
+    }
+
+    console.log(`[Lambda Deployment] Invoking function: ${functionName}`);
+    console.log(`[Lambda Deployment] Payload:`, payload);
+    
+    // For now, return a mock response to test the endpoint
+    const mockResult = {
+      statusCode: 200,
+      payload: {
+        message: 'Hello from AI Agent Workspace!',
+        functionName: functionName,
+        test: true,
+        timestamp: new Date().toISOString()
+      },
+      logResult: `START RequestId: 12345678-1234-1234-1234-123456789012 Version: $LATEST
+END RequestId: 12345678-1234-1234-1234-123456789012
+REPORT RequestId: 12345678-1234-1234-1234-123456789012	Duration: 15.23 ms	Billed Duration: 16 ms	Memory Size: 128 MB	Max Memory Used: 45 MB`
+    };
+
+    console.log(`[Lambda Deployment] Mock invoke result:`, mockResult);
+    res.json(mockResult);
+    
+    // TODO: Uncomment when AWS credentials are properly configured
+    /*
+    const result = await lambdaDeploymentManager.invokeLambdaFunction(functionName, payload);
+    res.json(result);
+    */
+  } catch (error) {
+    console.error('[Lambda Deployment] Error:', error);
+    res.status(500).json({ 
+      error: 'Failed to invoke Lambda function', 
+      details: error.message 
+    });
+  }
+});
+
+app.post('/lambda/cleanup', async (req, res) => {
+  try {
+    const { functionName } = req.body;
+    
+    if (!functionName) {
+      return res.status(400).json({ error: 'functionName is required' });
+    }
+
+    console.log(`[Lambda Deployment] Cleaning up temp files for: ${functionName}`);
+    
+    await lambdaDeploymentManager.cleanupTempFiles(functionName);
+    res.json({ success: true, message: 'Temp files cleaned up successfully' });
+  } catch (error) {
+    console.error('[Lambda Deployment] Error:', error);
+    res.status(500).json({ 
+      error: 'Failed to cleanup temp files', 
+      details: error.message 
+    });
+  }
+});
 
 /**
  * Generic CRUD endpoint for DynamoDB tables
