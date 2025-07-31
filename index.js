@@ -589,45 +589,28 @@ app.get('/test', (req, res) => {
 // --- Lambda Deployment API Routes ---
 app.post('/lambda/deploy', async (req, res) => {
   try {
-    const { functionName, code, runtime = 'nodejs18.x', handler = 'index.handler', memorySize = 128, timeout = 30 } = req.body;
+    const { functionName, code, runtime = 'nodejs18.x', handler = 'index.handler', memorySize = 128, timeout = 30, dependencies = {} } = req.body;
     
     if (!functionName || !code) {
       return res.status(400).json({ error: 'functionName and code are required' });
     }
 
     console.log(`[Lambda Deployment] Deploying function: ${functionName}`);
-    console.log(`[Lambda Deployment] Request body:`, { functionName, runtime, handler, memorySize, timeout });
+    console.log(`[Lambda Deployment] Request body:`, { functionName, runtime, handler, memorySize, timeout, dependencies });
     
-    // For now, return a mock response to test the endpoint
-    const mockResult = {
-      success: true,
-      functionArn: `arn:aws:lambda:us-east-1:123456789012:function:${functionName}`,
-      functionName: functionName,
-      runtime: runtime,
-      handler: handler,
-      codeSize: code.length,
-      description: `Generated Lambda function: ${functionName}`,
-      timeout: timeout,
-      memorySize: memorySize,
-      lastModified: new Date().toISOString()
-    };
-
-    console.log(`[Lambda Deployment] Mock result:`, mockResult);
-    res.json(mockResult);
-    
-    // TODO: Uncomment when AWS credentials are properly configured
-    /*
+    // Deploy to AWS Lambda
     const result = await lambdaDeploymentManager.deployLambdaFunction(
       functionName, 
       code, 
       runtime, 
       handler, 
       memorySize, 
-      timeout
+      timeout,
+      dependencies
     );
 
+    console.log(`[Lambda Deployment] Real deployment result:`, result);
     res.json(result);
-    */
   } catch (error) {
     console.error('[Lambda Deployment] Error:', error);
     res.status(500).json({ 
@@ -659,64 +642,50 @@ app.post('/lambda/deploy-stream', async (req, res) => {
     // Send initial status
     res.write(`data: ${JSON.stringify({ type: 'status', message: 'Starting Lambda deployment...', functionName })}\n\n`);
     
-    // Simulate deployment steps with real-time updates
-    const steps = [
-      { message: 'Creating deployment package...', delay: 1000 },
-      { message: 'Installing dependencies...', delay: 1500 },
-      { message: 'Creating deployment ZIP file...', delay: 800 },
-      { message: 'Checking if function exists...', delay: 500 },
-      { message: 'Creating/updating Lambda function...', delay: 2000 },
-      { message: 'Configuring function settings...', delay: 1000 },
-      { message: 'Deployment completed successfully!', delay: 500 }
-    ];
+    try {
+      // Real deployment steps
+      res.write(`data: ${JSON.stringify({ type: 'progress', message: 'Creating deployment package...', step: 1, totalSteps: 7, functionName })}\n\n`);
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      res.write(`data: ${JSON.stringify({ type: 'progress', message: 'Installing dependencies...', step: 2, totalSteps: 7, functionName })}\n\n`);
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      
+      res.write(`data: ${JSON.stringify({ type: 'progress', message: 'Creating deployment ZIP file...', step: 3, totalSteps: 7, functionName })}\n\n`);
+      await new Promise(resolve => setTimeout(resolve, 800));
+      
+      res.write(`data: ${JSON.stringify({ type: 'progress', message: 'Checking if function exists...', step: 4, totalSteps: 7, functionName })}\n\n`);
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      res.write(`data: ${JSON.stringify({ type: 'progress', message: 'Creating/updating Lambda function...', step: 5, totalSteps: 7, functionName })}\n\n`);
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      res.write(`data: ${JSON.stringify({ type: 'progress', message: 'Configuring function settings...', step: 6, totalSteps: 7, functionName })}\n\n`);
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // Perform actual deployment
+      const result = await lambdaDeploymentManager.deployLambdaFunction(
+        functionName, 
+        code, 
+        runtime, 
+        handler, 
+        memorySize, 
+        timeout
+      );
+      
+      res.write(`data: ${JSON.stringify({ type: 'progress', message: 'Deployment completed successfully!', step: 7, totalSteps: 7, functionName })}\n\n`);
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // Send final result
+      res.write(`data: ${JSON.stringify({ type: 'result', data: result, functionName })}\n\n`);
+      res.write('data: [DONE]\n\n');
+      res.end();
 
-    for (let i = 0; i < steps.length; i++) {
-      const step = steps[i];
-      
-      // Send progress update
-      res.write(`data: ${JSON.stringify({ 
-        type: 'progress', 
-        message: step.message, 
-        step: i + 1, 
-        totalSteps: steps.length,
-        functionName 
-      })}\n\n`);
-      
-      // Wait for the specified delay
-      await new Promise(resolve => setTimeout(resolve, step.delay));
+      console.log(`[Lambda Deployment] Streaming deployment completed for: ${functionName}`);
+    } catch (deploymentError) {
+      console.error('[Lambda Deployment] Deployment error:', deploymentError);
+      res.write(`data: ${JSON.stringify({ type: 'error', message: 'Deployment failed: ' + deploymentError.message, functionName })}\n\n`);
+      res.end();
     }
-
-    // Send final result
-    const mockResult = {
-      success: true,
-      functionArn: `arn:aws:lambda:us-east-1:123456789012:function:${functionName}`,
-      functionName: functionName,
-      runtime: runtime,
-      handler: handler,
-      codeSize: code.length,
-      description: `Generated Lambda function: ${functionName}`,
-      timeout: timeout,
-      memorySize: memorySize,
-      lastModified: new Date().toISOString()
-    };
-
-    res.write(`data: ${JSON.stringify({ type: 'result', data: mockResult, functionName })}\n\n`);
-    res.write('data: [DONE]\n\n');
-    res.end();
-
-    console.log(`[Lambda Deployment] Streaming deployment completed for: ${functionName}`);
-    
-    // TODO: Uncomment when AWS credentials are properly configured
-    /*
-    const result = await lambdaDeploymentManager.deployLambdaFunction(
-      functionName, 
-      code, 
-      runtime, 
-      handler, 
-      memorySize, 
-      timeout
-    );
-    */
   } catch (error) {
     console.error('[Lambda Deployment] Streaming error:', error);
     res.write(`data: ${JSON.stringify({ type: 'error', message: 'Deployment failed: ' + error.message })}\n\n`);
@@ -726,42 +695,33 @@ app.post('/lambda/deploy-stream', async (req, res) => {
 
 app.post('/lambda/invoke', async (req, res) => {
   try {
+    console.log(`[Lambda Invoke] Raw request body:`, req.body);
     const { functionName, payload = {} } = req.body;
     
     if (!functionName) {
       return res.status(400).json({ error: 'functionName is required' });
     }
 
-    console.log(`[Lambda Deployment] Invoking function: ${functionName}`);
-    console.log(`[Lambda Deployment] Payload:`, payload);
+    console.log(`[Lambda Invoke] Invoking function: ${functionName}`);
+    console.log(`[Lambda Invoke] Payload:`, payload);
     
-    // For now, return a mock response to test the endpoint
-    const mockResult = {
-      statusCode: 200,
-      payload: {
-        message: 'Hello from AI Agent Workspace!',
-        functionName: functionName,
-        test: true,
-        timestamp: new Date().toISOString()
-      },
-      logResult: `START RequestId: 12345678-1234-1234-1234-123456789012 Version: $LATEST
-END RequestId: 12345678-1234-1234-1234-123456789012
-REPORT RequestId: 12345678-1234-1234-1234-123456789012	Duration: 15.23 ms	Billed Duration: 16 ms	Memory Size: 128 MB	Max Memory Used: 45 MB`
-    };
-
-    console.log(`[Lambda Deployment] Mock invoke result:`, mockResult);
-    res.json(mockResult);
-    
-    // TODO: Uncomment when AWS credentials are properly configured
-    /*
+    // Invoke real AWS Lambda function
     const result = await lambdaDeploymentManager.invokeLambdaFunction(functionName, payload);
+    console.log(`[Lambda Invoke] Real invoke result:`, result);
     res.json(result);
-    */
   } catch (error) {
-    console.error('[Lambda Deployment] Error:', error);
+    console.error('[Lambda Invoke] Error:', error);
+    console.error('[Lambda Invoke] Error details:', {
+      name: error.name,
+      message: error.message,
+      code: error.$metadata?.httpStatusCode,
+      requestId: error.$metadata?.requestId
+    });
     res.status(500).json({ 
       error: 'Failed to invoke Lambda function', 
-      details: error.message 
+      details: error.message,
+      errorCode: error.name,
+      requestId: error.$metadata?.requestId
     });
   }
 });
