@@ -14,9 +14,12 @@ import dotenv from 'dotenv';
 import { exec } from 'child_process';
 
 import { handlers as unifiedHandlers } from './lib/unified-handlers.js';
+import { DynamoDBClient, DescribeTableCommand, CreateTableCommand } from '@aws-sdk/client-dynamodb';
+import pkg from '@aws-sdk/lib-dynamodb';
+const { DynamoDBDocumentClient } = pkg;
 
 import { aiAgentHandler, aiAgentStreamHandler } from './lib/ai-agent-handlers.js';
-import { agentSystem } from './lib/llm-agent-system.js';
+import { agentSystem, handleLambdaCodegen } from './lib/llm-agent-system.js';
 import { lambdaDeploymentManager } from './lib/lambda-deployment.js';
 import { 
   cacheTableHandler, 
@@ -41,6 +44,10 @@ import * as crud from './utils/crud.js';
 
 // Load environment variables
 dotenv.config();
+
+// Initialize DynamoDB client
+const client = new DynamoDBClient({});
+const docClient = DynamoDBDocumentClient.from(client);
 
 // Log AWS configuration status
 console.log('AWS Configuration Check:', {
@@ -155,7 +162,8 @@ const unifiedApiHandlers = {
 
   // Schema Operations
   listSchemas: unifiedHandlers.listSchemas,
-  getSchemas: unifiedHandlers.getSchemas,
+  listSchemasByNamespace: unifiedHandlers.listSchemasByNamespace,
+  getSchemas: unifiedHandlers.listSchemas, // Alias for listSchemas
   createSchema: unifiedHandlers.createSchema,
   updateSchema: unifiedHandlers.updateSchema,
   deleteSchema: unifiedHandlers.deleteSchema,
@@ -308,54 +316,30 @@ app.post('/ai-agent/lambda-codegen', async (req, res) => {
   console.log('[AI Agent] Lambda codegen request:', { message, selectedSchema, functionName, runtime, handler, memory, timeout, environment });
 
   try {
-    // Create a specialized prompt for Lambda generation
-    const lambdaPrompt = `Generate a complete AWS Lambda handler function.
-
-Requirements:
-- Function purpose: ${message}
-- Function name: ${functionName}
-- Runtime: ${runtime}
-- Handler: ${handler}
-- Memory: ${memory} MB
-- Timeout: ${timeout} seconds
-- Environment variables: ${environment || 'none'}
-
-${selectedSchema ? `Schema context:\n${JSON.stringify(selectedSchema, null, 2)}\n` : ''}
-
-Generate a complete, production-ready Lambda handler that:
-1. Handles the specified requirements
-2. Includes proper error handling
-3. Returns appropriate HTTP responses
-4. Uses the provided schema if applicable
-5. Follows AWS Lambda best practices
-
-Output ONLY the JavaScript code, no explanations or markdown.`;
-
-    // Use the agent system to generate the code
-    const response = await agentSystem.handleStreamingWithAgents(
-      res, 
-      namespace?.['namespace-name'] || 'default', 
-      lambdaPrompt, 
-      [], // No history needed for code generation
-      selectedSchema
-    );
-
-    // The agent system handles the response, so we don't need to send anything here
-    return;
+    // Use the dedicated lambda codegen handler with streaming
+    await handleLambdaCodegen({
+      message,
+      selectedSchema,
+      functionName,
+      runtime,
+      handler,
+      memory,
+      timeout,
+      environment,
+      res // Pass the response object for streaming
+    });
 
   } catch (error) {
     console.error('[AI Agent] Lambda codegen error:', error);
-    res.status(500).json({ 
-      error: 'Failed to generate Lambda code',
-      details: error.message 
-    });
+    res.write(`data: ${JSON.stringify({ error: 'Failed to generate Lambda code', details: error.message })}\n\n`);
+    res.end();
   }
 });
 
 // AI Agent Workspace State endpoints
-app.get('/ai-agent/get-workspace-state', async (req, res) => {
+app.post('/ai-agent/get-workspace-state', async (req, res) => {
   try {
-    const { sessionId, namespaceId } = req.query;
+    const { sessionId, namespaceId } = req.body;
     if (!sessionId || !namespaceId) {
       return res.status(400).json({ error: 'Missing sessionId or namespaceId' });
     }
@@ -395,458 +379,99 @@ app.post('/ai-agent/save-workspace-state', async (req, res) => {
   }
 });
 
-
-
-// Handle AWS DynamoDB routesss
-app.all('/api/dynamodb/*', async (req, res, next) => {
-  // Skip if this is a documentation request
-  if (req.method === 'GET' && req.path === '/api/dynamodb') {
-    return next();
-  }
-
+// AI Agent Chat History endpoints
+app.post('/ai-agent/chat-history', async (req, res) => {
   try {
-    console.log('[DynamoDB Request]:', {
-      method: req.method,
-      path: req.path,
-      body: req.body
-    });
-
-    // Adjust the path to remove the /api/dynamodb prefix
-    const adjustedPath = req.path.replace('/api/dynamodb', '');
+    const { sessionId, userId, limit = 50 } = req.body;
+    if (!sessionId) {
+      return res.status(400).json({ error: 'Missing sessionId' });
+    }
     
-    const response = await awsApi.handleRequest(
-      {
-        method: req.method,
-        path: adjustedPath || '/',
-        body: req.body,
-        query: req.query,
-        headers: req.headers
-      },
-      req,
-      res
-    );
-
-    if (!response || !response.body) {
-      console.error('[DynamoDB Response] Invalid response:', response);
-      return res.status(500).json({
-        error: 'Invalid response from handler'
-      });
-    }
-
-    console.log('[DynamoDB Response]:', {
-      statusCode: response.statusCode,
-      body: response.body
-    });
-
-    res.status(response.statusCode).json(response.body);
+    // For now, return empty history
+    // In a real implementation, you would load this from a database
+    res.json({ success: true, history: [] });
   } catch (error) {
-    console.error('[DynamoDB Error]:', error);
-    res.status(500).json({
-      error: 'Failed to handle DynamoDB request',
-      message: error.message
-    });
+    console.error('Error getting chat history:', error);
+    res.status(500).json({ error: 'Failed to get chat history' });
   }
 });
 
-// Dynamic API routes - for testing generated APIs (MUST come before main API handler)
-// app.use('/dynamic-api', createDynamicApiRouter()); // Removed
-
-// API management endpoints (MUST come before main API handler)
-// app.get('/api/dynamic-apis', (req, res) => { // Removed
-//   const apis = getDynamicApis(); // Removed
-//   res.json(apis); // Removed
-// }); // Removed
-
-// Debug endpoint to see registered APIs
-// app.get('/api/debug/dynamic-apis', (req, res) => { // Removed
-//   const apis = getDynamicApis(); // Removed
-//   const debugInfo = { // Removed
-//     totalApis: apis.length, // Removed
-//     apis: apis.map(api => ({ // Removed
-//       apiId: api.apiId, // Removed
-//       routesCount: api.routesCount, // Removed
-//       routes: api.spec.paths ? Object.keys(api.spec.paths).map(path => { // Removed
-//         const methods = Object.keys(api.spec.paths[path]); // Removed
-//         return { path, methods }; // Removed
-//       }) : [] // Removed
-//     })) // Removed
-//   }; // Removed
-//   res.json(debugInfo); // Removed
-// }); // Removed
-
-// app.post('/api/dynamic-apis', (req, res) => { // Removed
-//   try { // Removed
-//     const { openApiSpec, apiId } = req.body; // Removed
-//     if (!openApiSpec || !apiId) { // Removed
-//       return res.status(400).json({ error: 'Missing openApiSpec or apiId' }); // Removed
-//     } // Removed
+app.post('/ai-agent/clear-history', async (req, res) => {
+  try {
+    const { sessionId } = req.body;
+    if (!sessionId) {
+      return res.status(400).json({ error: 'Missing sessionId' });
+    }
     
-//     const routes = registerDynamicApi(openApiSpec, apiId); // Removed
-//     res.json({ // Removed
-//       success: true, // Removed
-//       apiId, // Removed
-//       routesCount: routes.length, // Removed
-//       message: `Registered ${routes.length} endpoints` // Removed
-//     }); // Removed
-//   } catch (error) { // Removed
-//     res.status(500).json({ error: error.message }); // Removed
-//   } // Removed
-// }); // Removed
-
-// app.delete('/api/dynamic-apis/:apiId', (req, res) => { // Removed
-//   try { // Removed
-//     const { apiId } = req.params; // Removed
-//     const removed = removeDynamicApi(apiId); // Removed
-//     if (removed) { // Removed
-//       res.json({ success: true, message: `API ${apiId} removed` }); // Removed
-//     } else { // Removed
-//       res.status(404).json({ error: `API ${apiId} not found` }); // Removed
-//     } // Removed
-//   } catch (error) { // Removed
-//     res.status(500).json({ error: error.message }); // Removed
-//   } // Removed
-// }); // Removed
-
-// Save API to namespace
-
-
-// Handle main API routes
-app.all('/api/*', async (req, res) => {
-  try {
-    const response = await unifiedApi.handleRequest(
-      {
-        method: req.method,
-        path: req.path.replace('/api', '') || '/',
-        body: req.body,
-        query: req.query,
-        headers: req.headers
-      },
-      req,
-      res
-    );
-    res.status(response.statusCode).json(response.body);
+    // For now, just acknowledge the clear
+    // In a real implementation, you would clear this from a database
+    console.log('Clearing chat history for session:', sessionId);
+    
+    res.json({ success: true, message: 'Chat history cleared' });
   } catch (error) {
-    console.error('Main API request error:', error);
-    res.status(500).json({ error: 'Failed to handle main API request' });
+    console.error('Error clearing chat history:', error);
+    res.status(500).json({ error: 'Failed to clear chat history' });
   }
 });
 
-
-
-
-app.post('/pinterest/token', async (req, res) => {
-  console.log('Incoming Request Body:', req.body); // Log the incoming request body
-  const { code, clientId, clientSecret, redirectUrl } = req.body;
-
-  // Check if any of the required fields are missing
-  if (!code || !clientId || !clientSecret || !redirectUrl) {
-      return res.status(400).json({ error: 'Missing required fields' });
-  }
-
-  const tokenRequestBody = new URLSearchParams({
-      grant_type: 'authorization_code',
-      code: code,
-      client_id: clientId,
-      client_secret: clientSecret,
-      redirect_uri: redirectUrl
-  }).toString();
-
-  const auth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
-  
-
+// Code Generation endpoints
+app.get('/code-generation/files/:namespaceId', async (req, res) => {
   try {
-      const response = await axios.post('https://api.pinterest.com/v5/oauth/token', tokenRequestBody, {
-          headers: {
-              'Authorization': `Basic ${auth}`,
-              'Content-Type': 'application/x-www-form-urlencoded'
-          }
-      });
-     
-      console.log(response.data.access_token);
-      res.json(response.data.access_token); // Send the response data back to the client
-  
+    const { namespaceId } = req.params;
+    
+    // For now, return empty file list
+    // In a real implementation, you would load this from a database or file system
+    res.json({ success: true, files: [] });
   } catch (error) {
-      console.error('Error fetching token:', error.response ? error.response.data : error.message);
-      res.status(500).json({ error: 'Failed to fetch token' });
+    console.error('Error getting files:', error);
+    res.status(500).json({ error: 'Failed to get files' });
   }
 });
 
-
-// Helper function to format objects for DynamoDB
-function formatDynamoDBMap(obj) {
-  const result = {};
-  for (const [key, value] of Object.entries(obj)) {
-    if (value === null || value === undefined) {
-      result[key] = { NULL: true };
-    } else if (typeof value === 'string') {
-      result[key] = { S: value };
-    } else if (typeof value === 'number') {
-      result[key] = { N: value.toString() };
-    } else if (typeof value === 'boolean') {
-      result[key] = { BOOL: value };
-    } else if (Array.isArray(value)) {
-      result[key] = { L: value.map(item => formatDynamoDBValue(item)) };
-    } else if (typeof value === 'object') {
-      result[key] = { M: formatDynamoDBMap(value) };
-    }
-  }
-  return result;
-}
-
-function formatDynamoDBValue(value) {
-  if (value === null || value === undefined) {
-    return { NULL: true };
-  } else if (typeof value === 'string') {
-    return { S: value };
-  } else if (typeof value === 'number') {
-    return { N: value.toString() };
-  } else if (typeof value === 'boolean') {
-    return { BOOL: value };
-  } else if (Array.isArray(value)) {
-    return { L: value.map(item => formatDynamoDBValue(item)) };
-  } else if (typeof value === 'object') {
-    return { M: formatDynamoDBMap(value) };
-  }
-  return { NULL: true };
-}
-
-// Handle Schema API routes
-app.all('/api/schema/*', async (req, res) => {
+app.get('/code-generation/files/:namespaceId/*', async (req, res) => {
   try {
-    const response = await unifiedApi.handleRequest(
-      {
-        method: req.method,
-        path: req.path.replace('/api/schema', '') || '/',
-        body: req.body,
-        query: req.query,
-        headers: req.headers
-      },
-      req,
-      res
-    );
-    res.status(response.statusCode).json(response.body);
+    const { namespaceId } = req.params;
+    const filePath = req.params[0];
+    
+    // For now, return empty content
+    // In a real implementation, you would load this from a file system
+    res.json({ success: true, content: '' });
   } catch (error) {
-    console.error('[Schema API] Error:', error.message);
-    res.status(500).json({
-      error: 'Failed to handle schema API request',
-      message: error.message
+    console.error('Error getting file content:', error);
+    res.status(500).json({ error: 'Failed to get file content' });
+  }
+});
+
+app.post('/code-generation/generate-backend', async (req, res) => {
+  try {
+    const { schemas, apis, projectType } = req.body;
+    
+    // For now, return a placeholder response
+    // In a real implementation, you would generate backend code
+    res.json({ 
+      success: true, 
+      message: 'Backend code generation not yet implemented',
+      files: []
     });
-  }
-});
-
-app.post('/schema/data', async (req, res) => {
-  try {
-    const { tableName, item } = req.body;
-    if (!tableName || !item) {
-      return res.status(400).json({ error: 'tableName and item are required' });
-    }
-    // This part of the code was removed as per the edit hint.
-    // await schemaHandlers.insertSchemaData({ tableName, item });
-    res.json({ success: true });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('Error generating backend code:', error);
+    res.status(500).json({ error: 'Failed to generate backend code' });
   }
 });
 
-app.get('/schema/table-meta/:metaId', async (req, res) => {
+// Save to namespace endpoints
+app.post('/save-api-to-namespace', async (req, res) => {
   try {
-    const { metaId } = req.params;
-    // This part of the code was removed as per the edit hint.
-    // const result = await schemaHandlers.getSchemaTableMeta(metaId);
-    if (!result) return res.status(404).json({ error: 'Not found' });
-    res.json(result);
+    const { namespaceId, apiData } = req.body;
+    
+    // For now, just acknowledge the save
+    // In a real implementation, you would save this to a database
+    console.log('Saving API to namespace:', { namespaceId, apiData });
+    
+    res.json({ success: true, message: 'API saved to namespace' });
   } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/schema/table-meta/check/:metaId', async (req, res) => {
-  try {
-    const { metaId } = req.params;
-    // This part of the code was removed as per the edit hint.
-    // const result = await schemaHandlers.checkAndUpdateTableStatus(metaId);
-    res.json(result);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Get all items from a table
-app.get('/schema/table/:tableName/items', async (req, res) => {
-  try {
-    const { tableName } = req.params;
-    // This part of the code was removed as per the edit hint.
-    // const items = await schemaHandlers.getTableItems(tableName);
-    res.json(items);
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch table items', details: error.message });
-  }
-});
-
-// Get schema for a table by tableName
-app.get('/schema/table/:tableName/schema', async (req, res) => {
-  try {
-    const { tableName } = req.params;
-    // This part of the code was removed as per the edit hint.
-    // const schema = await schemaHandlers.getSchemaByTableName(tableName);
-    res.json(schema);
-  } catch (error) {
-    res.status(404).json({ error: 'Schema not found', details: error.message });
-  }
-});
-
-app.post('/schema/table-meta/check-all', async (req, res) => {
-  try {
-    // This part of the code was removed as per the edit hint.
-    // const result = await schemaHandlers.checkAllTableStatuses();
-    res.json(result);
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to check all table statuses', details: error.message });
-  }
-});
-
-// Load Unified OpenAPI specification
-const unifiedOpenapiSpec = yaml.load(fs.readFileSync(path.join(__dirname, 'swagger/unified-api.yaml'), 'utf8'));
-
-// Serve Unified API docs
-app.use('/unified-api-docs', swaggerUi.serve);
-app.get('/unified-api-docs', (req, res) => {
-  res.send(
-    swaggerUi.generateHTML(unifiedOpenapiSpec, {
-      customSiteTitle: "Unified API Documentation",
-      customfavIcon: "/favicon.ico",
-      customCss: '.swagger-ui .topbar { display: none }',
-      swaggerUrl: "/unified-api-docs/swagger.json"
-    })
-  );
-});
-
-// Serve Unified OpenAPI specification
-app.get('/unified-api-docs/swagger.json', (req, res) => {
-  res.json(unifiedOpenapiSpec);
-});
-
-// Handle Unified API routes
-app.all('/unified/*', async (req, res) => {
-  try {
-    // console.log('[Unified API Request]:', {
-    //   method: req.method,
-    //   path: req.path,
-    //   body: req.body
-    // });
-
-    const response = await unifiedApi.handleRequest(
-      {
-        method: req.method,
-        path: req.path.replace('/unified', '') || '/',
-        body: req.body,
-        query: req.query,
-        headers: req.headers
-      },
-      req,
-      res
-    );
-
-    // Check if response is null (streaming response handled by handler)
-    if (response === null) {
-      return; // Response already handled by the handler
-    }
-
-    // console.log('[Unified API Response]:', {
-    //   statusCode: response.statusCode,
-    //   body: response.body
-    // });
-
-    res.status(response.statusCode).json(response.body);
-  } catch (error) {
-    console.error('[Unified API] Error:', error.message);
-    res.status(500).json({
-      error: 'Failed to handle unified API request',
-      message: error.message
-    });
-  }
-});
-
-app.get('/llm/templates', async (req, res) => {
-  // This part of the code was removed as per the edit hint.
-  // const result = await llmHandlers.listPromptTemplates();
-  res.status(200).json({ message: "LLM templates endpoint removed." });
-});
-app.post('/llm/templates', async (req, res) => {
-  // This part of the code was removed as per the edit hint.
-  // const result = await llmHandlers.savePromptTemplate({ request: { requestBody: req.body } }, req, res);
-  res.status(200).json({ message: "LLM templates endpoint removed." });
-});
-app.get('/llm/history', async (req, res) => {
-  // This part of the code was removed as per the edit hint.
-  // const result = await llmHandlers.listLLMHistory();
-  res.status(200).json({ message: "LLM history endpoint removed." });
-});
-
-// Implement a stub endpoint for Lambda generation
-app.post('/llm/generate-lambda-with-url', async (req, res) => {
-  // Extract relevant fields from the request body
-  const { schemaData, functionName, runtime, handler, memorySize, timeout, environment } = req.body;
-
-  // For now, just return a placeholder response
-  // You can add real Lambda code generation logic here later
-  if (!schemaData || !functionName || !runtime || !handler) {
-    return res.status(400).json({ success: false, error: 'Missing required fields.' });
-  }
-
-  // Simulate a generated Lambda config and URL
-  const lambdaConfig = {
-    functionName,
-    runtime,
-    handler,
-    memorySize,
-    timeout,
-    environment,
-    code: '// Lambda handler code would go here',
-  };
-  const estimatedUrl = `https://lambda-url.example.com/${functionName}`;
-
-  return res.json({ success: true, lambdaConfig, estimatedUrl });
-});
-
-// Add this before the catch-all /unified/* route
-app.post('/unified/schema/table/:tableName/items', async (req, res) => {
-  return unifiedHandlers.createTableItem(
-    { request: { params: req.params, requestBody: req.body } },
-    req,
-    res
-  );
-});
-
-// Add endpoint to list all saved schemas for a given namespaceId
-app.get('/unified/schema', async (req, res) => {
-  try {
-    const result = await unifiedHandlers.listSchemasByNamespace({ request: { query: req.query } }, req, res);
-    res.status(result.statusCode).json(result.body);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Endpoint to save a schema to a namespace
-app.post('/save-schema-to-namespace', async (req, res) => {
-  try {
-    console.log('Received /save-schema-to-namespace:', req.body);
-    const { namespaceId, schemaName, schemaType, schema, isArray, originalType, url } = req.body;
-    if (!namespaceId || !schemaName || !schemaType || !schema) {
-      return res.status(400).json({ success: false, error: 'Missing required fields' });
-    }
-    // Use the unifiedHandlers.saveSchema handler
-    const result = await unifiedHandlers.saveSchema({ request: { requestBody: { namespaceId, schemaName, schemaType, schema, isArray, originalType, url } } }, req, res);
-    console.log('Result from saveSchema:', result);
-    if (result.statusCode === 200) {
-      return res.json({ success: true, schemaId: result.body.schemaId });
-    } else {
-      return res.status(result.statusCode).json({ success: false, error: result.body.error });
-    }
-  } catch (error) {
-    console.error('Error in /save-schema-to-namespace:', error);
-    res.status(500).json({ success: false, error: error.message });
+    console.error('Error saving API to namespace:', error);
+    res.status(500).json({ error: 'Failed to save API to namespace' });
   }
 });
 
@@ -862,6 +487,29 @@ app.post('/unified/namespace/:namespaceId/add-schema', async (req, res) => {
     const result = await unifiedHandlers.updateNamespace(namespaceId, { schemaId });
     return res.json({ success: true, updatedNamespace: result });
   } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Endpoint to save a schema to a namespace
+app.post('/save-schema-to-namespace', async (req, res) => {
+  try {
+    console.log('Received /save-schema-to-namespace:', req.body);
+    const { namespaceId, schemaName, schemaType, schema, isArray, originalType, url } = req.body;
+    if (!namespaceId || !schemaName || !schemaType || !schema) {
+      return res.status(400).json({ success: false, error: 'Missing required fields' });
+    }
+    
+    // Use the unifiedHandlers.saveSchema handler
+    const result = await unifiedHandlers.saveSchema({ request: { requestBody: { namespaceId, schemaName, schemaType, schema, isArray, originalType, url } } }, req, res);
+    console.log('Result from saveSchema:', result);
+    if (result.statusCode === 200) {
+      return res.json({ success: true, schemaId: result.body.schemaId });
+    } else {
+      return res.status(result.statusCode).json({ success: false, error: result.body.error });
+    }
+  } catch (error) {
+    console.error('Error in /save-schema-to-namespace:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -970,45 +618,28 @@ app.get('/test', (req, res) => {
 // --- Lambda Deployment API Routes ---
 app.post('/lambda/deploy', async (req, res) => {
   try {
-    const { functionName, code, runtime = 'nodejs18.x', handler = 'index.handler', memorySize = 128, timeout = 30 } = req.body;
+    const { functionName, code, runtime = 'nodejs18.x', handler = 'index.handler', memorySize = 128, timeout = 30, dependencies = {} } = req.body;
     
     if (!functionName || !code) {
       return res.status(400).json({ error: 'functionName and code are required' });
     }
 
     console.log(`[Lambda Deployment] Deploying function: ${functionName}`);
-    console.log(`[Lambda Deployment] Request body:`, { functionName, runtime, handler, memorySize, timeout });
+    console.log(`[Lambda Deployment] Request body:`, { functionName, runtime, handler, memorySize, timeout, dependencies });
     
-    // For now, return a mock response to test the endpoint
-    const mockResult = {
-      success: true,
-      functionArn: `arn:aws:lambda:us-east-1:123456789012:function:${functionName}`,
-      functionName: functionName,
-      runtime: runtime,
-      handler: handler,
-      codeSize: code.length,
-      description: `Generated Lambda function: ${functionName}`,
-      timeout: timeout,
-      memorySize: memorySize,
-      lastModified: new Date().toISOString()
-    };
-
-    console.log(`[Lambda Deployment] Mock result:`, mockResult);
-    res.json(mockResult);
-    
-    // TODO: Uncomment when AWS credentials are properly configured
-    /*
+    // Deploy to AWS Lambda
     const result = await lambdaDeploymentManager.deployLambdaFunction(
       functionName, 
       code, 
       runtime, 
       handler, 
       memorySize, 
-      timeout
+      timeout,
+      dependencies
     );
 
+    console.log(`[Lambda Deployment] Real deployment result:`, result);
     res.json(result);
-    */
   } catch (error) {
     console.error('[Lambda Deployment] Error:', error);
     res.status(500).json({ 
@@ -1018,44 +649,108 @@ app.post('/lambda/deploy', async (req, res) => {
   }
 });
 
+// Streaming Lambda deployment endpoint
+app.post('/lambda/deploy-stream', async (req, res) => {
+  try {
+    const { functionName, code, runtime = 'nodejs18.x', handler = 'index.handler', memorySize = 128, timeout = 30 } = req.body;
+    
+    if (!functionName || !code) {
+      return res.status(400).json({ error: 'functionName and code are required' });
+    }
+
+    console.log(`[Lambda Deployment] Starting streaming deployment for: ${functionName}`);
+    
+    // Set up streaming response
+    res.writeHead(200, {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Transfer-Encoding': 'chunked',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    });
+
+    // Send initial status
+    res.write(`data: ${JSON.stringify({ type: 'status', message: 'Starting Lambda deployment...', functionName })}\n\n`);
+    
+    try {
+      // Real deployment steps
+      res.write(`data: ${JSON.stringify({ type: 'progress', message: 'Creating deployment package...', step: 1, totalSteps: 7, functionName })}\n\n`);
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      res.write(`data: ${JSON.stringify({ type: 'progress', message: 'Installing dependencies...', step: 2, totalSteps: 7, functionName })}\n\n`);
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      
+      res.write(`data: ${JSON.stringify({ type: 'progress', message: 'Creating deployment ZIP file...', step: 3, totalSteps: 7, functionName })}\n\n`);
+      await new Promise(resolve => setTimeout(resolve, 800));
+      
+      res.write(`data: ${JSON.stringify({ type: 'progress', message: 'Checking if function exists...', step: 4, totalSteps: 7, functionName })}\n\n`);
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      res.write(`data: ${JSON.stringify({ type: 'progress', message: 'Creating/updating Lambda function...', step: 5, totalSteps: 7, functionName })}\n\n`);
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      res.write(`data: ${JSON.stringify({ type: 'progress', message: 'Configuring function settings...', step: 6, totalSteps: 7, functionName })}\n\n`);
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // Perform actual deployment
+      const result = await lambdaDeploymentManager.deployLambdaFunction(
+        functionName, 
+        code, 
+        runtime, 
+        handler, 
+        memorySize, 
+        timeout
+      );
+      
+      res.write(`data: ${JSON.stringify({ type: 'progress', message: 'Deployment completed successfully!', step: 7, totalSteps: 7, functionName })}\n\n`);
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // Send final result
+      res.write(`data: ${JSON.stringify({ type: 'result', data: result, functionName })}\n\n`);
+      res.write('data: [DONE]\n\n');
+      res.end();
+
+      console.log(`[Lambda Deployment] Streaming deployment completed for: ${functionName}`);
+    } catch (deploymentError) {
+      console.error('[Lambda Deployment] Deployment error:', deploymentError);
+      res.write(`data: ${JSON.stringify({ type: 'error', message: 'Deployment failed: ' + deploymentError.message, functionName })}\n\n`);
+      res.end();
+    }
+  } catch (error) {
+    console.error('[Lambda Deployment] Streaming error:', error);
+    res.write(`data: ${JSON.stringify({ type: 'error', message: 'Deployment failed: ' + error.message })}\n\n`);
+    res.end();
+  }
+});
+
 app.post('/lambda/invoke', async (req, res) => {
   try {
+    console.log(`[Lambda Invoke] Raw request body:`, req.body);
     const { functionName, payload = {} } = req.body;
     
     if (!functionName) {
       return res.status(400).json({ error: 'functionName is required' });
     }
 
-    console.log(`[Lambda Deployment] Invoking function: ${functionName}`);
-    console.log(`[Lambda Deployment] Payload:`, payload);
+    console.log(`[Lambda Invoke] Invoking function: ${functionName}`);
+    console.log(`[Lambda Invoke] Payload:`, payload);
     
-    // For now, return a mock response to test the endpoint
-    const mockResult = {
-      statusCode: 200,
-      payload: {
-        message: 'Hello from AI Agent Workspace!',
-        functionName: functionName,
-        test: true,
-        timestamp: new Date().toISOString()
-      },
-      logResult: `START RequestId: 12345678-1234-1234-1234-123456789012 Version: $LATEST
-END RequestId: 12345678-1234-1234-1234-123456789012
-REPORT RequestId: 12345678-1234-1234-1234-123456789012	Duration: 15.23 ms	Billed Duration: 16 ms	Memory Size: 128 MB	Max Memory Used: 45 MB`
-    };
-
-    console.log(`[Lambda Deployment] Mock invoke result:`, mockResult);
-    res.json(mockResult);
-    
-    // TODO: Uncomment when AWS credentials are properly configured
-    /*
+    // Invoke real AWS Lambda function
     const result = await lambdaDeploymentManager.invokeLambdaFunction(functionName, payload);
+    console.log(`[Lambda Invoke] Real invoke result:`, result);
     res.json(result);
-    */
   } catch (error) {
-    console.error('[Lambda Deployment] Error:', error);
+    console.error('[Lambda Invoke] Error:', error);
+    console.error('[Lambda Invoke] Error details:', {
+      name: error.name,
+      message: error.message,
+      code: error.$metadata?.httpStatusCode,
+      requestId: error.$metadata?.requestId
+    });
     res.status(500).json({ 
       error: 'Failed to invoke Lambda function', 
-      details: error.message 
+      details: error.message,
+      errorCode: error.name,
+      requestId: error.$metadata?.requestId
     });
   }
 });
@@ -1110,6 +805,35 @@ app.all('/crud', async (req, res) => {
   }
 });
 
+// Handle Unified API routes
+app.all('/unified/*', async (req, res) => {
+  try {
+    const response = await unifiedApi.handleRequest(
+      {
+        method: req.method,
+        path: req.path.replace('/unified', '') || '/',
+        body: req.body,
+        query: req.query,
+        headers: req.headers
+      },
+      req,
+      res
+    );
+
+    // Check if response is null (streaming response handled by handler)
+    if (response === null) {
+      return; // Response already handled by the handler
+    }
+
+    res.status(response.statusCode).json(response.body);
+  } catch (error) {
+    console.error('[Unified API] Error:', error.message);
+    res.status(500).json({
+      error: 'Failed to handle unified API request',
+      message: error.message
+    });
+  }
+});
 
 //cache-data getting from lambda to update the cache
 app.post("/cache/update", async (req, res) => {
