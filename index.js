@@ -27,6 +27,8 @@ import {
   testCacheConnection
 } from './utils/cache.js';
 
+import { updateCacheFromLambdaHandler } from './utils/cache.js';
+
 import {
   indexTableHandler,
   searchIndexHandler,
@@ -191,7 +193,7 @@ const unifiedApiHandlers = {
   getWebhooksByMethod: unifiedHandlers.getWebhooksByMethod,
   getActiveWebhooks: unifiedHandlers.getActiveWebhooks,
 
-
+ 
 }; 
 
 // THEN initialize OpenAPIBackend
@@ -926,6 +928,33 @@ app.get('/cache/stats', getCacheStatsHandler);
 app.get('/cache/health', cacheHealthHandler);
 app.get('/cache/test', testCacheConnection);
 
+// Cache update from Lambda function
+app.post('/cache-data', updateCacheFromLambdaHandler);
+
+// Test endpoint to simulate Lambda cache update
+app.post('/cache/test-update', async (req, res) => {
+  try {
+    const { type, newItem, oldItem, tableName } = req.body;
+    
+    console.log('Testing cache update with:', { type, tableName, newItem, oldItem });
+    
+    // Create a test request that mimics what Lambda would send
+    const testReq = {
+      body: {
+        type: type || 'INSERT',
+        newItem: newItem || { id: 'test-id', data: 'test-data' },
+        oldItem: oldItem,
+        tableName: tableName || 'brmh-cache'
+      }
+    };
+    
+    await updateCacheFromLambdaHandler(testReq, res);
+  } catch (error) {
+    console.error('Test cache update error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // --- Search Indexing API Routes ---
 app.post('/search/index', indexTableHandler);
 app.post('/search/query', searchIndexHandler);
@@ -1080,6 +1109,60 @@ app.all('/crud', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+
+//cache-data getting from lambda to update the cache
+app.post("/cache/update", async (req, res) => {
+  try {
+    const { type, newItem, oldItem } = req.body;
+
+    console.log("Received from Lambda:");
+    console.log("Event Type:", type);
+    console.log("New Item:", newItem);
+    console.log("Old Item:", oldItem);
+
+    // Extract table name from the item
+    let tableName = null;
+    
+    // Try to get table name from the item structure
+    if (newItem && newItem.tableName) {
+      tableName = newItem.tableName;
+    } else if (oldItem && oldItem.tableName) {
+      tableName = oldItem.tableName;
+    } else {
+      // If no tableName in item, try to extract from DynamoDB structure
+      // Look for common table name patterns in the item
+      const item = newItem || oldItem;
+      if (item) {
+        // Check if item has a tableName field in DynamoDB format
+        if (item.tableName && item.tableName.S) {
+          tableName = item.tableName.S;
+        } else if (item.tableName && typeof item.tableName === 'string') {
+          tableName = item.tableName;
+        } else {
+          // Try to infer table name from the item structure or context
+          // For now, we'll use a default or extract from the request context
+          tableName = 'brmh-cache'; // Default fallback
+        }
+      }
+    }
+
+    if (!tableName) {
+      console.error("Could not determine table name from item");
+      return res.status(400).json({ error: "Could not determine table name from item" });
+    }
+
+    console.log(`Processing cache update for table: ${tableName}`);
+
+    // Use the existing cache update handler
+    await updateCacheFromLambdaHandler(req, res);
+
+  } catch (error) {
+    console.error("Error in cache update endpoint:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 
 
 const PORT = process.env.PORT || 5001;
