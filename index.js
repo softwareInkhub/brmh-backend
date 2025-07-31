@@ -16,14 +16,16 @@ import { exec } from 'child_process';
 import { handlers as unifiedHandlers } from './lib/unified-handlers.js';
 
 import { aiAgentHandler, aiAgentStreamHandler } from './lib/ai-agent-handlers.js';
-// import { 
-//   cacheTableHandler, 
-//   getCachedDataHandler, 
-//   clearCacheHandler, 
-//   getCacheStatsHandler, 
-//   cacheHealthHandler,
-//   testCacheConnection
-// } from './utils/cache.js';
+import { agentSystem } from './lib/llm-agent-system.js';
+import { lambdaDeploymentManager } from './lib/lambda-deployment.js';
+import { 
+  cacheTableHandler, 
+  getCachedDataHandler, 
+  clearCacheHandler, 
+  getCacheStatsHandler, 
+  cacheHealthHandler,
+  testCacheConnection
+} from './utils/cache.js';
 
 import {
   indexTableHandler,
@@ -34,12 +36,6 @@ import {
 } from './utils/search-indexing.js';
 
 import * as crud from './utils/crud.js';
-import { signupHandler, loginHandler } from './utils/brmh-auth.js';
-
-import { handleLambdaCodegen } from './lib/llm-agent-system.js';
-import { agentSystem } from './lib/llm-agent-system.js';
-
-import { errorHandler } from './middleware/errorHandler.js';
 
 // Load environment variables
 dotenv.config();
@@ -292,43 +288,111 @@ app.get('/ai-agent-docs', (req, res) => {
 
 // Route AI Agent endpoints
 app.post('/ai-agent', (req, res) => aiAgentHandler({ request: { requestBody: req.body } }, req, res));
-// Chat and schema editing endpoint
+
+// AI Agent streaming endpoint for chat and schema editing
 app.post('/ai-agent/stream', async (req, res) => {
   const { message, namespace, history, schema } = req.body;
   try {
     await agentSystem.handleStreamingWithAgents(res, namespace, message, history, schema);
   } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-// Lambda codegen endpoint
-app.post('/llm/generate-lambda', async (req, res) => {
-  const { message, selectedSchema, functionName, runtime, handler, memory, timeout, environment } = req.body;
-  try {
-    const result = await handleLambdaCodegen({ message, selectedSchema, functionName, runtime, handler, memory, timeout, environment });
-    res.json(result);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('AI Agent streaming error:', error);
+    res.status(500).json({ error: 'Failed to handle AI Agent streaming request' });
   }
 });
 
-// Endpoint to clear all unsaved/generated schemas for a namespace/session
-app.post('/ai-agent/clear-generated-schemas', async (req, res) => {
+// AI Agent Lambda codegen endpoint
+app.post('/ai-agent/lambda-codegen', async (req, res) => {
+  const { message, namespace, selectedSchema, functionName, runtime, handler, memory, timeout, environment } = req.body;
+  console.log('[AI Agent] Lambda codegen request:', { message, selectedSchema, functionName, runtime, handler, memory, timeout, environment });
+
   try {
-    const { sessionId, namespaceId } = req.body;
-    if (!sessionId || !namespaceId) {
-      return res.status(400).json({ success: false, error: 'Missing sessionId or namespaceId' });
-    }
-    // Clear the workspace state for this session/namespace (in-memory/session store)
-    // If you use a DB or cache for workspace state, clear it here
-    // For now, respond as if successful (implement actual clearing logic as needed)
-    // Example: await workspaceStateStore.clear(sessionId, namespaceId);
-    return res.json({ success: true });
+    // Create a specialized prompt for Lambda generation
+    const lambdaPrompt = `Generate a complete AWS Lambda handler function.
+
+Requirements:
+- Function purpose: ${message}
+- Function name: ${functionName}
+- Runtime: ${runtime}
+- Handler: ${handler}
+- Memory: ${memory} MB
+- Timeout: ${timeout} seconds
+- Environment variables: ${environment || 'none'}
+
+${selectedSchema ? `Schema context:\n${JSON.stringify(selectedSchema, null, 2)}\n` : ''}
+
+Generate a complete, production-ready Lambda handler that:
+1. Handles the specified requirements
+2. Includes proper error handling
+3. Returns appropriate HTTP responses
+4. Uses the provided schema if applicable
+5. Follows AWS Lambda best practices
+
+Output ONLY the JavaScript code, no explanations or markdown.`;
+
+    // Use the agent system to generate the code
+    const response = await agentSystem.handleStreamingWithAgents(
+      res, 
+      namespace?.['namespace-name'] || 'default', 
+      lambdaPrompt, 
+      [], // No history needed for code generation
+      selectedSchema
+    );
+
+    // The agent system handles the response, so we don't need to send anything here
+    return;
+
   } catch (error) {
-    console.error('Error clearing generated schemas:', error);
-    res.status(500).json({ success: false, error: error.message });
+    console.error('[AI Agent] Lambda codegen error:', error);
+    res.status(500).json({ 
+      error: 'Failed to generate Lambda code',
+      details: error.message 
+    });
   }
 });
+
+// AI Agent Workspace State endpoints
+app.get('/ai-agent/get-workspace-state', async (req, res) => {
+  try {
+    const { sessionId, namespaceId } = req.query;
+    if (!sessionId || !namespaceId) {
+      return res.status(400).json({ error: 'Missing sessionId or namespaceId' });
+    }
+    
+    // For now, return a default workspace state
+    // In a real implementation, you would load this from a database or cache
+    const workspaceState = {
+      files: [],
+      schemas: [],
+      apis: [],
+      projectType: 'nodejs',
+      lastGenerated: null
+    };
+    
+    res.json({ success: true, workspaceState });
+  } catch (error) {
+    console.error('Error getting workspace state:', error);
+    res.status(500).json({ error: 'Failed to get workspace state' });
+  }
+});
+
+app.post('/ai-agent/save-workspace-state', async (req, res) => {
+  try {
+    const { sessionId, namespaceId, workspaceState } = req.body;
+    if (!sessionId || !namespaceId || !workspaceState) {
+      return res.status(400).json({ error: 'Missing sessionId, namespaceId, or workspaceState' });
+    }
+    
+    // For now, just acknowledge the save
+    // In a real implementation, you would save this to a database or cache
+    console.log('Saving workspace state:', { sessionId, namespaceId, workspaceState });
+    
+    res.json({ success: true, message: 'Workspace state saved' });
+  } catch (error) {
+    console.error('Error saving workspace state:', error);
+    res.status(500).json({ error: 'Failed to save workspace state' });
+  }
+});
+
 
 
 // Handle AWS DynamoDB routesss
@@ -719,26 +783,28 @@ app.get('/llm/history', async (req, res) => {
 
 // Implement a stub endpoint for Lambda generation
 app.post('/llm/generate-lambda-with-url', async (req, res) => {
+  // Extract relevant fields from the request body
   const { schemaData, functionName, runtime, handler, memorySize, timeout, environment } = req.body;
+
+  // For now, just return a placeholder response
+  // You can add real Lambda code generation logic here later
   if (!schemaData || !functionName || !runtime || !handler) {
     return res.status(400).json({ success: false, error: 'Missing required fields.' });
   }
-  try {
-    const result = await handleLambdaCodegen({ message: 'Generate Lambda', selectedSchema: schemaData, functionName, runtime, handler, memory: memorySize, timeout, environment });
-    const lambdaConfig = {
-      functionName,
-      runtime,
-      handler,
-      memorySize,
-      timeout,
-      environment,
-      code: result.generatedCode,
-    };
-    const estimatedUrl = `https://lambda-url.example.com/${functionName}`;
-    return res.json({ success: true, lambdaConfig, estimatedUrl });
-  } catch (error) {
-    return res.status(500).json({ success: false, error: error.message });
-  }
+
+  // Simulate a generated Lambda config and URL
+  const lambdaConfig = {
+    functionName,
+    runtime,
+    handler,
+    memorySize,
+    timeout,
+    environment,
+    code: '// Lambda handler code would go here',
+  };
+  const estimatedUrl = `https://lambda-url.example.com/${functionName}`;
+
+  return res.json({ success: true, lambdaConfig, estimatedUrl });
 });
 
 // Add this before the catch-all /unified/* route
@@ -750,10 +816,10 @@ app.post('/unified/schema/table/:tableName/items', async (req, res) => {
   );
 });
 
-// Add endpoint to list all saved schemas
+// Add endpoint to list all saved schemas for a given namespaceId
 app.get('/unified/schema', async (req, res) => {
   try {
-    const result = await unifiedHandlers.listSchemas({ request: { query: req.query } }, req, res);
+    const result = await unifiedHandlers.listSchemasByNamespace({ request: { query: req.query } }, req, res);
     res.status(result.statusCode).json(result.body);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -853,12 +919,12 @@ app.post('/api/test-openapi-endpoint', async (req, res) => {
   }
 });
 
-// app.post('/cache/table', cacheTableHandler);
-// app.get('/cache/data', getCachedDataHandler);
-// app.get('/cache/clear', clearCacheHandler);
-// app.get('/cache/stats', getCacheStatsHandler);
-// app.get('/cache/health', cacheHealthHandler);
-// app.get('/cache/test', testCacheConnection);
+app.post('/cache/table', cacheTableHandler);
+app.get('/cache/data', getCachedDataHandler);
+app.get('/cache/clear', clearCacheHandler);
+app.get('/cache/stats', getCacheStatsHandler);
+app.get('/cache/health', cacheHealthHandler);
+app.get('/cache/test', testCacheConnection);
 
 // --- Search Indexing API Routes ---
 app.post('/search/index', indexTableHandler);
@@ -867,12 +933,133 @@ app.post('/search/indices', listIndicesHandler);
 app.post('/search/delete', deleteIndicesHandler);
 app.get('/search/health', searchHealthHandler);
 
+// Test endpoint
+app.get('/test', (req, res) => {
+  res.json({ message: 'Server is working!' });
+});
 
-// Add authentication routes for signup and login
-app.post('/auth/signup', signupHandler);
-app.post('/auth/login', loginHandler);
+// --- Lambda Deployment API Routes ---
+app.post('/lambda/deploy', async (req, res) => {
+  try {
+    const { functionName, code, runtime = 'nodejs18.x', handler = 'index.handler', memorySize = 128, timeout = 30 } = req.body;
+    
+    if (!functionName || !code) {
+      return res.status(400).json({ error: 'functionName and code are required' });
+    }
 
+    console.log(`[Lambda Deployment] Deploying function: ${functionName}`);
+    console.log(`[Lambda Deployment] Request body:`, { functionName, runtime, handler, memorySize, timeout });
+    
+    // For now, return a mock response to test the endpoint
+    const mockResult = {
+      success: true,
+      functionArn: `arn:aws:lambda:us-east-1:123456789012:function:${functionName}`,
+      functionName: functionName,
+      runtime: runtime,
+      handler: handler,
+      codeSize: code.length,
+      description: `Generated Lambda function: ${functionName}`,
+      timeout: timeout,
+      memorySize: memorySize,
+      lastModified: new Date().toISOString()
+    };
 
+    console.log(`[Lambda Deployment] Mock result:`, mockResult);
+    res.json(mockResult);
+    
+    // TODO: Uncomment when AWS credentials are properly configured
+    /*
+    const result = await lambdaDeploymentManager.deployLambdaFunction(
+      functionName, 
+      code, 
+      runtime, 
+      handler, 
+      memorySize, 
+      timeout
+    );
+
+    res.json(result);
+    */
+  } catch (error) {
+    console.error('[Lambda Deployment] Error:', error);
+    res.status(500).json({ 
+      error: 'Failed to deploy Lambda function', 
+      details: error.message 
+    });
+  }
+});
+
+app.post('/lambda/invoke', async (req, res) => {
+  try {
+    const { functionName, payload = {} } = req.body;
+    
+    if (!functionName) {
+      return res.status(400).json({ error: 'functionName is required' });
+    }
+
+    console.log(`[Lambda Deployment] Invoking function: ${functionName}`);
+    console.log(`[Lambda Deployment] Payload:`, payload);
+    
+    // For now, return a mock response to test the endpoint
+    const mockResult = {
+      statusCode: 200,
+      payload: {
+        message: 'Hello from AI Agent Workspace!',
+        functionName: functionName,
+        test: true,
+        timestamp: new Date().toISOString()
+      },
+      logResult: `START RequestId: 12345678-1234-1234-1234-123456789012 Version: $LATEST
+END RequestId: 12345678-1234-1234-1234-123456789012
+REPORT RequestId: 12345678-1234-1234-1234-123456789012	Duration: 15.23 ms	Billed Duration: 16 ms	Memory Size: 128 MB	Max Memory Used: 45 MB`
+    };
+
+    console.log(`[Lambda Deployment] Mock invoke result:`, mockResult);
+    res.json(mockResult);
+    
+    // TODO: Uncomment when AWS credentials are properly configured
+    /*
+    const result = await lambdaDeploymentManager.invokeLambdaFunction(functionName, payload);
+    res.json(result);
+    */
+  } catch (error) {
+    console.error('[Lambda Deployment] Error:', error);
+    res.status(500).json({ 
+      error: 'Failed to invoke Lambda function', 
+      details: error.message 
+    });
+  }
+});
+
+app.post('/lambda/cleanup', async (req, res) => {
+  try {
+    const { functionName } = req.body;
+    
+    if (!functionName) {
+      return res.status(400).json({ error: 'functionName is required' });
+    }
+
+    console.log(`[Lambda Deployment] Cleaning up temp files for: ${functionName}`);
+    
+    await lambdaDeploymentManager.cleanupTempFiles(functionName);
+    res.json({ success: true, message: 'Temp files cleaned up successfully' });
+  } catch (error) {
+    console.error('[Lambda Deployment] Error:', error);
+    res.status(500).json({ 
+      error: 'Failed to cleanup temp files', 
+      details: error.message 
+    });
+  }
+});
+
+/**
+ * Generic CRUD endpoint for DynamoDB tables
+ * Usage:
+ *   - GET    /api/crud?tableName=...&partitionKey=...&sortKey=... (single item or paginated)
+ *   - POST   /api/crud?tableName=...   (body: { item: ... })
+ *   - PUT    /api/crud?tableName=...   (body: { key: ..., updates: ... })
+ *   - DELETE /api/crud?tableName=...   (body: { partitionKey: ..., sortKey: ... })
+ */
 app.all('/crud', async (req, res) => {
   try {
     const event = {
@@ -904,6 +1091,3 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`Unified API documentation available at http://localhost:${PORT}/unified-api-docs`);
   console.log(`AI Agent API documentation available at http://localhost:${PORT}/ai-agent-docs`);
 });
-
-app.use(errorHandler);
-
