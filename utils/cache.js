@@ -699,21 +699,47 @@ async function handleInsert(project, tableName, newItem, itemsPerKey, ttl) {
     await redis.set(cacheKey, value, 'EX', ttl);
     console.log(`✅ Cached single item: ${cacheKey}`);
   } else {
-    // Multiple items per key - need to update existing chunk or create new one
-    // This is a simplified approach - you might want more sophisticated chunking
-    const chunkKey = `${project}:${tableName}:chunk:${Math.floor(Date.now() / (itemsPerKey * 1000))}`;
-    const existingValue = await redis.get(chunkKey);
+    // Multiple items per key - find the best chunk to add to or create new one
+    const searchPattern = `${project}:${tableName}:chunk:*`;
+    const existingChunks = await redis.keys(searchPattern);
     
-    if (existingValue) {
-      // Add to existing chunk
+    console.log(`🔍 Found ${existingChunks.length} existing chunks`);
+    
+    let bestChunkKey = null;
+    let bestChunkSize = 0;
+    
+    // Find the chunk with the most space (closest to itemsPerKey but not full)
+    for (const chunkKey of existingChunks) {
+      const chunkValue = await redis.get(chunkKey);
+      if (chunkValue) {
+        const chunkItems = JSON.parse(chunkValue);
+        const chunkSize = chunkItems.length;
+        
+        console.log(`📦 Chunk ${chunkKey}: ${chunkSize}/${itemsPerKey} items`);
+        
+        // Prefer chunks that have space and are closest to being full
+        if (chunkSize < itemsPerKey && chunkSize > bestChunkSize) {
+          bestChunkKey = chunkKey;
+          bestChunkSize = chunkSize;
+        }
+      }
+    }
+    
+    if (bestChunkKey && bestChunkSize < itemsPerKey) {
+      // Add to existing chunk that has space
+      const existingValue = await redis.get(bestChunkKey);
       const existingItems = JSON.parse(existingValue);
       existingItems.push(newItem);
-      await redis.set(chunkKey, JSON.stringify(existingItems), 'EX', ttl);
-      console.log(`✅ Updated existing chunk: ${chunkKey}`);
+      await redis.set(bestChunkKey, JSON.stringify(existingItems), 'EX', ttl);
+      console.log(`✅ Added to existing chunk: ${bestChunkKey} (${existingItems.length}/${itemsPerKey} items)`);
+      cacheKey = bestChunkKey;
     } else {
       // Create new chunk
-      await redis.set(chunkKey, JSON.stringify([newItem]), 'EX', ttl);
-      console.log(`✅ Created new chunk: ${chunkKey}`);
+      const newChunkId = Date.now();
+      const newChunkKey = `${project}:${tableName}:chunk:${newChunkId}`;
+      await redis.set(newChunkKey, JSON.stringify([newItem]), 'EX', ttl);
+      console.log(`✅ Created new chunk: ${newChunkKey} (1/${itemsPerKey} items)`);
+      cacheKey = newChunkKey;
     }
   }
 
