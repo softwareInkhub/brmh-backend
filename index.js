@@ -42,9 +42,15 @@ import {
 } from './utils/search-indexing.js';
 
 import * as crud from './utils/crud.js';
+import { execute } from './utils/execute.js';
 
 // Load environment variables
 dotenv.config();
+console.log("AWS_ACCESS_KEY_ID", process.env.AWS_ACCESS_KEY_ID);
+console.log("AWS_SECRET_ACCESS_KEY", process.env.AWS_SECRET_ACCESS_KEY);
+console.log("AWS_REGION", process.env.AWS_REGION);
+
+
 
 // Initialize DynamoDB client
 const client = new DynamoDBClient({});
@@ -295,6 +301,24 @@ app.get('/ai-agent-docs', (req, res) => {
       swaggerUrl: "/ai-agent-docs/swagger.json"
     })
   );
+});
+
+// Serve Unified API docs
+app.use('/unified-api-docs', swaggerUi.serve);
+app.get('/unified-api-docs', (req, res) => {
+  res.send(
+    swaggerUi.generateHTML(mainOpenapiSpec, {
+      customSiteTitle: "Unified API Documentation",
+      customfavIcon: "/favicon.ico",
+      customCss: '.swagger-ui .topbar { display: none }',
+      swaggerUrl: "/unified-api-docs/swagger.json"
+    })
+  );
+});
+
+// Serve Unified API specification
+app.get('/unified-api-docs/swagger.json', (req, res) => {
+  res.json(mainOpenapiSpec);
 });
 
 // Route AI Agent endpoints
@@ -808,6 +832,37 @@ app.all('/crud', async (req, res) => {
   }
 });
 
+// Execute endpoint - handles both single and paginated requests
+app.post('/execute', async (req, res) => {
+  try {
+    console.log('[Execute] Request received:', {
+      executeType: req.body.executeType,
+      url: req.body.url,
+      method: req.body.method
+    });
+
+    const event = {
+      body: req.body
+    };
+
+    const result = await execute(event);
+    
+    // Parse the result body if it's a string
+    let responseBody = result.body;
+    try {
+      responseBody = JSON.parse(result.body);
+    } catch {}
+
+    res.status(result.statusCode || 200).json(responseBody);
+  } catch (error) {
+    console.error('[Execute] Error:', error);
+    res.status(500).json({ 
+      error: 'Failed to execute request', 
+      details: error.message 
+    });
+  }
+});
+
 // Handle Unified API routes
 app.all('/unified/*', async (req, res) => {
   try {
@@ -893,6 +948,8 @@ app.post("/cache/update", async (req, res) => {
 
 
 const PORT = process.env.PORT || 5001;
+
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server listening on port ${PORT}`);
   console.log(`Main API documentation available at http://localhost:${PORT}/api-docs`);
