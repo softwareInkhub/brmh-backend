@@ -232,13 +232,108 @@ const aiAgentApi = new OpenAPIBackend({
 });
 
 // Initialize all APIs
-await Promise.all([
+Promise.all([
   awsApi.init(),
   unifiedApi.init(),
   aiAgentApi.init()
-]);
+]).catch(error => {
+  console.error('Error initializing OpenAPI backends:', error);
+});
 
+// --- Lambda Deployment API Routes ---
+app.post('/lambda/deploy', async (req, res) => {
+  try {
+    const { functionName, code, runtime = 'nodejs18.x', handler = 'index.handler', memorySize = 128, timeout = 30, dependencies = {} } = req.body;
+    
+    if (!functionName || !code) {
+      return res.status(400).json({ error: 'functionName and code are required' });
+    }
 
+    console.log(`[Lambda Deployment] Deploying function: ${functionName}`);
+    console.log(`[Lambda Deployment] Request body:`, { functionName, runtime, handler, memorySize, timeout, dependencies });
+    
+    // Set timeout for the entire deployment process (10 minutes)
+    const deploymentPromise = lambdaDeploymentManager.deployLambdaFunction(
+      functionName, 
+      code, 
+      runtime, 
+      handler, 
+      memorySize, 
+      timeout,
+      dependencies
+    );
+    
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Deployment timed out after 10 minutes')), 10 * 60 * 1000);
+    });
+    
+    const result = await Promise.race([deploymentPromise, timeoutPromise]);
+
+    console.log(`[Lambda Deployment] Real deployment result:`, result);
+    res.json(result);
+  } catch (error) {
+    console.error('[Lambda Deployment] Error:', error);
+    res.status(500).json({ 
+      error: 'Failed to deploy Lambda function', 
+      details: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+app.post('/lambda/invoke', async (req, res) => {
+  try {
+    console.log(`[Lambda Invoke] Raw request body:`, req.body);
+    const { functionName, payload = {} } = req.body;
+    
+    if (!functionName) {
+      return res.status(400).json({ error: 'functionName is required' });
+    }
+
+    console.log(`[Lambda Invoke] Invoking function: ${functionName}`);
+    console.log(`[Lambda Invoke] Payload:`, payload);
+    
+    // Invoke real AWS Lambda function
+    const result = await lambdaDeploymentManager.invokeLambdaFunction(functionName, payload);
+    console.log(`[Lambda Invoke] Real invoke result:`, result);
+    res.json(result);
+  } catch (error) {
+    console.error('[Lambda Invoke] Error:', error);
+    console.error('[Lambda Invoke] Error details:', {
+      name: error.name,
+      message: error.message,
+      code: error.$metadata?.httpStatusCode,
+      requestId: error.$metadata?.requestId
+    });
+    res.status(500).json({ 
+      error: 'Failed to invoke Lambda function', 
+      details: error.message,
+      errorCode: error.name,
+      requestId: error.$metadata?.requestId
+    });
+  }
+});
+
+app.post('/lambda/cleanup', async (req, res) => {
+  try {
+    const { functionName } = req.body;
+    
+    if (!functionName) {
+      return res.status(400).json({ error: 'functionName is required' });
+    }
+
+    console.log(`[Lambda Deployment] Cleaning up temp files for: ${functionName}`);
+    
+    await lambdaDeploymentManager.cleanupTempFiles(functionName);
+    res.json({ success: true, message: 'Temp files cleaned up successfully' });
+  } catch (error) {
+    console.error('[Lambda Deployment] Error:', error);
+    res.status(500).json({ 
+      error: 'Failed to cleanup temp files', 
+      details: error.message 
+    });
+  }
+});
 
 // Serve Swagger UI for all APIs
 const awsOpenapiSpec = yaml.load(fs.readFileSync(path.join(__dirname, 'swagger/aws-dynamodb.yaml'), 'utf8'));
@@ -631,40 +726,6 @@ app.get('/test', (req, res) => {
 
 
 
-// --- Lambda Deployment API Routes ---
-app.post('/lambda/deploy', async (req, res) => {
-  try {
-    const { functionName, code, runtime = 'nodejs18.x', handler = 'index.handler', memorySize = 128, timeout = 30, dependencies = {} } = req.body;
-    
-    if (!functionName || !code) {
-      return res.status(400).json({ error: 'functionName and code are required' });
-    }
-
-    console.log(`[Lambda Deployment] Deploying function: ${functionName}`);
-    console.log(`[Lambda Deployment] Request body:`, { functionName, runtime, handler, memorySize, timeout, dependencies });
-    
-    // Deploy to AWS Lambda
-    const result = await lambdaDeploymentManager.deployLambdaFunction(
-      functionName, 
-      code, 
-      runtime, 
-      handler, 
-      memorySize, 
-      timeout,
-      dependencies
-    );
-
-    console.log(`[Lambda Deployment] Real deployment result:`, result);
-    res.json(result);
-  } catch (error) {
-    console.error('[Lambda Deployment] Error:', error);
-    res.status(500).json({ 
-      error: 'Failed to deploy Lambda function', 
-      details: error.message 
-    });
-  }
-});
-
 // Streaming Lambda deployment endpoint
 app.post('/lambda/deploy-stream', async (req, res) => {
   try {
@@ -735,60 +796,6 @@ app.post('/lambda/deploy-stream', async (req, res) => {
     console.error('[Lambda Deployment] Streaming error:', error);
     res.write(`data: ${JSON.stringify({ type: 'error', message: 'Deployment failed: ' + error.message })}\n\n`);
     res.end();
-  }
-});
-
-app.post('/lambda/invoke', async (req, res) => {
-  try {
-    console.log(`[Lambda Invoke] Raw request body:`, req.body);
-    const { functionName, payload = {} } = req.body;
-    
-    if (!functionName) {
-      return res.status(400).json({ error: 'functionName is required' });
-    }
-
-    console.log(`[Lambda Invoke] Invoking function: ${functionName}`);
-    console.log(`[Lambda Invoke] Payload:`, payload);
-    
-    // Invoke real AWS Lambda function
-    const result = await lambdaDeploymentManager.invokeLambdaFunction(functionName, payload);
-    console.log(`[Lambda Invoke] Real invoke result:`, result);
-    res.json(result);
-  } catch (error) {
-    console.error('[Lambda Invoke] Error:', error);
-    console.error('[Lambda Invoke] Error details:', {
-      name: error.name,
-      message: error.message,
-      code: error.$metadata?.httpStatusCode,
-      requestId: error.$metadata?.requestId
-    });
-    res.status(500).json({ 
-      error: 'Failed to invoke Lambda function', 
-      details: error.message,
-      errorCode: error.name,
-      requestId: error.$metadata?.requestId
-    });
-  }
-});
-
-app.post('/lambda/cleanup', async (req, res) => {
-  try {
-    const { functionName } = req.body;
-    
-    if (!functionName) {
-      return res.status(400).json({ error: 'functionName is required' });
-    }
-
-    console.log(`[Lambda Deployment] Cleaning up temp files for: ${functionName}`);
-    
-    await lambdaDeploymentManager.cleanupTempFiles(functionName);
-    res.json({ success: true, message: 'Temp files cleaned up successfully' });
-  } catch (error) {
-    console.error('[Lambda Deployment] Error:', error);
-    res.status(500).json({ 
-      error: 'Failed to cleanup temp files', 
-      details: error.message 
-    });
   }
 });
 
