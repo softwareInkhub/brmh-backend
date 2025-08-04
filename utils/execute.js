@@ -2,6 +2,11 @@ import axios from 'axios';
 import { DynamoDBClient, DescribeTableCommand } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 
+// DynamoDB table names
+const NAMESPACES_TABLE = 'brmh-namespaces';
+const ACCOUNTS_TABLE = 'brmh-namespace-accounts';
+const METHODS_TABLE = 'brmh-namespace-methods';
+
 const client = new DynamoDBClient({
   region: process.env.AWS_REGION,
   credentials: {
@@ -179,6 +184,11 @@ const executeSingle = async (event) => {
       const { method = "GET", url, headers = {}, queryParams = {}, body: requestBody, save = false, tableName, idField = "id" } = body;
   
       if (!url) return { statusCode: 400, body: JSON.stringify({ error: "URL required" }) };
+      
+      // Validate tableName is provided when save is true
+      if (save && !tableName) {
+        return { statusCode: 400, body: JSON.stringify({ error: "tableName is required when save is true" }) };
+      }
   
       // Build URL with query params
       const urlObj = new URL(url);
@@ -258,6 +268,178 @@ function getNested(obj, path) {
   return path?.split('.').reduce((acc, key) => acc?.[key], obj);
 }
 
+// Namespace execution handler - fetches details from namespace, account, and method IDs
+const executeNamespace = async (event) => {
+  try {
+    const body = typeof event.body === "string" ? JSON.parse(event.body) : (event.body || event);
+    const { namespaceId, accountId, methodId, save = false, tableName, idField = "id" } = body;
+
+    // Validate required parameters
+    if (!namespaceId || !accountId || !methodId) {
+      return {
+        statusCode: 400,
+        body: JSON.stringify({ error: "namespaceId, accountId, and methodId are required" })
+      };
+    }
+
+    console.log(`[Namespace Execute] Fetching details for namespace: ${namespaceId}, account: ${accountId}, method: ${methodId}`);
+
+    // Fetch namespace details using API route
+    const namespaceResponse = await axios.get(`${process.env.BACKEND_URL || 'http://localhost:5001'}/unified/namespaces/${namespaceId}`);
+    if (namespaceResponse.status !== 200) {
+      return {
+        statusCode: 404,
+        body: JSON.stringify({ error: `Namespace with id ${namespaceId} not found` })
+      };
+    }
+    const namespace = namespaceResponse.data;
+
+    // Fetch account details using API route
+    const accountResponse = await axios.get(`${process.env.BACKEND_URL || 'http://localhost:5001'}/unified/accounts/${accountId}`);
+    if (accountResponse.status !== 200) {
+      return {
+        statusCode: 404,
+        body: JSON.stringify({ error: `Account with id ${accountId} not found` })
+      };
+    }
+    const account = accountResponse.data;
+
+    // Fetch method details using API route
+    const methodResponse = await axios.get(`${process.env.BACKEND_URL || 'http://localhost:5001'}/unified/methods/${methodId}`);
+    if (methodResponse.status !== 200) {
+      return {
+        statusCode: 404,
+        body: JSON.stringify({ error: `Method with id ${methodId} not found` })
+      };
+    }
+    const method = methodResponse.data;
+
+    console.log(`[Namespace Execute] Found namespace: ${namespace['namespace-name']}, account: ${account['namespace-account-name']}, method: ${method['namespace-method-name']}`);
+
+    // Extract method configuration
+    const methodConfig = method;
+    const url = methodConfig['namespace-method-url-override'] || methodConfig.url;
+    const methodType = methodConfig['namespace-method-type'] || 'GET';
+    const headers = methodConfig['namespace-method-header'] || {};
+    const queryParams = methodConfig['namespace-method-queryParams'] || {};
+
+    if (!url) {
+      return {
+        statusCode: 400,
+        body: JSON.stringify({ error: "Method does not have a valid URL configuration" })
+      };
+    }
+
+    // Merge account credentials with method headers
+    const finalHeaders = { ...headers };
+    
+    // Add authorization if account has credentials
+    if (account['namespace-account-header']) {
+      // Convert array of header objects to key-value pairs
+      const accountHeaders = {};
+      account['namespace-account-header'].forEach(header => {
+        if (header.key && header.value) {
+          accountHeaders[header.key] = header.value;
+        }
+      });
+      
+      // Merge account headers with method headers
+      Object.assign(finalHeaders, accountHeaders);
+    }
+
+    // Determine table name for saving
+    let finalTableName = tableName;
+    if (save && !finalTableName) {
+      // Auto-generate table name if not provided
+      const namespaceName = namespace['namespace-name'] || namespaceId;
+      const accountName = account['namespace-account-name'] || accountId;
+      const methodName = method['namespace-method-name'] || methodId;
+      finalTableName = `${namespaceName}-${accountName}-${methodName}`;
+    }
+
+           // Construct the full URL by combining account base URL with method path
+    let fullUrl = url;
+    if (account['namespace-account-url-override']) {
+      // If account has a base URL, combine it with the method path
+      const baseUrl = account['namespace-account-url-override'];
+      if (url.startsWith('/')) {
+        // Method path starts with /, append to base URL
+        fullUrl = `${baseUrl}${url}`;
+      } else {
+        // Method path doesn't start with /, add / between base and path
+        fullUrl = `${baseUrl}/${url}`;
+      }
+    }
+
+    console.log(`[Namespace Execute] Executing ${methodType} request to: ${fullUrl}`);
+    console.log(`[Namespace Execute] Headers:`, finalHeaders);
+    console.log(`[Namespace Execute] Query params:`, queryParams);
+
+    // Build URL with query params
+    const urlObj = new URL(fullUrl);
+    Object.entries(queryParams).forEach(([key, value]) => {
+      if (key && value) urlObj.searchParams.append(key.trim(), value.toString().trim());
+    });
+
+    // Make the request
+    const response = await axios({
+      method: methodType.toUpperCase(),
+      url: urlObj.toString(),
+      headers: finalHeaders,
+      validateStatus: () => true
+    });
+
+    // Save to DynamoDB if requested
+    let savedItems = [];
+    if (save && finalTableName && response.status === 200) {
+      try {
+        const desc = await client.send(new DescribeTableCommand({ TableName: finalTableName }));
+        const partitionKey = desc.Table?.KeySchema?.find(k => k.KeyType === "HASH")?.AttributeName;
+        
+        if (partitionKey) {
+          const items = Array.isArray(response.data) ? response.data : Object.values(response.data).find(v => Array.isArray(v)) || [];
+          
+          for (const item of items) {
+            const itemId = item[idField]?.toString();
+            if (itemId) {
+              await docClient.send(new PutCommand({
+                TableName: finalTableName,
+                Item: { ...item, [partitionKey]: itemId }
+              }));
+              savedItems.push(itemId);
+            }
+          }
+        }
+      } catch (error) {
+        console.error("Save error:", error);
+      }
+    }
+
+    return {
+      statusCode: response.status,
+      body: JSON.stringify({
+        success: response.status < 400,
+        status: response.status,
+        data: response.data,
+        savedCount: savedItems.length,
+        metadata: {
+          namespace: namespace['namespace-name'],
+          account: account['namespace-account-name'],
+          method: method['namespace-method-name'],
+          tableName: finalTableName
+        }
+      })
+    };
+
+  } catch (error) {
+    console.error("[Namespace Execute] Error:", error);
+    return {
+      statusCode: 500,
+      body: JSON.stringify({ error: error.message })
+    };
+  }
+};
+
 // Main execute handler - routes to paginated or single execution
 export const execute = async (event) => {
   try {
@@ -268,6 +450,9 @@ export const execute = async (event) => {
     if (executeType === "sync" || executeType === "get-all") {
       // Use paginated execution
       return await getAllSync(event);
+    } else if (executeType === "namespace") {
+      // Use namespace execution
+      return await executeNamespace(event);
     } else {
       // Use single execution
       return await executeSingle(event);

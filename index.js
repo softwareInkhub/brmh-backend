@@ -189,6 +189,7 @@ const unifiedApiHandlers = {
 
     // Namespace Account Operations
     getNamespaceAccounts: unifiedHandlers.getNamespaceAccounts,
+    getNamespaceAccountById: unifiedHandlers.getNamespaceAccountById,
     createNamespaceAccount: unifiedHandlers.createNamespaceAccount,
     updateNamespaceAccount: unifiedHandlers.updateNamespaceAccount,
     deleteNamespaceAccount: unifiedHandlers.deleteNamespaceAccount,
@@ -243,18 +244,6 @@ await Promise.all([
 const awsOpenapiSpec = yaml.load(fs.readFileSync(path.join(__dirname, 'swagger/aws-dynamodb.yaml'), 'utf8'));
 const mainOpenapiSpec = yaml.load(fs.readFileSync(path.join(__dirname, 'swagger/unified-api.yaml'), 'utf8'));
 
-// Serve main API docs
-app.use('/api-docs', swaggerUi.serve);
-app.get('/api-docs', (req, res) => {
-  res.send(
-    swaggerUi.generateHTML(mainOpenapiSpec, {
-      customSiteTitle: "Main API Documentation",
-      customfavIcon: "/favicon.ico",
-      customCss: '.swagger-ui .topbar { display: none }',
-      swaggerUrl: "/api-docs/swagger.json"
-    })
-  );
-});
 
 
 

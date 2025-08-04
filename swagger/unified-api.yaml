@@ -603,6 +603,25 @@ paths:
         required: true
         schema:
           type: string
+    get:
+      operationId: getNamespaceAccountById
+      summary: Get namespace account by ID
+      responses:
+        '200':
+          description: Account retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+        '404':
+          description: Account not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
     put:
       operationId: updateNamespaceAccount
       summary: Update namespace account
