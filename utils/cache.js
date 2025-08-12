@@ -5,31 +5,57 @@ import Redis from "ioredis";
 
 console.log('Cache service: importing modules and initializing clients');
 
-// Initialize Redis client
+// Initialize Redis client with enhanced configuration
 const redis = new Redis({
   host: process.env.REDIS_HOST || 'localhost',
-  port: process.env.REDIS_PORT || 6379,
-  tls: process.env.REDIS_TLS === 'true' ? {} : undefined, // Enable TLS if needed
-  password: process.env.REDIS_PASSWORD, // Optional password
+  port: parseInt(process.env.REDIS_PORT) || 6379,
+  tls: process.env.REDIS_TLS === 'true' ? {} : undefined,
+  password: process.env.REDIS_PASSWORD,
   retryDelayOnFailover: 100,
   maxRetriesPerRequest: 3,
+  lazyConnect: true,
+  connectTimeout: 10000,
+  commandTimeout: 10000,
+  showFriendlyErrorStack: true,
+  // Add connection debugging
+  enableOfflineQueue: false,
+  maxLoadingTimeout: 10000,
 });
 
 // Initialize DynamoDB clients
 const ddb = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(ddb);
 
-// Redis connection event handlers
+// Enhanced connection event handlers
 redis.on('connect', () => {
   console.log('✅ Redis connected successfully');
+  console.log('🔍 Connection details:', {
+    host: process.env.REDIS_HOST,
+    port: process.env.REDIS_PORT,
+    tls: process.env.REDIS_TLS,
+    tlsEnabled: process.env.REDIS_TLS === 'true'
+  });
 });
 
 redis.on('error', (err) => {
   console.error('❌ Redis connection error:', err);
+  console.error('🔍 Error details:', {
+    code: err.code,
+    errno: err.errno,
+    syscall: err.syscall,
+    address: err.address,
+    port: err.port,
+    host: process.env.REDIS_HOST,
+    tls: process.env.REDIS_TLS
+  });
 });
 
 redis.on('close', () => {
   console.log('🔌 Redis connection closed');
+});
+
+redis.on('ready', () => {
+  console.log('🚀 Redis is ready to accept commands');
 });
 
 /**
