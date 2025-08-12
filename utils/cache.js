@@ -9,7 +9,7 @@ console.log('Cache service: importing modules and initializing clients');
 const redis = new Redis({
   host: process.env.REDIS_HOST || 'localhost',
   port: parseInt(process.env.REDIS_PORT) || 6379,
-  tls: process.env.REDIS_TLS === 'true' ? {} : undefined,
+  tls: false, // Temporarily disable TLS to test connection
   password: process.env.REDIS_PASSWORD,
   retryDelayOnFailover: 100,
   maxRetriesPerRequest: 3,
@@ -312,10 +312,19 @@ export const getCachedDataHandler = async (req, res) => {
         data: { [cacheKey]: parsedData }
       });
     } else {
-      // Get all keys for project:table
+      // Get all keys for project:table using SCAN instead of KEYS
       const searchPattern = `${project}:${table}:*`;
       console.log(`🔎 Searching for all keys with pattern: ${searchPattern}`);
-      const keys = await redis.keys(searchPattern);
+      
+      // Use SCAN to get keys (more efficient than KEYS)
+      const keys = [];
+      let cursor = 0;
+      
+      do {
+        const result = await redis.scan(cursor, 'MATCH', searchPattern, 'COUNT', '100');
+        cursor = result[0];
+        keys.push(...result[1]);
+      } while (cursor !== 0);
       
       console.log(`📦 Found ${keys.length} total keys for ${project}:${table}`);
       if (keys.length > 0) {
@@ -366,10 +375,19 @@ export const getPaginatedCacheKeysHandler = async (req, res) => {
 
     console.log(`📋 Query params: project=${project}, table=${table}, page=${page}, limit=${limit}`);
 
-    // Get all keys for project:table
+    // Get all keys for project:table using SCAN instead of KEYS
     const searchPattern = `${project}:${table}:*`;
     console.log(`🔎 Searching for all keys with pattern: ${searchPattern}`);
-    const allKeys = await redis.keys(searchPattern);
+    
+    // Use SCAN to get keys (more efficient than KEYS)
+    const allKeys = [];
+    let cursor = 0;
+    
+    do {
+      const result = await redis.scan(cursor, 'MATCH', searchPattern, 'COUNT', '100');
+      cursor = result[0];
+      allKeys.push(...result[1]);
+    } while (cursor !== 0);
     
     console.log(`📦 Found ${allKeys.length} total keys for ${project}:${table}`);
     
@@ -433,7 +451,15 @@ export const clearCacheHandler = async (req, res) => {
       searchPattern = `${project}:${table}:*`;
     }
 
-    const keys = await redis.keys(searchPattern);
+    // Use SCAN to get keys (more efficient than KEYS)
+    const keys = [];
+    let cursor = 0;
+    
+    do {
+      const result = await redis.scan(cursor, 'MATCH', searchPattern, 'COUNT', '100');
+      cursor = result[0];
+      keys.push(...result[1]);
+    } while (cursor !== 0);
     
     if (keys.length === 0) {
       return res.status(404).json({
@@ -466,7 +492,16 @@ export const getCacheStatsHandler = async (req, res) => {
   try {
     const { project, table } = req.query;
     const searchPattern = `${project}:${table}:*`;
-    const keys = await redis.keys(searchPattern);
+    
+    // Use SCAN to get keys (more efficient than KEYS)
+    const keys = [];
+    let cursor = 0;
+    
+    do {
+      const result = await redis.scan(cursor, 'MATCH', searchPattern, 'COUNT', '100');
+      cursor = result[0];
+      keys.push(...result[1]);
+    } while (cursor !== 0);
     
     const stats = {
       totalKeys: keys.length,
