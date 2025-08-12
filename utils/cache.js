@@ -220,16 +220,23 @@ async function scanAndCacheWithBoundedBuffer(tableName, project, recordsPerKey, 
  * Get cached data from Redis
  */
 export const getCachedDataHandler = async (req, res) => {
+  console.log('🔍 Get cached data request:', req.query);
   try {
     const { project, table, key } = req.query;
     const { pattern } = req.query;
 
+    console.log(`📋 Query params: project=${project}, table=${table}, key=${key}, pattern=${pattern}`);
+
     if (pattern) {
       // Get multiple keys matching pattern
       const searchPattern = `${project}:${table}:${pattern}`;
+      console.log(`🔎 Searching with pattern: ${searchPattern}`);
       const keys = await redis.keys(searchPattern);
       
+      console.log(`📦 Found ${keys.length} keys matching pattern`);
+      
       if (keys.length === 0) {
+        console.log(`❌ No cached keys found matching pattern: ${searchPattern}`);
         return res.status(404).json({
           message: "No cached keys found matching pattern",
           pattern: searchPattern
@@ -241,47 +248,145 @@ export const getCachedDataHandler = async (req, res) => {
         const value = await redis.get(k);
         if (value) {
           cachedData[k] = JSON.parse(value);
+          console.log(`✅ Retrieved data for key: ${k}`);
         }
       }
 
+      console.log(`📊 Returning ${Object.keys(cachedData).length} cached items`);
       return res.status(200).json({
         message: "Cached data retrieved",
         keysFound: keys.length,
         data: cachedData
       });
     } else if (key) {
-      // Get specific key
-      const cacheKey = `${project}:${table}:${key}`;
+      // Get specific key - check if it already has the project:table prefix
+      let cacheKey;
+      if (key.startsWith(`${project}:${table}:`)) {
+        cacheKey = key;
+      } else {
+        cacheKey = `${project}:${table}:${key}`;
+      }
+      console.log(`🔎 Looking for specific key: ${cacheKey}`);
       const value = await redis.get(cacheKey);
       
       if (!value) {
+        console.log(`❌ Cached key not found: ${cacheKey}`);
         return res.status(404).json({
           message: "Cached key not found",
           key: cacheKey
         });
       }
 
+      const parsedData = JSON.parse(value);
+      console.log(`✅ Retrieved data for key: ${cacheKey}`, parsedData);
+      
       return res.status(200).json({
         message: "Cached data retrieved",
         key: cacheKey,
-        data: JSON.parse(value)
+        data: { [cacheKey]: parsedData }
       });
     } else {
       // Get all keys for project:table
       const searchPattern = `${project}:${table}:*`;
+      console.log(`🔎 Searching for all keys with pattern: ${searchPattern}`);
       const keys = await redis.keys(searchPattern);
       
-      return res.status(200).json({
-        message: "Cache keys retrieved",
-        keysFound: keys.length,
-        keys: keys
-      });
+      console.log(`📦 Found ${keys.length} total keys for ${project}:${table}`);
+      if (keys.length > 0) {
+        console.log(`📋 Keys found:`, keys);
+        
+        // Get the actual data for all keys
+        const cachedData = {};
+        for (const k of keys) {
+          const value = await redis.get(k);
+          if (value) {
+            cachedData[k] = JSON.parse(value);
+            console.log(`✅ Retrieved data for key: ${k}`);
+          }
+        }
+        console.log(`📊 Retrieved data from ${Object.keys(cachedData).length} keys`);
+        
+        return res.status(200).json({
+          message: "Cached data retrieved",
+          keysFound: keys.length,
+          keys: keys,
+          data: cachedData
+        });
+      } else {
+        console.log(`❌ No cached keys found for pattern: ${searchPattern}`);
+        return res.status(404).json({
+          message: "No cached keys found",
+          pattern: searchPattern
+        });
+      }
     }
 
   } catch (err) {
     console.error("🔥 Get cached data failed:", err);
     return res.status(500).json({
       message: "Failed to retrieve cached data",
+      error: err.message
+    });
+  }
+};
+
+/**
+ * Get paginated cache keys
+ */
+export const getPaginatedCacheKeysHandler = async (req, res) => {
+  console.log('🔍 Get paginated cache keys request:', req.query);
+  try {
+    const { project, table, page = 1, limit = 1 } = req.query;
+
+    console.log(`📋 Query params: project=${project}, table=${table}, page=${page}, limit=${limit}`);
+
+    // Get all keys for project:table
+    const searchPattern = `${project}:${table}:*`;
+    console.log(`🔎 Searching for all keys with pattern: ${searchPattern}`);
+    const allKeys = await redis.keys(searchPattern);
+    
+    console.log(`📦 Found ${allKeys.length} total keys for ${project}:${table}`);
+    
+    if (allKeys.length === 0) {
+      console.log(`❌ No cached keys found for pattern: ${searchPattern}`);
+      return res.status(404).json({
+        message: "No cached keys found",
+        pattern: searchPattern,
+        keysFound: 0,
+        keys: [],
+        currentPage: parseInt(page),
+        totalPages: 0,
+        hasMore: false
+      });
+    }
+
+    // Calculate pagination
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const startIndex = (pageNum - 1) * limitNum;
+    const endIndex = startIndex + limitNum;
+    const totalPages = Math.ceil(allKeys.length / limitNum);
+    const hasMore = pageNum < totalPages;
+
+    // Get paginated keys
+    const paginatedKeys = allKeys.slice(startIndex, endIndex);
+    
+    console.log(`📊 Pagination: page ${pageNum}/${totalPages}, showing ${paginatedKeys.length} keys`);
+    console.log(`📋 Paginated keys:`, paginatedKeys);
+    
+    return res.status(200).json({
+      message: "Paginated cache keys retrieved",
+      keysFound: allKeys.length,
+      keys: paginatedKeys,
+      currentPage: pageNum,
+      totalPages: totalPages,
+      hasMore: hasMore
+    });
+
+  } catch (err) {
+    console.error("🔥 Get paginated cache keys failed:", err);
+    return res.status(500).json({
+      message: "Failed to retrieve paginated cache keys",
       error: err.message
     });
   }
@@ -434,6 +539,490 @@ export const testCacheConnection = async (req, res) => {
     });
   }
 };
+
+/**
+ * Handler to update cache from Lambda function streaming DynamoDB changes
+ * Request body: {
+ *   type: "INSERT" | "MODIFY" | "REMOVE",
+ *   newItem: DynamoDB item (unmarshalled),
+ *   oldItem: DynamoDB item (unmarshalled) - for MODIFY/REMOVE
+ * }
+ */
+export const updateCacheFromLambdaHandler = async (req, res) => {
+  const start = Date.now();
+
+  try {
+    const { type, newItem, oldItem } = req.body;
+
+    console.log('🔄 Cache update from Lambda:', { type, hasNewItem: !!newItem, hasOldItem: !!oldItem });
+
+    // Validation
+    if (!type || !['INSERT', 'MODIFY', 'REMOVE'].includes(type)) {
+      console.error("Invalid type in request:", type);
+      return res.status(400).json({ 
+        error: "Invalid type",
+        message: "Type must be INSERT, MODIFY, or REMOVE"
+      });
+    }
+
+    if (!newItem && type === 'INSERT') {
+      console.error("Missing newItem for INSERT operation");
+      return res.status(400).json({ 
+        error: "Missing newItem",
+        message: "newItem is required for INSERT operations"
+      });
+    }
+
+    if (!oldItem && (type === 'MODIFY' || type === 'REMOVE')) {
+      console.error("Missing oldItem for MODIFY/REMOVE operation");
+      return res.status(400).json({ 
+        error: "Missing oldItem",
+        message: "oldItem is required for MODIFY/REMOVE operations"
+      });
+    }
+
+    // Get the table name from the item (assuming it's in the item structure)
+    let tableName = newItem?.tableName || oldItem?.tableName;
+    
+    // If tableName is in DynamoDB format, extract the string value
+    if (tableName && typeof tableName === 'object' && tableName.S) {
+      tableName = tableName.S;
+    }
+    
+    // If still no tableName, try to extract from the item structure
+    if (!tableName) {
+      const item = newItem || oldItem;
+      if (item && item.tableName) {
+        if (typeof item.tableName === 'object' && item.tableName.S) {
+          tableName = item.tableName.S;
+        } else if (typeof item.tableName === 'string') {
+          tableName = item.tableName;
+        }
+      }
+    }
+    
+    // If still no tableName, use a default based on the item structure
+    if (!tableName) {
+      // Try to infer table name from the item content or use a default
+      console.log("No explicit table name found, using default");
+      tableName = 'brmh-cache'; // Default fallback
+    }
+
+    console.log(`📋 Processing ${type} operation for table: ${tableName}`);
+
+    // Find active cache configurations for this table
+    const cacheConfigs = await findActiveCacheConfigs(tableName);
+    
+    if (cacheConfigs.length === 0) {
+      console.log(`ℹ️ No active cache configurations found for table: ${tableName}`);
+      console.log(`💡 Available tables in cache configs:`, cacheConfigs.map(c => c.tableName));
+      return res.status(200).json({
+        message: "No active cache configurations found",
+        tableName,
+        type,
+        cacheConfigsFound: 0
+      });
+    }
+
+    console.log(`📊 Found ${cacheConfigs.length} active cache configurations for table: ${tableName}`);
+
+    // Process each cache configuration
+    const results = [];
+    for (const config of cacheConfigs) {
+      try {
+        const result = await processCacheUpdate(config, type, newItem, oldItem);
+        results.push(result);
+      } catch (err) {
+        console.error(`❌ Failed to process cache config ${config.id}:`, err);
+        results.push({
+          configId: config.id,
+          success: false,
+          error: err.message
+        });
+      }
+    }
+
+    const successfulUpdates = results.filter(r => r.success).length;
+    const failedUpdates = results.filter(r => !r.success).length;
+    const duration = Date.now() - start;
+
+    console.log(`✅ Cache update complete: ${successfulUpdates} successful, ${failedUpdates} failed`);
+    console.log(`⏱️ Update duration (ms):`, duration);
+
+    return res.status(200).json({
+      message: "Cache update processed",
+      tableName,
+      type,
+      totalConfigs: cacheConfigs.length,
+      successfulUpdates,
+      failedUpdates,
+      results,
+      durationMs: duration
+    });
+
+  } catch (err) {
+    const duration = Date.now() - start;
+    console.error("🔥 Cache update handler failed:", err);
+    console.log("⏱️ Failed after (ms):", duration);
+
+    return res.status(500).json({
+      message: "Cache update failed",
+      error: err.message,
+      durationMs: duration,
+      timestamp: new Date().toISOString()
+    });
+  }
+};
+
+/**
+ * Find active cache configurations for a given table
+ */
+async function findActiveCacheConfigs(tableName) {
+  try {
+    console.log(`🔍 Searching for active cache configs for table: ${tableName}`);
+    
+    // First, let's scan all cache configurations to see what we have
+    const scanCommand = new ScanCommand({
+      TableName: 'brmh-cache'
+    });
+
+    const scanResponse = await ddb.send(scanCommand);
+    const allConfigs = scanResponse.Items.map(unmarshall);
+    
+    console.log(`📋 Found ${allConfigs.length} total cache configurations:`);
+    allConfigs.forEach((config, index) => {
+      console.log(`  Config ${index + 1}:`, {
+        id: config.id,
+        tableName: config.tableName,
+        project: config.project,
+        status: config.status,
+        methodId: config.methodId,
+        accountId: config.accountId
+      });
+    });
+
+    // Filter for active configs matching the table name
+    const activeConfigs = allConfigs.filter(config => 
+      config.status === 'active' && 
+      config.tableName === tableName
+    );
+    
+    console.log(`✅ Found ${activeConfigs.length} active cache configurations for table: ${tableName}`);
+    return activeConfigs;
+  } catch (err) {
+    console.error('❌ Error finding cache configs:', err);
+    throw err;
+  }
+}
+
+/**
+ * Process cache update for a specific configuration
+ */
+async function processCacheUpdate(config, type, newItem, oldItem) {
+  const { id: configId, itemsPerKey, timeToLive, tableName, project } = config;
+  const projectName = project || 'default'; // Use project from config or default
+  
+  console.log(`🔄 Processing cache update for config ${configId}:`, { type, itemsPerKey, timeToLive, tableName, project: projectName });
+
+  try {
+    switch (type) {
+      case 'INSERT':
+        return await handleInsert(projectName, tableName, newItem, itemsPerKey, timeToLive);
+      
+      case 'MODIFY':
+        return await handleModify(projectName, tableName, newItem, oldItem, itemsPerKey, timeToLive);
+      
+      case 'REMOVE':
+        return await handleRemove(projectName, tableName, oldItem, itemsPerKey);
+      
+      default:
+        throw new Error(`Unknown operation type: ${type}`);
+    }
+  } catch (err) {
+    console.error(`❌ Error processing ${type} operation:`, err);
+    throw err;
+  }
+}
+
+/**
+ * Handle INSERT operations
+ */
+async function handleInsert(project, tableName, newItem, itemsPerKey, ttl) {
+  console.log(`➕ Handling INSERT for ${tableName}`);
+  console.log(`📦 New item:`, newItem);
+  console.log(`⚙️ Config: project=${project}, itemsPerKey=${itemsPerKey}, ttl=${ttl}`);
+  
+  // Helper function to extract item ID from DynamoDB format
+  const extractItemId = (item) => {
+    if (item.id && typeof item.id === 'object' && item.id.S) return item.id.S;
+    if (item.id && typeof item.id === 'string') return item.id;
+    if (item.pk && typeof item.pk === 'object' && item.pk.S) return item.pk.S;
+    if (item.pk && typeof item.pk === 'string') return item.pk;
+    if (item.PK && typeof item.PK === 'object' && item.PK.S) return item.PK.S;
+    if (item.PK && typeof item.PK === 'string') return item.PK;
+    return Date.now().toString(); // Fallback
+  };
+  
+  // Generate cache key based on itemsPerKey
+  let cacheKey;
+  if (itemsPerKey === 1) {
+    // Single item per key
+    const itemId = extractItemId(newItem);
+    cacheKey = `${project}:${tableName}:${itemId}`;
+    const value = JSON.stringify(newItem);
+    await redis.set(cacheKey, value, 'EX', ttl);
+    console.log(`✅ Cached single item: ${cacheKey}`);
+  } else {
+    // Multiple items per key - find the best chunk to add to or create new one
+    const searchPattern = `${project}:${tableName}:chunk:*`;
+    const existingChunks = await redis.keys(searchPattern);
+    
+    console.log(`🔍 Found ${existingChunks.length} existing chunks`);
+    
+    let bestChunkKey = null;
+    let bestChunkSize = 0;
+    
+    // Find the chunk with the most space (closest to itemsPerKey but not full)
+    for (const chunkKey of existingChunks) {
+      const chunkValue = await redis.get(chunkKey);
+      if (chunkValue) {
+        const chunkItems = JSON.parse(chunkValue);
+        const chunkSize = chunkItems.length;
+        
+        console.log(`📦 Chunk ${chunkKey}: ${chunkSize}/${itemsPerKey} items`);
+        
+        // Prefer chunks that have space and are closest to being full
+        if (chunkSize < itemsPerKey && chunkSize > bestChunkSize) {
+          bestChunkKey = chunkKey;
+          bestChunkSize = chunkSize;
+        }
+      }
+    }
+    
+    if (bestChunkKey && bestChunkSize < itemsPerKey) {
+      // Add to existing chunk that has space
+      const existingValue = await redis.get(bestChunkKey);
+      const existingItems = JSON.parse(existingValue);
+      existingItems.push(newItem);
+      await redis.set(bestChunkKey, JSON.stringify(existingItems), 'EX', ttl);
+      console.log(`✅ Added to existing chunk: ${bestChunkKey} (${existingItems.length}/${itemsPerKey} items)`);
+      cacheKey = bestChunkKey;
+    } else {
+      // Create new chunk
+      const newChunkId = Date.now();
+      const newChunkKey = `${project}:${tableName}:chunk:${newChunkId}`;
+      await redis.set(newChunkKey, JSON.stringify([newItem]), 'EX', ttl);
+      console.log(`✅ Created new chunk: ${newChunkKey} (1/${itemsPerKey} items)`);
+      cacheKey = newChunkKey;
+    }
+  }
+
+  return {
+    configId: project,
+    success: true,
+    operation: 'INSERT',
+    cacheKey: cacheKey || 'chunk-based'
+  };
+}
+
+/**
+ * Handle MODIFY operations
+ */
+async function handleModify(project, tableName, newItem, oldItem, itemsPerKey, ttl) {
+  console.log(`✏️ Handling MODIFY for ${tableName}`);
+  
+  // Helper function to extract item ID from DynamoDB format
+  const extractItemId = (item) => {
+    if (item.id && typeof item.id === 'object' && item.id.S) return item.id.S;
+    if (item.id && typeof item.id === 'string') return item.id;
+    if (item.pk && typeof item.pk === 'object' && item.pk.S) return item.pk.S;
+    if (item.pk && typeof item.pk === 'string') return item.pk;
+    if (item.PK && typeof item.PK === 'object' && item.PK.S) return item.PK.S;
+    if (item.PK && typeof item.PK === 'string') return item.PK;
+    return null;
+  };
+  
+  if (itemsPerKey === 1) {
+    // Update single item
+    const itemId = extractItemId(newItem) || extractItemId(oldItem);
+    if (!itemId) {
+      console.log(`❌ No valid item ID found for modification`);
+      return {
+        configId: project,
+        success: false,
+        operation: 'MODIFY',
+        error: 'No valid item ID found'
+      };
+    }
+    
+    const cacheKey = `${project}:${tableName}:${itemId}`;
+    const value = JSON.stringify(newItem);
+    await redis.set(cacheKey, value, 'EX', ttl);
+    console.log(`✅ Updated cached item: ${cacheKey}`);
+    
+    return {
+      configId: project,
+      success: true,
+      operation: 'MODIFY',
+      cacheKey
+    };
+  } else {
+    // For chunked data, we need to find and update the chunk containing this item
+    const searchPattern = `${project}:${tableName}:chunk:*`;
+    console.log(`🔍 Searching for chunks with pattern: ${searchPattern}`);
+    const keys = await redis.keys(searchPattern);
+    console.log(`📦 Found ${keys.length} chunks to search through`);
+    
+    const targetItemId = extractItemId(newItem) || extractItemId(oldItem);
+    if (!targetItemId) {
+      console.log(`❌ No valid item ID found for modification`);
+      return {
+        configId: project,
+        success: false,
+        operation: 'MODIFY',
+        error: 'No valid item ID found'
+      };
+    }
+    
+    for (const key of keys) {
+      const value = await redis.get(key);
+      if (value) {
+        const items = JSON.parse(value);
+        console.log(`🔍 Searching in chunk ${key} with ${items.length} items`);
+        
+        // Helper function to compare items considering DynamoDB format
+        const findItemIndex = (items, targetId) => {
+          return items.findIndex(item => {
+            const currentItemId = extractItemId(item);
+            return currentItemId === targetId;
+          });
+        };
+        
+        const itemIndex = findItemIndex(items, targetItemId);
+        
+        if (itemIndex !== -1) {
+          console.log(`✅ Found item at index ${itemIndex} in chunk ${key}`);
+          items[itemIndex] = newItem;
+          await redis.set(key, JSON.stringify(items), 'EX', ttl);
+          console.log(`✅ Updated item in chunk: ${key}`);
+          
+          return {
+            configId: project,
+            success: true,
+            operation: 'MODIFY',
+            cacheKey: key
+          };
+        }
+      }
+    }
+    
+    // If not found in existing chunks, treat as insert
+    console.log(`⚠️ Item not found in existing chunks, treating as INSERT`);
+    return await handleInsert(project, tableName, newItem, itemsPerKey, ttl);
+  }
+}
+
+/**
+ * Handle REMOVE operations
+ */
+async function handleRemove(project, tableName, oldItem, itemsPerKey) {
+  console.log(`🗑️ Handling REMOVE for ${tableName}`);
+  console.log(`📦 Old item to remove:`, oldItem);
+  
+  // Helper function to extract item ID from DynamoDB format
+  const extractItemId = (item) => {
+    if (item.id && typeof item.id === 'object' && item.id.S) return item.id.S;
+    if (item.id && typeof item.id === 'string') return item.id;
+    if (item.pk && typeof item.pk === 'object' && item.pk.S) return item.pk.S;
+    if (item.pk && typeof item.pk === 'string') return item.pk;
+    if (item.PK && typeof item.PK === 'object' && item.PK.S) return item.PK.S;
+    if (item.PK && typeof item.PK === 'string') return item.PK;
+    return null;
+  };
+  
+  const itemId = extractItemId(oldItem);
+  console.log(`🔍 Looking for item with ID: ${itemId}`);
+  
+  if (itemsPerKey === 1) {
+    // Remove single item
+    if (!itemId) {
+      console.log(`❌ No valid item ID found for removal`);
+      return {
+        configId: project,
+        success: false,
+        operation: 'REMOVE',
+        error: 'No valid item ID found'
+      };
+    }
+    
+    const cacheKey = `${project}:${tableName}:${itemId}`;
+    await redis.del(cacheKey);
+    console.log(`✅ Removed cached item: ${cacheKey}`);
+    
+    return {
+      configId: project,
+      success: true,
+      operation: 'REMOVE',
+      cacheKey
+    };
+  } else {
+    // For chunked data, find and remove from chunk
+    const searchPattern = `${project}:${tableName}:chunk:*`;
+    console.log(`🔍 Searching for chunks with pattern: ${searchPattern}`);
+    const keys = await redis.keys(searchPattern);
+    console.log(`📦 Found ${keys.length} chunks to search through`);
+    
+    for (const key of keys) {
+      const value = await redis.get(key);
+      if (value) {
+        const items = JSON.parse(value);
+        console.log(`🔍 Searching in chunk ${key} with ${items.length} items`);
+        
+        // Helper function to compare items considering DynamoDB format
+        const findItemIndex = (items, targetId) => {
+          return items.findIndex(item => {
+            const currentItemId = extractItemId(item);
+            console.log(`🔍 Comparing item ID: ${currentItemId} with target: ${targetId}`);
+            return currentItemId === targetId;
+          });
+        };
+        
+        const itemIndex = findItemIndex(items, itemId);
+        
+        if (itemIndex !== -1) {
+          console.log(`✅ Found item at index ${itemIndex} in chunk ${key}`);
+          items.splice(itemIndex, 1);
+          
+          if (items.length === 0) {
+            // Remove empty chunk
+            await redis.del(key);
+            console.log(`✅ Removed empty chunk: ${key}`);
+          } else {
+            // Update chunk with remaining items
+            await redis.set(key, JSON.stringify(items));
+            console.log(`✅ Updated chunk after removal: ${key} (${items.length} items remaining)`);
+          }
+          
+          return {
+            configId: project,
+            success: true,
+            operation: 'REMOVE',
+            cacheKey: key
+          };
+        }
+      }
+    }
+    
+    console.log(`⚠️ Item with ID ${itemId} not found in any cache chunks`);
+    return {
+      configId: project,
+      success: false,
+      operation: 'REMOVE',
+      cacheKey: 'not-found',
+      error: `Item with ID ${itemId} not found in cache`
+    };
+  }
+}
 
 // Graceful shutdown
 process.on('SIGINT', async () => {
