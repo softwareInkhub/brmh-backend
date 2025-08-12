@@ -25,6 +25,7 @@ import { lambdaDeploymentManager } from './lib/lambda-deployment.js';
 import { 
   cacheTableHandler, 
   getCachedDataHandler, 
+  getPaginatedCacheKeysHandler,
   clearCacheHandler, 
   getCacheStatsHandler, 
   cacheHealthHandler,
@@ -38,7 +39,8 @@ import {
   searchIndexHandler,
   listIndicesHandler,
   deleteIndicesHandler,
-  searchHealthHandler
+  searchHealthHandler,
+  updateIndexingFromLambdaHandler
 } from './utils/search-indexing.js';
 
 import * as crud from './utils/crud.js';
@@ -680,6 +682,7 @@ app.post('/api/test-openapi-endpoint', async (req, res) => {
 
 app.post('/cache/table', cacheTableHandler);
 app.get('/cache/data', getCachedDataHandler);
+app.get('/cache/keys', getPaginatedCacheKeysHandler);
 app.get('/cache/clear', clearCacheHandler);
 app.get('/cache/stats', getCacheStatsHandler);
 app.get('/cache/health', cacheHealthHandler);
@@ -717,6 +720,7 @@ app.post('/search/index', indexTableHandler);
 app.post('/search/query', searchIndexHandler);
 app.post('/search/indices', listIndicesHandler);
 app.post('/search/delete', deleteIndicesHandler);
+app.post('/search/update', updateIndexingFromLambdaHandler);
 app.get('/search/health', searchHealthHandler);
 
 // Test endpoint
@@ -859,6 +863,36 @@ app.post('/execute', async (req, res) => {
   }
 });
 
+// Handle DynamoDB API routes
+app.all('/dynamodb/*', async (req, res) => {
+  try {
+    const response = await awsApi.handleRequest(
+      {
+        method: req.method,
+        path: req.path.replace('/dynamodb', '') || '/',
+        body: req.body,
+        query: req.query,
+        headers: req.headers
+      },
+      req,
+      res
+    );
+
+    // Check if response is null (streaming response handled by handler)
+    if (response === null) {
+      return; // Response already handled by the handler
+    }
+
+    res.status(response.statusCode).json(response.body);
+  } catch (error) {
+    console.error('[DynamoDB API] Error:', error.message);
+    res.status(500).json({
+      error: 'Failed to handle DynamoDB API request',
+      message: error.message
+    });
+  }
+});
+
 // Handle Unified API routes
 app.all('/unified/*', async (req, res) => {
   try {
@@ -935,8 +969,65 @@ app.post("/cache/update", async (req, res) => {
     // Use the existing cache update handler
     await updateCacheFromLambdaHandler(req, res);
 
+    // Also trigger indexing update if table name is not the indexing table itself
+    if (tableName !== 'brmh-indexing') {
+      try {
+        console.log(`🔄 Triggering indexing update for table: ${tableName}`);
+        
+        // Call the indexing update handler asynchronously
+        const indexingUpdateReq = {
+          body: {
+            type,
+            newItem,
+            oldItem,
+            tableName
+          }
+        };
+        
+        // Don't wait for the indexing update to complete
+        updateIndexingFromLambdaHandler(indexingUpdateReq, {
+          status: (code) => ({ code }),
+          json: (data) => console.log('Indexing update response:', data)
+        }).catch(error => {
+          console.error(`❌ Indexing update failed for table ${tableName}:`, error);
+        });
+        
+      } catch (indexingError) {
+        console.error(`❌ Error triggering indexing update for table ${tableName}:`, indexingError);
+        // Don't fail the cache update if indexing fails
+      }
+    }
+
   } catch (error) {
     console.error("Error in cache update endpoint:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+//indexing-data getting from lambda to update the indexing
+app.post("/indexing/update", async (req, res) => {
+  try {
+    const { type, newItem, oldItem, tableName } = req.body;
+
+    console.log("Received indexing update from Lambda:");
+    console.log("Event Type:", type);
+    console.log("Table Name:", tableName);
+    console.log("New Item:", newItem);
+    console.log("Old Item:", oldItem);
+
+    if (!type || !tableName) {
+      console.error("Missing required parameters for indexing update");
+      return res.status(400).json({ 
+        error: "Missing required parameters", 
+        message: "type and tableName are required" 
+      });
+    }
+
+    // Call the indexing update handler
+    await updateIndexingFromLambdaHandler(req, res);
+
+  } catch (error) {
+    console.error("Error in indexing update endpoint:", error);
     res.status(500).json({ error: error.message });
   }
 });

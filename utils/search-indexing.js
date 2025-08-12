@@ -31,6 +31,234 @@ function unwrap(val) {
 }
 
 /**
+ * Find active indexing configurations for a specific table
+ * @param {string} tableName - The table name to search for
+ * @returns {Promise<Array>} Array of active indexing configurations
+ */
+export const findActiveIndexingConfigs = async (tableName) => {
+  try {
+    console.log(`🔍 Finding active indexing configurations for table: ${tableName}`);
+    
+    const command = new ScanCommand({
+      TableName: 'brmh-indexing',
+      FilterExpression: '#table = :table AND #status = :status',
+      ExpressionAttributeNames: {
+        '#table': 'table',
+        '#status': 'status'
+      },
+      ExpressionAttributeValues: {
+        ':table': tableName,
+        ':status': 'active'
+      }
+    });
+    
+    const response = await docClient.send(command);
+    const configs = (response.Items || []).map(unmarshall);
+    
+    console.log(`✅ Found ${configs.length} active indexing configurations for table: ${tableName}`);
+    return configs;
+  } catch (error) {
+    console.error(`❌ Error finding indexing configurations for table ${tableName}:`, error);
+    return [];
+  }
+};
+
+/**
+ * Update indexing for a specific item based on active configurations
+ * @param {string} tableName - The table name
+ * @param {Object} item - The item data (new or updated)
+ * @param {string} operationType - 'INSERT', 'MODIFY', or 'REMOVE'
+ * @param {Object} oldItem - The old item data (for MODIFY operations)
+ */
+export const updateIndexingForItem = async (tableName, item, operationType, oldItem = null) => {
+  try {
+    console.log(`🔄 Updating indexing for table: ${tableName}, operation: ${operationType}`);
+    
+    // Find active indexing configurations for this table
+    const activeConfigs = await findActiveIndexingConfigs(tableName);
+    
+    if (activeConfigs.length === 0) {
+      console.log(`ℹ️ No active indexing configurations found for table: ${tableName}`);
+      return;
+    }
+    
+    const ALGOLIA_APP_ID = process.env.ALGOLIA_APP_ID;
+    const ALGOLIA_API_KEY = process.env.ALGOLIA_API_KEY;
+    const ALGOLIA_INDEX_PREFIX = process.env.ALGOLIA_INDEX_PREFIX || '';
+    
+    if (!ALGOLIA_APP_ID || !ALGOLIA_API_KEY) {
+      console.error("❌ Missing Algolia credentials for indexing update");
+      return;
+    }
+    
+    const client = algoliasearch(ALGOLIA_APP_ID, ALGOLIA_API_KEY);
+    
+    // Process each active configuration
+    for (const config of activeConfigs) {
+      try {
+        const { project, customFields = [] } = config;
+        
+        // Find the most recent index for this project/table
+        const searchPattern = `${ALGOLIA_INDEX_PREFIX}${project}_${tableName}_*`;
+        const { items: indices } = await client.listIndices();
+        const matchingIndices = indices.filter(index => 
+          index.name.startsWith(`${ALGOLIA_INDEX_PREFIX}${project}_${tableName}_`)
+        );
+        
+        if (matchingIndices.length === 0) {
+          console.log(`⚠️ No indices found for project: ${project}, table: ${tableName}`);
+          continue;
+        }
+        
+        // Use the most recent index
+        const sortedIndices = matchingIndices.sort((a, b) => {
+          const aTimestamp = parseInt(a.name.split('_').pop());
+          const bTimestamp = parseInt(b.name.split('_').pop());
+          return bTimestamp - aTimestamp;
+        });
+        
+        const indexName = sortedIndices[0].name;
+        const index = client.initIndex(indexName);
+        
+        // Prepare the item for indexing
+        const unwrappedItem = unwrap(item);
+        const enrichedItem = {
+          ...unwrappedItem,
+          _project: project,
+          _table: tableName,
+          _timestamp: Date.now(),
+          objectID: unwrappedItem.id || unwrappedItem.objectID || uuidv4()
+        };
+        
+        // Add custom fields if specified
+        if (customFields.length > 0) {
+          customFields.forEach(field => {
+            const value = getNested(unwrappedItem, field);
+            if (value !== undefined) {
+              enrichedItem[field.replace(/^Item\./, '')] = value;
+            }
+          });
+        }
+        
+        // Perform the appropriate operation
+        switch (operationType) {
+          case 'INSERT':
+          case 'MODIFY':
+            // Add or update the item
+            await index.saveObject(enrichedItem);
+            console.log(`✅ Indexed item in ${indexName} (${operationType})`);
+            break;
+            
+          case 'REMOVE':
+            // Remove the item
+            const objectID = unwrappedItem.id || unwrappedItem.objectID;
+            if (objectID) {
+              await index.deleteObject(objectID);
+              console.log(`✅ Removed item from ${indexName} (${operationType})`);
+            }
+            break;
+            
+          default:
+            console.log(`⚠️ Unknown operation type: ${operationType}`);
+        }
+        
+      } catch (configError) {
+        console.error(`❌ Error processing indexing config for table ${tableName}:`, configError);
+        // Continue with other configurations
+      }
+    }
+    
+    console.log(`✅ Completed indexing update for table: ${tableName}`);
+    
+  } catch (error) {
+    console.error(`❌ Error updating indexing for table ${tableName}:`, error);
+  }
+};
+
+/**
+ * Express handler for automatic indexing updates from Lambda triggers
+ * Request body: {
+ *   type: 'INSERT' | 'MODIFY' | 'REMOVE',
+ *   newItem: Object,
+ *   oldItem: Object (for MODIFY operations),
+ *   tableName: string
+ * }
+ */
+export const updateIndexingFromLambdaHandler = async (req, res) => {
+  try {
+    const { type, newItem, oldItem, tableName } = req.body;
+    
+    console.log('🔄 Indexing update from Lambda:', {
+      type,
+      tableName,
+      hasNewItem: !!newItem,
+      hasOldItem: !!oldItem
+    });
+    
+    if (!type || !tableName) {
+      console.error("Missing required parameters for indexing update");
+      return res.status(400).json({
+        error: "Missing required parameters",
+        message: "type and tableName are required"
+      });
+    }
+    
+    // Determine which item to use based on operation type
+    let itemToProcess = null;
+    
+    switch (type) {
+      case 'INSERT':
+        itemToProcess = newItem;
+        break;
+      case 'MODIFY':
+        itemToProcess = newItem; // Use the new item for updates
+        break;
+      case 'REMOVE':
+        itemToProcess = oldItem; // Use the old item for removal
+        break;
+      default:
+        return res.status(400).json({
+          error: "Invalid operation type",
+          message: "type must be INSERT, MODIFY, or REMOVE"
+        });
+    }
+    
+    if (!itemToProcess) {
+      console.error("No item data provided for indexing update");
+      return res.status(400).json({
+        error: "No item data",
+        message: "Item data is required for indexing update"
+      });
+    }
+    
+    // Update indexing asynchronously (don't wait for completion)
+    updateIndexingForItem(tableName, itemToProcess, type, oldItem)
+      .then(() => {
+        console.log(`✅ Indexing update completed for table: ${tableName}`);
+      })
+      .catch((error) => {
+        console.error(`❌ Indexing update failed for table: ${tableName}:`, error);
+      });
+    
+    // Return immediately
+    return res.status(200).json({
+      message: "Indexing update initiated",
+      tableName,
+      operationType: type,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error("🔥 Indexing update handler failed:", error);
+    return res.status(500).json({
+      message: "Indexing update failed",
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+};
+
+/**
  * Express handler for indexing DynamoDB table data to Algolia
  * Request body: {
  *   project: string,

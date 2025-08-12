@@ -259,8 +259,13 @@ export const getCachedDataHandler = async (req, res) => {
         data: cachedData
       });
     } else if (key) {
-      // Get specific key
-      const cacheKey = `${project}:${table}:${key}`;
+      // Get specific key - check if it already has the project:table prefix
+      let cacheKey;
+      if (key.startsWith(`${project}:${table}:`)) {
+        cacheKey = key;
+      } else {
+        cacheKey = `${project}:${table}:${key}`;
+      }
       console.log(`🔎 Looking for specific key: ${cacheKey}`);
       const value = await redis.get(cacheKey);
       
@@ -278,7 +283,7 @@ export const getCachedDataHandler = async (req, res) => {
       return res.status(200).json({
         message: "Cached data retrieved",
         key: cacheKey,
-        data: parsedData
+        data: { [cacheKey]: parsedData }
       });
     } else {
       // Get all keys for project:table
@@ -290,29 +295,98 @@ export const getCachedDataHandler = async (req, res) => {
       if (keys.length > 0) {
         console.log(`📋 Keys found:`, keys);
         
-        // Also get the actual data for the first few keys
-        const sampleData = {};
-        const sampleKeys = keys.slice(0, 3); // Get first 3 keys as sample
-        for (const k of sampleKeys) {
+        // Get the actual data for all keys
+        const cachedData = {};
+        for (const k of keys) {
           const value = await redis.get(k);
           if (value) {
-            sampleData[k] = JSON.parse(value);
+            cachedData[k] = JSON.parse(value);
+            console.log(`✅ Retrieved data for key: ${k}`);
           }
         }
-        console.log(`📊 Sample data from first ${sampleKeys.length} keys:`, sampleData);
+        console.log(`📊 Retrieved data from ${Object.keys(cachedData).length} keys`);
+        
+        return res.status(200).json({
+          message: "Cached data retrieved",
+          keysFound: keys.length,
+          keys: keys,
+          data: cachedData
+        });
+      } else {
+        console.log(`❌ No cached keys found for pattern: ${searchPattern}`);
+        return res.status(404).json({
+          message: "No cached keys found",
+          pattern: searchPattern
+        });
       }
-      
-      return res.status(200).json({
-        message: "Cache keys retrieved",
-        keysFound: keys.length,
-        keys: keys
-      });
     }
 
   } catch (err) {
     console.error("🔥 Get cached data failed:", err);
     return res.status(500).json({
       message: "Failed to retrieve cached data",
+      error: err.message
+    });
+  }
+};
+
+/**
+ * Get paginated cache keys
+ */
+export const getPaginatedCacheKeysHandler = async (req, res) => {
+  console.log('🔍 Get paginated cache keys request:', req.query);
+  try {
+    const { project, table, page = 1, limit = 1 } = req.query;
+
+    console.log(`📋 Query params: project=${project}, table=${table}, page=${page}, limit=${limit}`);
+
+    // Get all keys for project:table
+    const searchPattern = `${project}:${table}:*`;
+    console.log(`🔎 Searching for all keys with pattern: ${searchPattern}`);
+    const allKeys = await redis.keys(searchPattern);
+    
+    console.log(`📦 Found ${allKeys.length} total keys for ${project}:${table}`);
+    
+    if (allKeys.length === 0) {
+      console.log(`❌ No cached keys found for pattern: ${searchPattern}`);
+      return res.status(404).json({
+        message: "No cached keys found",
+        pattern: searchPattern,
+        keysFound: 0,
+        keys: [],
+        currentPage: parseInt(page),
+        totalPages: 0,
+        hasMore: false
+      });
+    }
+
+    // Calculate pagination
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const startIndex = (pageNum - 1) * limitNum;
+    const endIndex = startIndex + limitNum;
+    const totalPages = Math.ceil(allKeys.length / limitNum);
+    const hasMore = pageNum < totalPages;
+
+    // Get paginated keys
+    const paginatedKeys = allKeys.slice(startIndex, endIndex);
+    
+    console.log(`📊 Pagination: page ${pageNum}/${totalPages}, showing ${paginatedKeys.length} keys`);
+    console.log(`📋 Paginated keys:`, paginatedKeys);
+    
+    return res.status(200).json({
+      message: "Paginated cache keys retrieved",
+      keysFound: allKeys.length,
+      keys: paginatedKeys,
+      currentPage: pageNum,
+      totalPages: totalPages,
+      hasMore: hasMore
+    });
+
+  } catch (err) {
+    console.error("🔥 Get paginated cache keys failed:", err);
+    return res.status(500).json({
+      message: "Failed to retrieve paginated cache keys",
       error: err.message
     });
   }

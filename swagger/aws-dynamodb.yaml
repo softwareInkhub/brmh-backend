@@ -5,8 +5,7 @@ info:
   description: API for DynamoDB operations
 
 servers:
-  - url: http://localhost:4000/api/dynamodb
-    description: Local development server
+   - url: /dynamodb
 
 components:
   schemas:
