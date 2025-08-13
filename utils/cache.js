@@ -285,13 +285,8 @@ export const getCachedDataHandler = async (req, res) => {
         data: cachedData
       });
     } else if (key) {
-      // Get specific key - check if it already has the project:table prefix
-      let cacheKey;
-      if (key.startsWith(`${project}:${table}:`)) {
-        cacheKey = key;
-      } else {
-        cacheKey = `${project}:${table}:${key}`;
-      }
+      // Get specific key
+      const cacheKey = `${project}:${table}:${key}`;
       console.log(`🔎 Looking for specific key: ${cacheKey}`);
       const value = await redis.get(cacheKey);
       
@@ -309,51 +304,35 @@ export const getCachedDataHandler = async (req, res) => {
       return res.status(200).json({
         message: "Cached data retrieved",
         key: cacheKey,
-        data: { [cacheKey]: parsedData }
+        data: parsedData
       });
     } else {
-      // Get all keys for project:table using SCAN instead of KEYS
+      // Get all keys for project:table
       const searchPattern = `${project}:${table}:*`;
       console.log(`🔎 Searching for all keys with pattern: ${searchPattern}`);
-      
-      // Use SCAN to get keys (more efficient than KEYS)
-      const keys = [];
-      let cursor = 0;
-      
-      do {
-        const result = await redis.scan(cursor, 'MATCH', searchPattern, 'COUNT', '100');
-        cursor = result[0];
-        keys.push(...result[1]);
-      } while (cursor !== 0);
+      const keys = await redis.keys(searchPattern);
       
       console.log(`📦 Found ${keys.length} total keys for ${project}:${table}`);
       if (keys.length > 0) {
         console.log(`📋 Keys found:`, keys);
         
-        // Get the actual data for all keys
-        const cachedData = {};
-        for (const k of keys) {
+        // Also get the actual data for the first few keys
+        const sampleData = {};
+        const sampleKeys = keys.slice(0, 3); // Get first 3 keys as sample
+        for (const k of sampleKeys) {
           const value = await redis.get(k);
           if (value) {
-            cachedData[k] = JSON.parse(value);
-            console.log(`✅ Retrieved data for key: ${k}`);
+            sampleData[k] = JSON.parse(value);
           }
         }
-        console.log(`📊 Retrieved data from ${Object.keys(cachedData).length} keys`);
-        
-        return res.status(200).json({
-          message: "Cached data retrieved",
-          keysFound: keys.length,
-          keys: keys,
-          data: cachedData
-        });
-      } else {
-        console.log(`❌ No cached keys found for pattern: ${searchPattern}`);
-        return res.status(404).json({
-          message: "No cached keys found",
-          pattern: searchPattern
-        });
+        console.log(`📊 Sample data from first ${sampleKeys.length} keys:`, sampleData);
       }
+      
+      return res.status(200).json({
+        message: "Cache keys retrieved",
+        keysFound: keys.length,
+        keys: keys
+      });
     }
 
   } catch (err) {
@@ -375,11 +354,11 @@ export const getPaginatedCacheKeysHandler = async (req, res) => {
 
     console.log(`📋 Query params: project=${project}, table=${table}, page=${page}, limit=${limit}`);
 
-    // Get all keys for project:table using SCAN instead of KEYS
+    // Get all keys for project:table
     const searchPattern = `${project}:${table}:*`;
     console.log(`🔎 Searching for all keys with pattern: ${searchPattern}`);
     
-    // Use SCAN to get keys (more efficient than KEYS)
+    // Use SCAN for Valkey compatibility
     const allKeys = [];
     let cursor = 0;
     
@@ -451,15 +430,7 @@ export const clearCacheHandler = async (req, res) => {
       searchPattern = `${project}:${table}:*`;
     }
 
-    // Use SCAN to get keys (more efficient than KEYS)
-    const keys = [];
-    let cursor = 0;
-    
-    do {
-      const result = await redis.scan(cursor, 'MATCH', searchPattern, 'COUNT', '100');
-      cursor = result[0];
-      keys.push(...result[1]);
-    } while (cursor !== 0);
+    const keys = await redis.keys(searchPattern);
     
     if (keys.length === 0) {
       return res.status(404).json({
@@ -492,8 +463,7 @@ export const getCacheStatsHandler = async (req, res) => {
   try {
     const { project, table } = req.query;
     const searchPattern = `${project}:${table}:*`;
-    
-    // Use SCAN to get keys (more efficient than KEYS)
+    // Use SCAN for Valkey compatibility
     const keys = [];
     let cursor = 0;
     
@@ -600,7 +570,6 @@ export const testCacheConnection = async (req, res) => {
     });
   }
 };
-
 /**
  * Handler to update cache from Lambda function streaming DynamoDB changes
  * Request body: {
@@ -836,7 +805,15 @@ async function handleInsert(project, tableName, newItem, itemsPerKey, ttl) {
   } else {
     // Multiple items per key - find the best chunk to add to or create new one
     const searchPattern = `${project}:${tableName}:chunk:*`;
-    const existingChunks = await redis.keys(searchPattern);
+    // Use SCAN for Valkey compatibility
+    const existingChunks = [];
+    let cursor = 0;
+    
+    do {
+      const result = await redis.scan(cursor, 'MATCH', searchPattern, 'COUNT', '100');
+      cursor = result[0];
+      existingChunks.push(...result[1]);
+    } while (cursor !== 0);
     
     console.log(`🔍 Found ${existingChunks.length} existing chunks`);
     
@@ -931,7 +908,17 @@ async function handleModify(project, tableName, newItem, oldItem, itemsPerKey, t
     // For chunked data, we need to find and update the chunk containing this item
     const searchPattern = `${project}:${tableName}:chunk:*`;
     console.log(`🔍 Searching for chunks with pattern: ${searchPattern}`);
-    const keys = await redis.keys(searchPattern);
+    
+    // Use SCAN for Valkey compatibility
+    const keys = [];
+    let cursor = 0;
+    
+    do {
+      const result = await redis.scan(cursor, 'MATCH', searchPattern, 'COUNT', '100');
+      cursor = result[0];
+      keys.push(...result[1]);
+    } while (cursor !== 0);
+    
     console.log(`📦 Found ${keys.length} chunks to search through`);
     
     const targetItemId = extractItemId(newItem) || extractItemId(oldItem);
@@ -1030,7 +1017,17 @@ async function handleRemove(project, tableName, oldItem, itemsPerKey) {
     // For chunked data, find and remove from chunk
     const searchPattern = `${project}:${tableName}:chunk:*`;
     console.log(`🔍 Searching for chunks with pattern: ${searchPattern}`);
-    const keys = await redis.keys(searchPattern);
+    
+    // Use SCAN for Valkey compatibility
+    const keys = [];
+    let cursor = 0;
+    
+    do {
+      const result = await redis.scan(cursor, 'MATCH', searchPattern, 'COUNT', '100');
+      cursor = result[0];
+      keys.push(...result[1]);
+    } while (cursor !== 0);
+    
     console.log(`📦 Found ${keys.length} chunks to search through`);
     
     for (const key of keys) {
