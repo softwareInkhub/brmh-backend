@@ -5,31 +5,57 @@ import Redis from "ioredis";
 
 console.log('Cache service: importing modules and initializing clients');
 
-// Initialize Redis client
+// Initialize Redis client with enhanced configuration
 const redis = new Redis({
   host: process.env.REDIS_HOST || 'localhost',
-  port: process.env.REDIS_PORT || 6379,
-  tls: process.env.REDIS_TLS === 'true' ? {} : undefined, // Enable TLS if needed
-  password: process.env.REDIS_PASSWORD, // Optional password
+  port: parseInt(process.env.REDIS_PORT) || 6379,
+  tls: false, // Temporarily disable TLS to test connection
+  password: process.env.REDIS_PASSWORD,
   retryDelayOnFailover: 100,
   maxRetriesPerRequest: 3,
+  lazyConnect: true,
+  connectTimeout: 10000,
+  commandTimeout: 10000,
+  showFriendlyErrorStack: true,
+  // Add connection debugging
+  enableOfflineQueue: false,
+  maxLoadingTimeout: 10000,
 });
 
 // Initialize DynamoDB clients
 const ddb = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(ddb);
 
-// Redis connection event handlers
+// Enhanced connection event handlers
 redis.on('connect', () => {
   console.log('✅ Redis connected successfully');
+  console.log('🔍 Connection details:', {
+    host: process.env.REDIS_HOST,
+    port: process.env.REDIS_PORT,
+    tls: process.env.REDIS_TLS,
+    tlsEnabled: process.env.REDIS_TLS === 'true'
+  });
 });
 
 redis.on('error', (err) => {
   console.error('❌ Redis connection error:', err);
+  console.error('🔍 Error details:', {
+    code: err.code,
+    errno: err.errno,
+    syscall: err.syscall,
+    address: err.address,
+    port: err.port,
+    host: process.env.REDIS_HOST,
+    tls: process.env.REDIS_TLS
+  });
 });
 
 redis.on('close', () => {
   console.log('🔌 Redis connection closed');
+});
+
+redis.on('ready', () => {
+  console.log('🚀 Redis is ready to accept commands');
 });
 
 /**
@@ -259,13 +285,8 @@ export const getCachedDataHandler = async (req, res) => {
         data: cachedData
       });
     } else if (key) {
-      // Get specific key - check if it already has the project:table prefix
-      let cacheKey;
-      if (key.startsWith(`${project}:${table}:`)) {
-        cacheKey = key;
-      } else {
-        cacheKey = `${project}:${table}:${key}`;
-      }
+      // Get specific key
+      const cacheKey = `${project}:${table}:${key}`;
       console.log(`🔎 Looking for specific key: ${cacheKey}`);
       const value = await redis.get(cacheKey);
       
@@ -283,7 +304,7 @@ export const getCachedDataHandler = async (req, res) => {
       return res.status(200).json({
         message: "Cached data retrieved",
         key: cacheKey,
-        data: { [cacheKey]: parsedData }
+        data: parsedData
       });
     } else {
       // Get all keys for project:table
@@ -295,30 +316,23 @@ export const getCachedDataHandler = async (req, res) => {
       if (keys.length > 0) {
         console.log(`📋 Keys found:`, keys);
         
-        // Get the actual data for all keys
-        const cachedData = {};
-        for (const k of keys) {
+        // Also get the actual data for the first few keys
+        const sampleData = {};
+        const sampleKeys = keys.slice(0, 3); // Get first 3 keys as sample
+        for (const k of sampleKeys) {
           const value = await redis.get(k);
           if (value) {
-            cachedData[k] = JSON.parse(value);
-            console.log(`✅ Retrieved data for key: ${k}`);
+            sampleData[k] = JSON.parse(value);
           }
         }
-        console.log(`📊 Retrieved data from ${Object.keys(cachedData).length} keys`);
-        
-        return res.status(200).json({
-          message: "Cached data retrieved",
-          keysFound: keys.length,
-          keys: keys,
-          data: cachedData
-        });
-      } else {
-        console.log(`❌ No cached keys found for pattern: ${searchPattern}`);
-        return res.status(404).json({
-          message: "No cached keys found",
-          pattern: searchPattern
-        });
+        console.log(`📊 Sample data from first ${sampleKeys.length} keys:`, sampleData);
       }
+      
+      return res.status(200).json({
+        message: "Cache keys retrieved",
+        keysFound: keys.length,
+        keys: keys
+      });
     }
 
   } catch (err) {
@@ -343,7 +357,16 @@ export const getPaginatedCacheKeysHandler = async (req, res) => {
     // Get all keys for project:table
     const searchPattern = `${project}:${table}:*`;
     console.log(`🔎 Searching for all keys with pattern: ${searchPattern}`);
-    const allKeys = await redis.keys(searchPattern);
+    
+    // Use SCAN for Valkey compatibility
+    const allKeys = [];
+    let cursor = 0;
+    
+    do {
+      const result = await redis.scan(cursor, 'MATCH', searchPattern, 'COUNT', '100');
+      cursor = result[0];
+      allKeys.push(...result[1]);
+    } while (cursor !== 0);
     
     console.log(`📦 Found ${allKeys.length} total keys for ${project}:${table}`);
     
@@ -440,7 +463,15 @@ export const getCacheStatsHandler = async (req, res) => {
   try {
     const { project, table } = req.query;
     const searchPattern = `${project}:${table}:*`;
-    const keys = await redis.keys(searchPattern);
+    // Use SCAN for Valkey compatibility
+    const keys = [];
+    let cursor = 0;
+    
+    do {
+      const result = await redis.scan(cursor, 'MATCH', searchPattern, 'COUNT', '100');
+      cursor = result[0];
+      keys.push(...result[1]);
+    } while (cursor !== 0);
     
     const stats = {
       totalKeys: keys.length,
@@ -539,7 +570,6 @@ export const testCacheConnection = async (req, res) => {
     });
   }
 };
-
 /**
  * Handler to update cache from Lambda function streaming DynamoDB changes
  * Request body: {
@@ -775,7 +805,15 @@ async function handleInsert(project, tableName, newItem, itemsPerKey, ttl) {
   } else {
     // Multiple items per key - find the best chunk to add to or create new one
     const searchPattern = `${project}:${tableName}:chunk:*`;
-    const existingChunks = await redis.keys(searchPattern);
+    // Use SCAN for Valkey compatibility
+    const existingChunks = [];
+    let cursor = 0;
+    
+    do {
+      const result = await redis.scan(cursor, 'MATCH', searchPattern, 'COUNT', '100');
+      cursor = result[0];
+      existingChunks.push(...result[1]);
+    } while (cursor !== 0);
     
     console.log(`🔍 Found ${existingChunks.length} existing chunks`);
     
@@ -870,7 +908,17 @@ async function handleModify(project, tableName, newItem, oldItem, itemsPerKey, t
     // For chunked data, we need to find and update the chunk containing this item
     const searchPattern = `${project}:${tableName}:chunk:*`;
     console.log(`🔍 Searching for chunks with pattern: ${searchPattern}`);
-    const keys = await redis.keys(searchPattern);
+    
+    // Use SCAN for Valkey compatibility
+    const keys = [];
+    let cursor = 0;
+    
+    do {
+      const result = await redis.scan(cursor, 'MATCH', searchPattern, 'COUNT', '100');
+      cursor = result[0];
+      keys.push(...result[1]);
+    } while (cursor !== 0);
+    
     console.log(`📦 Found ${keys.length} chunks to search through`);
     
     const targetItemId = extractItemId(newItem) || extractItemId(oldItem);
@@ -969,7 +1017,17 @@ async function handleRemove(project, tableName, oldItem, itemsPerKey) {
     // For chunked data, find and remove from chunk
     const searchPattern = `${project}:${tableName}:chunk:*`;
     console.log(`🔍 Searching for chunks with pattern: ${searchPattern}`);
-    const keys = await redis.keys(searchPattern);
+    
+    // Use SCAN for Valkey compatibility
+    const keys = [];
+    let cursor = 0;
+    
+    do {
+      const result = await redis.scan(cursor, 'MATCH', searchPattern, 'COUNT', '100');
+      cursor = result[0];
+      keys.push(...result[1]);
+    } while (cursor !== 0);
+    
     console.log(`📦 Found ${keys.length} chunks to search through`);
     
     for (const key of keys) {

@@ -688,6 +688,43 @@ app.get('/cache/stats', getCacheStatsHandler);
 app.get('/cache/health', cacheHealthHandler);
 app.get('/cache/test', testCacheConnection);
 
+// Add a simple connection test endpoint
+app.get('/test-valkey-connection', async (req, res) => {
+  try {
+    console.log('🔍 Testing Valkey connection...');
+    console.log('📋 Connection config:', {
+      host: process.env.REDIS_HOST,
+      port: process.env.REDIS_PORT,
+      tls: false,
+      password: process.env.REDIS_PASSWORD ? '***' : 'none'
+    });
+    
+    await redis.ping();
+    console.log('✅ Valkey ping successful');
+    res.json({
+      status: 'success',
+      message: 'Valkey connection test passed',
+      config: {
+        host: process.env.REDIS_HOST,
+        port: process.env.REDIS_PORT,
+        tls: false
+      }
+    });
+  } catch (error) {
+    console.error('❌ Valkey connection test failed:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Valkey connection test failed',
+      error: error.message,
+      config: {
+        host: process.env.REDIS_HOST,
+        port: process.env.REDIS_PORT,
+        tls: false
+      }
+    });
+  }
+});
+
 // Cache update from Lambda function
 app.post('/cache-data', updateCacheFromLambdaHandler);
 
