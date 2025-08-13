@@ -34,10 +34,10 @@ jobs:
           # Install PM2 globally with sudo
           sudo npm install -g pm2
           # Stop any existing instances
-          pm2 stop brmh-backend || true
-          pm2 delete brmh-backend || true
+          pm2 stop brmh-backend-v2 || true
+          pm2 delete brmh-backend-v2 || true
           # Start the application as a system service
-          pm2 start npm --name "brmh-backend" -- start
+          pm2 start npm --name "brmh-backend-v2" -- start
           # Save PM2 process list
           pm2 save
           # Remove any existing startup script
