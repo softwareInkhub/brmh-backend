@@ -253,13 +253,22 @@ export const getCachedDataHandler = async (req, res) => {
 
     console.log(`📋 Query params: project=${project}, table=${table}, key=${key}, pattern=${pattern}`);
 
-    if (pattern) {
-      // Get multiple keys matching pattern
-      const searchPattern = `${project}:${table}:${pattern}`;
-      console.log(`🔎 Searching with pattern: ${searchPattern}`);
-      const keys = await redis.keys(searchPattern);
-      
-      console.log(`📦 Found ${keys.length} keys matching pattern`);
+         if (pattern) {
+       // Get multiple keys matching pattern
+       const searchPattern = `${project}:${table}:${pattern}`;
+       console.log(`🔎 Searching with pattern: ${searchPattern}`);
+       
+       // Use SCAN for Valkey compatibility
+       const keys = [];
+       let cursor = 0;
+       
+       do {
+         const result = await redis.scan(cursor, 'MATCH', searchPattern, 'COUNT', '100');
+         cursor = result[0];
+         keys.push(...result[1]);
+       } while (cursor !== 0);
+       
+       console.log(`📦 Found ${keys.length} keys matching pattern`);
       
       if (keys.length === 0) {
         console.log(`❌ No cached keys found matching pattern: ${searchPattern}`);
@@ -306,13 +315,22 @@ export const getCachedDataHandler = async (req, res) => {
         key: cacheKey,
         data: parsedData
       });
-    } else {
-      // Get all keys for project:table
-      const searchPattern = `${project}:${table}:*`;
-      console.log(`🔎 Searching for all keys with pattern: ${searchPattern}`);
-      const keys = await redis.keys(searchPattern);
-      
-      console.log(`📦 Found ${keys.length} total keys for ${project}:${table}`);
+         } else {
+       // Get all keys for project:table
+       const searchPattern = `${project}:${table}:*`;
+       console.log(`🔎 Searching for all keys with pattern: ${searchPattern}`);
+       
+       // Use SCAN for Valkey compatibility
+       const keys = [];
+       let cursor = 0;
+       
+       do {
+         const result = await redis.scan(cursor, 'MATCH', searchPattern, 'COUNT', '100');
+         cursor = result[0];
+         keys.push(...result[1]);
+       } while (cursor !== 0);
+       
+       console.log(`📦 Found ${keys.length} total keys for ${project}:${table}`);
       if (keys.length > 0) {
         console.log(`📋 Keys found:`, keys);
         
@@ -430,9 +448,17 @@ export const clearCacheHandler = async (req, res) => {
       searchPattern = `${project}:${table}:*`;
     }
 
-    const keys = await redis.keys(searchPattern);
-    
-    if (keys.length === 0) {
+         // Use SCAN for Valkey compatibility
+     const keys = [];
+     let cursor = 0;
+     
+     do {
+       const result = await redis.scan(cursor, 'MATCH', searchPattern, 'COUNT', '100');
+       cursor = result[0];
+       keys.push(...result[1]);
+     } while (cursor !== 0);
+     
+     if (keys.length === 0) {
       return res.status(404).json({
         message: "No cached keys found to clear",
         pattern: searchPattern
@@ -1096,3 +1122,4 @@ process.on('SIGTERM', async () => {
   console.log('✅ Cache service shutdown complete');
   process.exit(0);
 });
+
