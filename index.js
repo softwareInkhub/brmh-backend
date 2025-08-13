@@ -695,7 +695,7 @@ app.get('/test-valkey-connection', async (req, res) => {
     console.log('📋 Connection config:', {
       host: process.env.REDIS_HOST,
       port: process.env.REDIS_PORT,
-      tls: false,
+      tls: process.env.REDIS_TLS === 'true' ? 'enabled' : 'disabled',
       password: process.env.REDIS_PASSWORD ? '***' : 'none'
     });
     
@@ -707,7 +707,7 @@ app.get('/test-valkey-connection', async (req, res) => {
       config: {
         host: process.env.REDIS_HOST,
         port: process.env.REDIS_PORT,
-        tls: false
+        tls: process.env.REDIS_TLS === 'true' ? 'enabled' : 'disabled'
       }
     });
   } catch (error) {
@@ -719,7 +719,7 @@ app.get('/test-valkey-connection', async (req, res) => {
       config: {
         host: process.env.REDIS_HOST,
         port: process.env.REDIS_PORT,
-        tls: false
+        tls: process.env.REDIS_TLS === 'true' ? 'enabled' : 'disabled'
       }
     });
   }
