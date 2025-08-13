@@ -9,17 +9,24 @@ console.log('Cache service: importing modules and initializing clients');
 const redis = new Redis({
   host: process.env.REDIS_HOST || 'localhost',
   port: parseInt(process.env.REDIS_PORT) || 6379,
-  tls: false, // Temporarily disable TLS to test connection
+  tls: process.env.REDIS_TLS === 'true' ? {} : undefined,
   password: process.env.REDIS_PASSWORD,
   retryDelayOnFailover: 100,
   maxRetriesPerRequest: 3,
   lazyConnect: true,
-  connectTimeout: 10000,
-  commandTimeout: 10000,
+  connectTimeout: 15000,
+  commandTimeout: 15000,
   showFriendlyErrorStack: true,
   // Add connection debugging
-  enableOfflineQueue: false,
-  maxLoadingTimeout: 10000,
+  enableOfflineQueue: true,
+  maxLoadingTimeout: 15000,
+  // Add retry strategy
+  retryDelayOnClusterDown: 300,
+  retryDelayOnFailover: 100,
+  maxRetriesPerRequest: 5,
+  // Add keep-alive
+  keepAlive: 30000,
+  family: 4, // Force IPv4
 });
 
 // Initialize DynamoDB clients
@@ -57,6 +64,26 @@ redis.on('close', () => {
 redis.on('ready', () => {
   console.log('🚀 Redis is ready to accept commands');
 });
+
+// Add a simple connection test function
+export const testRedisConnection = async () => {
+  try {
+    console.log('🔍 Testing Redis connection...');
+    console.log('📋 Connection config:', {
+      host: process.env.REDIS_HOST,
+      port: process.env.REDIS_PORT,
+      tls: process.env.REDIS_TLS === 'true' ? 'enabled' : 'disabled',
+      password: process.env.REDIS_PASSWORD ? '***' : 'none'
+    });
+    
+    await redis.ping();
+    console.log('✅ Redis ping successful');
+    return true;
+  } catch (error) {
+    console.error('❌ Redis connection test failed:', error);
+    return false;
+  }
+};
 
 /**
  * Express handler for caching DynamoDB table data to Redis
@@ -260,13 +287,13 @@ export const getCachedDataHandler = async (req, res) => {
        
        // Use SCAN for Valkey compatibility
        const keys = [];
-       let cursor = 0;
+       let cursor = '0';
        
        do {
          const result = await redis.scan(cursor, 'MATCH', searchPattern, 'COUNT', '100');
-         cursor = result[0];
-         keys.push(...result[1]);
-       } while (cursor !== 0);
+          cursor = result[0];
+          keys.push(...result[1]);
+        } while (cursor !== '0');
        
        console.log(`📦 Found ${keys.length} keys matching pattern`);
       
@@ -321,14 +348,14 @@ export const getCachedDataHandler = async (req, res) => {
        console.log(`🔎 Searching for all keys with pattern: ${searchPattern}`);
        
        // Use SCAN for Valkey compatibility
-       const keys = [];
-       let cursor = 0;
+        const keys = [];
+        let cursor = '0';
        
        do {
          const result = await redis.scan(cursor, 'MATCH', searchPattern, 'COUNT', '100');
-         cursor = result[0];
-         keys.push(...result[1]);
-       } while (cursor !== 0);
+          cursor = result[0];
+          keys.push(...result[1]);
+        } while (cursor !== '0');
        
        console.log(`📦 Found ${keys.length} total keys for ${project}:${table}`);
       if (keys.length > 0) {
@@ -378,13 +405,13 @@ export const getPaginatedCacheKeysHandler = async (req, res) => {
     
     // Use SCAN for Valkey compatibility
     const allKeys = [];
-    let cursor = 0;
+    let cursor = '0';
     
     do {
       const result = await redis.scan(cursor, 'MATCH', searchPattern, 'COUNT', '100');
       cursor = result[0];
       allKeys.push(...result[1]);
-    } while (cursor !== 0);
+    } while (cursor !== '0');
     
     console.log(`📦 Found ${allKeys.length} total keys for ${project}:${table}`);
     
@@ -450,13 +477,13 @@ export const clearCacheHandler = async (req, res) => {
 
          // Use SCAN for Valkey compatibility
      const keys = [];
-     let cursor = 0;
+     let cursor = '0';
      
      do {
        const result = await redis.scan(cursor, 'MATCH', searchPattern, 'COUNT', '100');
        cursor = result[0];
        keys.push(...result[1]);
-     } while (cursor !== 0);
+     } while (cursor !== '0');
      
      if (keys.length === 0) {
       return res.status(404).json({
@@ -491,13 +518,13 @@ export const getCacheStatsHandler = async (req, res) => {
     const searchPattern = `${project}:${table}:*`;
     // Use SCAN for Valkey compatibility
     const keys = [];
-    let cursor = 0;
+    let cursor = '0';
     
     do {
       const result = await redis.scan(cursor, 'MATCH', searchPattern, 'COUNT', '100');
       cursor = result[0];
       keys.push(...result[1]);
-    } while (cursor !== 0);
+    } while (cursor !== '0');
     
     const stats = {
       totalKeys: keys.length,
@@ -833,13 +860,13 @@ async function handleInsert(project, tableName, newItem, itemsPerKey, ttl) {
     const searchPattern = `${project}:${tableName}:chunk:*`;
     // Use SCAN for Valkey compatibility
     const existingChunks = [];
-    let cursor = 0;
+    let cursor = '0';
     
     do {
       const result = await redis.scan(cursor, 'MATCH', searchPattern, 'COUNT', '100');
       cursor = result[0];
       existingChunks.push(...result[1]);
-    } while (cursor !== 0);
+    } while (cursor !== '0');
     
     console.log(`🔍 Found ${existingChunks.length} existing chunks`);
     
@@ -937,13 +964,13 @@ async function handleModify(project, tableName, newItem, oldItem, itemsPerKey, t
     
     // Use SCAN for Valkey compatibility
     const keys = [];
-    let cursor = 0;
+    let cursor = '0';
     
     do {
       const result = await redis.scan(cursor, 'MATCH', searchPattern, 'COUNT', '100');
       cursor = result[0];
       keys.push(...result[1]);
-    } while (cursor !== 0);
+    } while (cursor !== '0');
     
     console.log(`📦 Found ${keys.length} chunks to search through`);
     
@@ -1046,13 +1073,13 @@ async function handleRemove(project, tableName, oldItem, itemsPerKey) {
     
     // Use SCAN for Valkey compatibility
     const keys = [];
-    let cursor = 0;
+    let cursor = '0';
     
     do {
       const result = await redis.scan(cursor, 'MATCH', searchPattern, 'COUNT', '100');
       cursor = result[0];
       keys.push(...result[1]);
-    } while (cursor !== 0);
+    } while (cursor !== '0');
     
     console.log(`📦 Found ${keys.length} chunks to search through`);
     
