@@ -1,7 +1,7 @@
 import { DynamoDBClient, ScanCommand } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
-import { algoliasearch } from 'algoliasearch';
+import algoliasearch from 'algoliasearch';
 import { v4 as uuidv4 } from 'uuid';
 
 console.log('Search indexing service: importing modules and initializing clients');
@@ -370,10 +370,8 @@ export const indexTableHandler = async (req, res) => {
     const client = algoliasearch(ALGOLIA_APP_ID, ALGOLIA_API_KEY);
 
     try {
-      await client.saveObjects({
-        indexName,
-        objects: enrichedRecords
-      });
+      const index = client.initIndex(indexName);
+      await index.saveObjects(enrichedRecords);
       console.log(`✅ Algolia indexing successful for index: ${indexName}`);
     } catch (err) {
       console.error('❌ Algolia indexing failed:', err);
@@ -486,7 +484,6 @@ export const searchIndexHandler = async (req, res) => {
       const index = client.initIndex(indexName);
       
       const searchParams = {
-        query,
         hitsPerPage,
         page,
         ...(filters && { filters })
