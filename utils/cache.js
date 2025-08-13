@@ -12,7 +12,7 @@ const redis = new Redis({
   tls: process.env.REDIS_TLS === 'true' ? {} : undefined,
   password: process.env.REDIS_PASSWORD,
   retryDelayOnFailover: 100,
-  maxRetriesPerRequest: 3,
+  maxRetriesPerRequest: 5,
   lazyConnect: true,
   connectTimeout: 15000,
   commandTimeout: 15000,
@@ -23,10 +23,19 @@ const redis = new Redis({
   // Add retry strategy
   retryDelayOnClusterDown: 300,
   retryDelayOnFailover: 100,
-  maxRetriesPerRequest: 5,
   // Add keep-alive
   keepAlive: 30000,
   family: 4, // Force IPv4
+  // Add reconnection settings
+  retryDelayOnFailover: 100,
+  maxRetriesPerRequest: 5,
+  // Add connection pool
+  maxLoadingTimeout: 15000,
+  // Add connection monitoring
+  lazyConnect: false, // Connect immediately
+  // Add error recovery
+  retryDelayOnFailover: 100,
+  maxRetriesPerRequest: 5,
 });
 
 // Initialize DynamoDB clients
