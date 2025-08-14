@@ -46,6 +46,8 @@ import {
 import * as crud from './utils/crud.js';
 import { execute } from './utils/execute.js';
 
+import { mockDataAgent } from './lib/mock-data-agent.js';
+
 // Load environment variables
 dotenv.config();
 console.log("AWS_ACCESS_KEY_ID", process.env.AWS_ACCESS_KEY_ID);
@@ -1083,3 +1085,101 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`AI Agent API documentation available at http://localhost:${PORT}/ai-agent-docs`);
 });
 
+// --- Mock Data Agent API Routes ---
+app.post('/mock-data/generate', async (req, res) => {
+  try {
+    const { tableName, count = 10, context = null } = req.body;
+    
+    if (!tableName) {
+      return res.status(400).json({ error: 'tableName is required' });
+    }
+
+    console.log(`[Mock Data Agent] Generating ${count} records for table: ${tableName}`);
+    
+    const result = await mockDataAgent.generateMockData({ tableName, count, context });
+    
+    if (result.success) {
+      res.json({ success: true, result: result.result });
+    } else {
+      res.status(500).json({ error: result.error });
+    }
+  } catch (error) {
+    console.error('[Mock Data Agent] Error:', error);
+    res.status(500).json({ 
+      error: 'Failed to generate mock data', 
+      details: error.message 
+    });
+  }
+});
+
+app.post('/mock-data/generate-for-schema', async (req, res) => {
+  try {
+    const { schema, tableName, count = 10, context = null } = req.body;
+    
+    if (!schema || !tableName) {
+      return res.status(400).json({ error: 'schema and tableName are required' });
+    }
+
+    console.log(`[Mock Data Agent] Generating ${count} records for schema in table: ${tableName}`);
+    
+    const result = await mockDataAgent.generateMockDataForSchema({ schema, tableName, count, context });
+    
+    if (result.success) {
+      res.json({ success: true, result: result.result });
+    } else {
+      res.status(500).json({ error: result.error });
+    }
+  } catch (error) {
+    console.error('[Mock Data Agent] Error:', error);
+    res.status(500).json({ 
+      error: 'Failed to generate mock data for schema', 
+      details: error.message 
+    });
+  }
+});
+
+app.post('/mock-data/generate-for-namespace', async (req, res) => {
+  try {
+    const { namespaceId, count = 10, context = null } = req.body;
+    
+    if (!namespaceId) {
+      return res.status(400).json({ error: 'namespaceId is required' });
+    }
+
+    console.log(`[Mock Data Agent] Generating ${count} records for namespace: ${namespaceId}`);
+    
+    const result = await mockDataAgent.generateMockDataForNamespace({ namespaceId, count, context });
+    
+    if (result.success) {
+      res.json({ success: true, result: result.result });
+    } else {
+      res.status(500).json({ error: result.error });
+    }
+  } catch (error) {
+    console.error('[Mock Data Agent] Error:', error);
+    res.status(500).json({ 
+      error: 'Failed to generate mock data for namespace', 
+      details: error.message 
+    });
+  }
+});
+
+app.get('/mock-data/tables', async (req, res) => {
+  try {
+    console.log(`[Mock Data Agent] Listing available tables`);
+    
+    const result = await mockDataAgent.listAvailableTables();
+    
+    if (result.success) {
+      res.json({ success: true, result: result.result });
+    } else {
+      res.status(500).json({ error: result.error });
+    }
+  } catch (error) {
+    console.error('[Mock Data Agent] Error:', error);
+    res.status(500).json({ 
+      error: 'Failed to list available tables', 
+      details: error.message 
+    });
+  }
+});
