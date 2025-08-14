@@ -29,7 +29,10 @@ import {
   clearCacheHandler, 
   getCacheStatsHandler, 
   cacheHealthHandler,
-  testCacheConnection
+  testCacheConnection,
+  clearUnwantedOrderDataHandler,
+  cleanupTimestampChunksHandler,
+  getCachedDataInSequenceHandler
 } from './utils/cache.js';
 
 import { updateCacheFromLambdaHandler } from './utils/cache.js';
@@ -47,6 +50,7 @@ import * as crud from './utils/crud.js';
 import { execute } from './utils/execute.js';
 
 import { mockDataAgent } from './lib/mock-data-agent.js';
+import { fetchOrdersWithShortIdsHandler } from './utils/fetchOrder.js';
 
 // Load environment variables
 dotenv.config();
@@ -689,6 +693,9 @@ app.get('/cache/clear', clearCacheHandler);
 app.get('/cache/stats', getCacheStatsHandler);
 app.get('/cache/health', cacheHealthHandler);
 app.get('/cache/test', testCacheConnection);
+app.post('/cache/clear-unwanted-order-data', clearUnwantedOrderDataHandler);
+app.post('/cache/cleanup-timestamp-chunks', cleanupTimestampChunksHandler);
+app.get('/cache/data-in-sequence', getCachedDataInSequenceHandler);
 
 // Add a simple connection test endpoint
 app.get('/test-valkey-connection', async (req, res) => {
@@ -729,30 +736,6 @@ app.get('/test-valkey-connection', async (req, res) => {
 
 // Cache update from Lambda function
 app.post('/cache-data', updateCacheFromLambdaHandler);
-
-// Test endpoint to simulate Lambda cache update
-app.post('/cache/test-update', async (req, res) => {
-  try {
-    const { type, newItem, oldItem, tableName } = req.body;
-    
-    console.log('Testing cache update with:', { type, tableName, newItem, oldItem });
-    
-    // Create a test request that mimics what Lambda would send
-    const testReq = {
-      body: {
-        type: type || 'INSERT',
-        newItem: newItem || { id: 'test-id', data: 'test-data' },
-        oldItem: oldItem,
-        tableName: tableName || 'brmh-cache'
-      }
-    };
-    
-    await updateCacheFromLambdaHandler(testReq, res);
-  } catch (error) {
-    console.error('Test cache update error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
 
 // --- Search Indexing API Routes ---
 app.post('/search/index', indexTableHandler);
@@ -965,48 +948,37 @@ app.all('/unified/*', async (req, res) => {
 //cache-data getting from lambda to update the cache
 app.post("/cache/update", async (req, res) => {
   try {
-    const { type, newItem, oldItem } = req.body;
+    const { type, newItem, oldItem, tableName } = req.body; // ← Get tableName from Lambda
 
     console.log("Received from Lambda:");
     console.log("Event Type:", type);
+    console.log("Table Name (from Lambda):", tableName); // ← This is the ACTUAL table
     console.log("New Item:", newItem);
     console.log("Old Item:", oldItem);
 
-    // Extract table name from the item
-    let tableName = null;
-    
-    // Try to get table name from the item structure
-    if (newItem && newItem.tableName) {
-      tableName = newItem.tableName;
-    } else if (oldItem && oldItem.tableName) {
-      tableName = oldItem.tableName;
-    } else {
-      // If no tableName in item, try to extract from DynamoDB structure
-      // Look for common table name patterns in the item
-      const item = newItem || oldItem;
-      if (item) {
-        // Check if item has a tableName field in DynamoDB format
-        if (item.tableName && item.tableName.S) {
-          tableName = item.tableName.S;
-        } else if (item.tableName && typeof item.tableName === 'string') {
-          tableName = item.tableName;
-        } else {
-          // Try to infer table name from the item structure or context
-          // For now, we'll use a default or extract from the request context
-          tableName = 'brmh-cache'; // Default fallback
-        }
-      }
-    }
-
+    // Use the table name from Lambda (the actual table being updated)
     if (!tableName) {
-      console.error("Could not determine table name from item");
-      return res.status(400).json({ error: "Could not determine table name from item" });
+      console.error("No table name provided by Lambda");
+      return res.status(400).json({ error: "No table name provided by Lambda" });
     }
 
     console.log(`Processing cache update for table: ${tableName}`);
+    console.log(`🔍 Table name debug:`);
+    console.log(`  - Table name from Lambda:`, tableName);
+    console.log(`  - newItem.tableName (config table):`, newItem?.tableName);
+    console.log(`  - oldItem.tableName (config table):`, oldItem?.tableName);
+
+    // Create a modified request with the correct table name
+    const modifiedReq = {
+      ...req,
+      body: {
+        ...req.body,
+        extractedTableName: tableName // Use the actual table from Lambda
+      }
+    };
 
     // Use the existing cache update handler
-    await updateCacheFromLambdaHandler(req, res);
+    await updateCacheFromLambdaHandler(modifiedReq, res);
 
     // Also trigger indexing update if table name is not the indexing table itself
     if (tableName !== 'brmh-indexing') {
@@ -1180,6 +1152,48 @@ app.get('/mock-data/tables', async (req, res) => {
     res.status(500).json({ 
       error: 'Failed to list available tables', 
       details: error.message 
+    });
+  }
+});
+
+// Fetch orders with short IDs (3 digits or less)
+app.get('/orders/short-ids', fetchOrdersWithShortIdsHandler);
+
+// Debug endpoint to see raw data structure
+app.get('/orders/debug', async (req, res) => {
+  try {
+    console.log('🔍 Debug endpoint called - fetching raw data...');
+    
+    const { DynamoDBClient } = await import('@aws-sdk/client-dynamodb');
+    const { DynamoDBDocumentClient, ScanCommand } = await import('@aws-sdk/lib-dynamodb');
+    
+    const client = new DynamoDBClient({});
+    const docClient = DynamoDBDocumentClient.from(client);
+    
+    const scanParams = {
+      TableName: 'shopify-inkhub-get-products',
+      Limit: 5 // Only get first 5 items for debugging
+    };
+
+    const command = new ScanCommand(scanParams);
+    const response = await docClient.send(command);
+    
+    console.log('🔍 Raw response:', JSON.stringify(response, null, 2));
+    
+    res.json({
+      success: true,
+      message: 'Debug data retrieved',
+      totalItems: response.Items?.length || 0,
+      sampleItems: response.Items?.slice(0, 3) || [],
+      rawResponse: response
+    });
+
+  } catch (error) {
+    console.error('❌ Error in debug endpoint:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch debug data',
+      message: error.message
     });
   }
 });
