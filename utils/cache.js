@@ -838,7 +838,18 @@ export const clearCacheHandler = async (req, res) => {
       });
     }
 
-    const deletedCount = await redis.del(...keys);
+    // Delete keys individually to avoid cross-slot errors in Redis Cluster
+    let deletedCount = 0;
+    for (const key of keys) {
+      try {
+        const result = await redis.del(key);
+        deletedCount += result;
+        console.log(`🗑️ Deleted key: ${key}`);
+      } catch (err) {
+        console.error(`❌ Failed to delete key ${key}:`, err);
+        // Continue with other keys even if one fails
+      }
+    }
 
     return res.status(200).json({
       message: "Cache cleared successfully",
