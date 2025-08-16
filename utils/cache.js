@@ -128,11 +128,11 @@ export const cacheTableHandler = async (req, res) => {
       });
     }
 
-    if (ttl < 1) {
-      console.error("'ttl' must be >= 1");
+    if (ttl !== undefined && ttl !== null && ttl < 0) {
+      console.error("'ttl' must be >= 0 (0 = no expiration)");
       return res.status(400).json({ 
-        error: "'ttl' must be >= 1",
-        message: "TTL must be a positive integer (seconds)"
+        error: "'ttl' must be >= 0",
+        message: "TTL must be >= 0 (0 = no expiration, positive = seconds)"
       });
     }
 
@@ -143,6 +143,7 @@ export const cacheTableHandler = async (req, res) => {
       successfulWrites,
       failedWrites,
       attemptedKeys,
+      skippedDuplicates,
       cacheKeys
     } = await scanAndCacheWithBoundedBuffer(table, project, recordsPerKey, ttl);
     
@@ -151,6 +152,7 @@ export const cacheTableHandler = async (req, res) => {
 
     console.log("✅ Successful cache writes:", successfulWrites);
     console.log("❌ Failed cache writes:", failedWrites);
+    console.log("⏭️ Skipped duplicates:", skippedDuplicates);
     console.log("📊 Cache Fill Rate:", `${fillRate}%`);
     console.log("⏱️ Cache operation duration (ms):", duration);
 
@@ -162,6 +164,7 @@ export const cacheTableHandler = async (req, res) => {
       successfulWrites,
       failedWrites,
       attemptedKeys,
+      skippedDuplicates,
       fillRate: `${fillRate}%`,
       durationMs: duration,
       cacheKeys: cacheKeys.slice(0, 10), // Return first 10 keys as sample
@@ -183,7 +186,37 @@ export const cacheTableHandler = async (req, res) => {
 };
 
 /**
- * Scans DynamoDB and caches records in global chunks (across pages) to Redis using a bounded buffer.
+ * Check if an item already exists in cache
+ */
+async function isItemAlreadyCached(project, tableName, itemId) {
+  try {
+    const key = `${project}:${tableName}:${itemId}`;
+    const exists = await redis.exists(key);
+    return exists === 1;
+  } catch (err) {
+    console.error(`❌ Error checking if item ${itemId} exists in cache:`, err);
+    return false; // Assume not cached if error occurs
+  }
+}
+
+/**
+ * Check if any items in a chunk already exist in cache
+ */
+async function getDuplicateItems(project, tableName, items) {
+  const duplicates = [];
+  
+  for (const item of items) {
+    const itemId = item.id || item.pk || item.PK || item.Id || item.ID;
+    if (itemId && await isItemAlreadyCached(project, tableName, itemId)) {
+      duplicates.push(itemId);
+    }
+  }
+  
+  return duplicates;
+}
+
+/**
+ * Scan DynamoDB table and cache data with bounded buffer
  */
 async function scanAndCacheWithBoundedBuffer(tableName, project, recordsPerKey, ttl) {
   let ExclusiveStartKey;
@@ -191,6 +224,7 @@ async function scanAndCacheWithBoundedBuffer(tableName, project, recordsPerKey, 
   let successfulWrites = 0;
   let failedWrites = 0;
   let attemptedKeys = 0;
+  let skippedDuplicates = 0;
   let chunkIndex = 0;
   let buffer = [];
   let page = 0;
@@ -227,18 +261,51 @@ async function scanAndCacheWithBoundedBuffer(tableName, project, recordsPerKey, 
         const itemId = item.id || item.pk || item.PK || item.Id || item.ID || chunkIndex;
         key = `${project}:${tableName}:${itemId}`;
         value = JSON.stringify(item);
+        
+        // Check for duplicate before inserting
+        if (await isItemAlreadyCached(project, tableName, itemId)) {
+          console.log(`⏭️ Skipping duplicate item: ${itemId}`);
+          skippedDuplicates++;
+          chunkIndex++;
+          continue;
+        }
       } else {
         key = `${project}:${tableName}:chunk:${chunkIndex}`;
         value = JSON.stringify(chunk);
+        
+        // Check for duplicates in chunk
+        const duplicates = await getDuplicateItems(project, tableName, chunk);
+        if (duplicates.length > 0) {
+          console.log(`⚠️ Found ${duplicates.length} duplicate items in chunk ${chunkIndex}:`, duplicates);
+          // Filter out duplicates from chunk
+          const uniqueItems = chunk.filter(item => {
+            const itemId = item.id || item.pk || item.PK || item.Id || item.ID;
+            return !itemId || !duplicates.includes(itemId);
+          });
+          
+          if (uniqueItems.length === 0) {
+            console.log(`⏭️ Skipping chunk ${chunkIndex} - all items are duplicates`);
+            skippedDuplicates += chunk.length;
+            chunkIndex++;
+            continue;
+          }
+          
+          value = JSON.stringify(uniqueItems);
+          skippedDuplicates += duplicates.length;
+        }
       }
       
       attemptedKeys++;
       cacheKeys.push(key);
       
       try {
-        await redis.set(key, value, 'EX', ttl);
+        if (ttl && ttl > 0) {
+          await redis.set(key, value, 'EX', ttl);
+        } else {
+          await redis.set(key, value); // No expiration
+        }
         successfulWrites++;
-        console.log(`✅ Redis write succeeded for key ${key} (chunk ${chunkIndex})`);
+        console.log(`✅ Redis write succeeded for key ${key} (chunk ${chunkIndex})${ttl && ttl > 0 ? ` with TTL ${ttl}s` : ' with no expiration'}`);
       } catch (err) {
         failedWrites++;
         console.error(`❌ Redis write failed for key ${key} (chunk ${chunkIndex}):`, err);
@@ -257,25 +324,78 @@ async function scanAndCacheWithBoundedBuffer(tableName, project, recordsPerKey, 
       const itemId = item.id || item.pk || item.PK || item.Id || item.ID || chunkIndex;
       key = `${project}:${tableName}:${itemId}`;
       value = JSON.stringify(item);
+      
+      // Check for duplicate before inserting
+      if (await isItemAlreadyCached(project, tableName, itemId)) {
+        console.log(`⏭️ Skipping duplicate item: ${itemId}`);
+        skippedDuplicates++;
+      } else {
+        attemptedKeys++;
+        cacheKeys.push(key);
+        
+        try {
+          await redis.set(key, value, 'EX', ttl);
+          successfulWrites++;
+          console.log(`✅ Redis write succeeded for key ${key} (final chunk)`);
+        } catch (err) {
+          failedWrites++;
+          console.error(`❌ Redis write failed for key ${key} (final chunk):`, err);
+        }
+      }
     } else {
       key = `${project}:${tableName}:chunk:${chunkIndex}`;
       value = JSON.stringify(buffer);
-    }
-    
-    attemptedKeys++;
-    cacheKeys.push(key);
-    
-    try {
-      await redis.set(key, value, 'EX', ttl);
-      successfulWrites++;
-      console.log(`✅ Redis write succeeded for key ${key} (final chunk)`);
-    } catch (err) {
-      failedWrites++;
-      console.error(`❌ Redis write failed for key ${key} (final chunk):`, err);
+      
+      // Check for duplicates in final buffer
+      const duplicates = await getDuplicateItems(project, tableName, buffer);
+      if (duplicates.length > 0) {
+        console.log(`⚠️ Found ${duplicates.length} duplicate items in final buffer:`, duplicates);
+        // Filter out duplicates from buffer
+        const uniqueItems = buffer.filter(item => {
+          const itemId = item.id || item.pk || item.PK || item.Id || item.ID;
+          return !itemId || !duplicates.includes(itemId);
+        });
+        
+        if (uniqueItems.length === 0) {
+          console.log(`⏭️ Skipping final buffer - all items are duplicates`);
+          skippedDuplicates += buffer.length;
+        } else {
+          value = JSON.stringify(uniqueItems);
+          skippedDuplicates += duplicates.length;
+          
+          attemptedKeys++;
+          cacheKeys.push(key);
+          
+          try {
+            if (ttl && ttl > 0) {
+              await redis.set(key, value, 'EX', ttl);
+            } else {
+              await redis.set(key, value); // No expiration
+            }
+            successfulWrites++;
+            console.log(`✅ Redis write succeeded for key ${key} (final chunk)${ttl && ttl > 0 ? ` with TTL ${ttl}s` : ' with no expiration'}`);
+          } catch (err) {
+            failedWrites++;
+            console.error(`❌ Redis write failed for key ${key} (final chunk):`, err);
+          }
+        }
+      } else {
+        attemptedKeys++;
+        cacheKeys.push(key);
+        
+        try {
+          await redis.set(key, value, 'EX', ttl);
+          successfulWrites++;
+          console.log(`✅ Redis write succeeded for key ${key} (final chunk)`);
+        } catch (err) {
+          failedWrites++;
+          console.error(`❌ Redis write failed for key ${key} (final chunk):`, err);
+        }
+      }
     }
   }
 
-  return { totalScanned, successfulWrites, failedWrites, attemptedKeys, cacheKeys };
+  return { totalScanned, successfulWrites, failedWrites, attemptedKeys, skippedDuplicates, cacheKeys };
 }
 
 /**
@@ -367,20 +487,78 @@ export const getCachedDataHandler = async (req, res) => {
         } while (cursor !== '0');
        
        console.log(`📦 Found ${keys.length} total keys for ${project}:${table}`);
-      if (keys.length > 0) {
-        console.log(`📋 Keys found:`, keys);
         
-        // Also get the actual data for the first few keys
-        const sampleData = {};
-        const sampleKeys = keys.slice(0, 3); // Get first 3 keys as sample
-        for (const k of sampleKeys) {
-          const value = await redis.get(k);
-          if (value) {
-            sampleData[k] = JSON.parse(value);
+        if (keys.length > 0) {
+          console.log(`📋 Keys found:`, keys);
+          
+          // Sort keys to get chunks in sequence
+          const sortedKeys = keys.sort((a, b) => {
+            // Extract chunk numbers for comparison
+            const aMatch = a.match(/chunk:(\d+)$/);
+            const bMatch = b.match(/chunk:(\d+)$/);
+            
+            if (aMatch && bMatch) {
+              // Both are chunk keys, sort by chunk number
+              return parseInt(aMatch[1]) - parseInt(bMatch[1]);
+            } else if (aMatch) {
+              // Only a is a chunk key, put chunks after individual items
+              return 1;
+            } else if (bMatch) {
+              // Only b is a chunk key, put chunks after individual items
+              return -1;
+            } else {
+              // Both are individual items, sort alphabetically
+              return a.localeCompare(b);
+            }
+          });
+          
+          console.log(`📋 Sorted keys:`, sortedKeys);
+          
+          // Get data count for each key
+          const keysWithCounts = [];
+          let totalItems = 0;
+          
+          for (const key of sortedKeys) {
+            try {
+              const value = await redis.get(key);
+              if (value) {
+                const data = JSON.parse(value);
+                const itemCount = Array.isArray(data) ? data.length : 1;
+                totalItems += itemCount;
+                
+                keysWithCounts.push({
+                  key: key,
+                  itemCount: itemCount,
+                  dataType: Array.isArray(data) ? 'array' : 'object'
+                });
+                
+                console.log(`📊 ${key}: ${itemCount} item${itemCount !== 1 ? 's' : ''} (${Array.isArray(data) ? 'array' : 'object'})`);
+              } else {
+                keysWithCounts.push({
+                  key: key,
+                  itemCount: 0,
+                  dataType: 'empty'
+                });
+                console.log(`📊 ${key}: 0 items (empty)`);
+              }
+            } catch (err) {
+              console.error(`❌ Error reading data for key ${key}:`, err);
+              keysWithCounts.push({
+                key: key,
+                itemCount: 0,
+                dataType: 'error'
+              });
+            }
           }
+          
+          console.log(`📈 Total items across all keys: ${totalItems}`);
+          
+          return res.status(200).json({
+            message: "Cache keys retrieved in sequence",
+            keysFound: sortedKeys.length,
+            keys: sortedKeys
+          });
         }
-        console.log(`📊 Sample data from first ${sampleKeys.length} keys:`, sampleData);
-      }
       
       return res.status(200).json({
         message: "Cache keys retrieved",
@@ -393,6 +571,165 @@ export const getCachedDataHandler = async (req, res) => {
     console.error("🔥 Get cached data failed:", err);
     return res.status(500).json({
       message: "Failed to retrieve cached data",
+      error: err.message
+    });
+  }
+};
+
+/**
+ * Get cached data in sequence with pagination
+ */
+export const getCachedDataInSequenceHandler = async (req, res) => {
+  console.log('🔍 Get cached data in sequence request:', req.query);
+  try {
+    const { project, table, page = 1, limit = 10 } = req.query;
+
+    console.log(`📋 Query params: project=${project}, table=${table}, page=${page}, limit=${limit}`);
+
+    if (!project || !table) {
+      return res.status(400).json({
+        error: "Missing parameters",
+        message: "Both project and table are required"
+      });
+    }
+
+    // Get all keys for project:table
+    const searchPattern = `${project}:${table}:*`;
+    console.log(`🔎 Searching for all keys with pattern: ${searchPattern}`);
+    
+    // Use SCAN for Valkey compatibility
+    const keys = [];
+    let cursor = '0';
+    
+    do {
+      const result = await redis.scan(cursor, 'MATCH', searchPattern, 'COUNT', '100');
+      cursor = result[0];
+      keys.push(...result[1]);
+    } while (cursor !== '0');
+    
+    console.log(`📦 Found ${keys.length} total keys for ${project}:${table}`);
+    
+    if (keys.length === 0) {
+      return res.status(404).json({
+        message: "No cached keys found",
+        pattern: searchPattern,
+        keysFound: 0,
+        data: [],
+        pagination: {
+          currentPage: parseInt(page),
+          totalPages: 0,
+          hasMore: false,
+          totalItems: 0
+        }
+      });
+    }
+
+    // Sort keys to get chunks in sequence
+    const sortedKeys = keys.sort((a, b) => {
+      // Extract chunk numbers for comparison
+      const aMatch = a.match(/chunk:(\d+)$/);
+      const bMatch = b.match(/chunk:(\d+)$/);
+      
+      if (aMatch && bMatch) {
+        // Both are chunk keys, sort by chunk number
+        return parseInt(aMatch[1]) - parseInt(bMatch[1]);
+      } else if (aMatch) {
+        // Only a is a chunk key, put chunks after individual items
+        return 1;
+      } else if (bMatch) {
+        // Only b is a chunk key, put chunks after individual items
+        return -1;
+      } else {
+        // Both are individual items, sort alphabetically
+        return a.localeCompare(b);
+      }
+    });
+    
+    console.log(`📋 Sorted keys:`, sortedKeys);
+    
+    // Get all data in sequence first with detailed count information
+    const allData = [];
+    const keysWithData = [];
+    const keysWithCounts = [];
+    let totalItems = 0;
+    
+    for (const k of sortedKeys) {
+      try {
+        const value = await redis.get(k);
+        if (value) {
+          const parsedData = JSON.parse(value);
+          const itemCount = Array.isArray(parsedData) ? parsedData.length : 1;
+          totalItems += itemCount;
+          
+          // If it's an array (chunk), spread the items
+          if (Array.isArray(parsedData)) {
+            allData.push(...parsedData);
+            console.log(`📦 Retrieved chunk ${k} with ${parsedData.length} items`);
+          } else {
+            // If it's a single item
+            allData.push(parsedData);
+            console.log(`📦 Retrieved single item ${k} with 1 item`);
+          }
+          
+          keysWithData.push(k);
+          keysWithCounts.push({
+            key: k,
+            itemCount: itemCount,
+            dataType: Array.isArray(parsedData) ? 'array' : 'object'
+          });
+        } else {
+          console.log(`📦 Empty key: ${k}`);
+          keysWithCounts.push({
+            key: k,
+            itemCount: 0,
+            dataType: 'empty'
+          });
+        }
+      } catch (err) {
+        console.error(`❌ Error reading data for key ${k}:`, err);
+        keysWithCounts.push({
+          key: k,
+          itemCount: 0,
+          dataType: 'error'
+        });
+      }
+    }
+    
+    console.log(`📊 Total items retrieved: ${allData.length} from ${keysWithData.length} keys`);
+    console.log(`📈 Total items across all keys: ${totalItems}`);
+    
+    // Apply pagination
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const startIndex = (pageNum - 1) * limitNum;
+    const endIndex = startIndex + limitNum;
+    const totalPages = Math.ceil(allData.length / limitNum);
+    const hasMore = pageNum < totalPages;
+    
+    const paginatedData = allData.slice(startIndex, endIndex);
+    
+    console.log(`📄 Pagination: page ${pageNum}/${totalPages}, showing ${paginatedData.length} items`);
+    
+    return res.status(200).json({
+      message: "Cached data retrieved in sequence",
+      keysFound: keysWithData.length,
+      totalItems: allData.length,
+      keys: keysWithData,
+      data: paginatedData,
+      pagination: {
+        currentPage: pageNum,
+        totalPages: totalPages,
+        hasMore: hasMore,
+        itemsPerPage: limitNum,
+        startIndex: startIndex,
+        endIndex: endIndex
+      }
+    });
+
+  } catch (err) {
+    console.error("🔥 Get cached data in sequence failed:", err);
+    return res.status(500).json({
+      message: "Failed to retrieve cached data in sequence",
       error: err.message
     });
   }
@@ -501,7 +838,18 @@ export const clearCacheHandler = async (req, res) => {
       });
     }
 
-    const deletedCount = await redis.del(...keys);
+    // Delete keys individually to avoid cross-slot errors in Redis Cluster
+    let deletedCount = 0;
+    for (const key of keys) {
+      try {
+        const result = await redis.del(key);
+        deletedCount += result;
+        console.log(`🗑️ Deleted key: ${key}`);
+      } catch (err) {
+        console.error(`❌ Failed to delete key ${key}:`, err);
+        // Continue with other keys even if one fails
+      }
+    }
 
     return res.status(200).json({
       message: "Cache cleared successfully",
@@ -562,6 +910,76 @@ export const getCacheStatsHandler = async (req, res) => {
     console.error("🔥 Get cache stats failed:", err);
     return res.status(500).json({
       message: "Failed to get cache statistics",
+      error: err.message
+    });
+  }
+};
+
+/**
+ * Clear unwanted order data from cache
+ */
+export const clearUnwantedOrderDataHandler = async (req, res) => {
+  try {
+    const { project, table } = req.query;
+    
+    if (!project || !table) {
+      return res.status(400).json({
+        error: "Missing parameters",
+        message: "Both project and table are required"
+      });
+    }
+    
+    console.log(`🧹 Manual cleanup requested for ${project}:${table}`);
+    
+    const deletedCount = await clearUnwantedOrderData(project, table);
+    
+    return res.status(200).json({
+      message: "Cleanup completed",
+      project,
+      table,
+      deletedCount,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (err) {
+    console.error("🔥 Clear unwanted data failed:", err);
+    return res.status(500).json({
+      message: "Failed to clear unwanted data",
+      error: err.message
+    });
+  }
+};
+
+/**
+ * Clean up timestamp-based chunks and convert to sequential numbering
+ */
+export const cleanupTimestampChunksHandler = async (req, res) => {
+  try {
+    const { project, table } = req.query;
+    
+    if (!project || !table) {
+      return res.status(400).json({
+        error: "Missing parameters",
+        message: "Both project and table are required"
+      });
+    }
+    
+    console.log(`🧹 Manual timestamp cleanup requested for ${project}:${table}`);
+    
+    const convertedCount = await cleanupTimestampChunks(project, table);
+    
+    return res.status(200).json({
+      message: "Timestamp cleanup completed",
+      project,
+      table,
+      convertedCount,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (err) {
+    console.error("🔥 Timestamp cleanup failed:", err);
+    return res.status(500).json({
+      message: "Failed to cleanup timestamp chunks",
       error: err.message
     });
   }
@@ -633,6 +1051,152 @@ export const testCacheConnection = async (req, res) => {
   }
 };
 /**
+ * Clean up timestamp-based chunks and convert to sequential numbering
+ */
+async function cleanupTimestampChunks(project, tableName) {
+  try {
+    console.log(`🧹 Cleaning up timestamp-based chunks for ${project}:${tableName}`);
+    
+    const searchPattern = `${project}:${tableName}:chunk:*`;
+    const keys = [];
+    let cursor = '0';
+    
+    do {
+      const result = await redis.scan(cursor, 'MATCH', searchPattern, 'COUNT', '100');
+      cursor = result[0];
+      keys.push(...result[1]);
+    } while (cursor !== '0');
+    
+    console.log(`🔍 Found ${keys.length} chunk keys to check`);
+    
+    // Separate timestamp-based and sequential chunks
+    const timestampChunks = [];
+    const sequentialChunks = [];
+    
+    for (const key of keys) {
+      const match = key.match(/chunk:(\d+)$/);
+      if (match) {
+        const chunkId = match[1];
+        // If chunkId is 10+ digits, it's likely a timestamp
+        if (chunkId.length >= 10) {
+          timestampChunks.push(key);
+        } else {
+          sequentialChunks.push(key);
+        }
+      }
+    }
+    
+    console.log(`📊 Found ${timestampChunks.length} timestamp chunks and ${sequentialChunks.length} sequential chunks`);
+    
+    if (timestampChunks.length === 0) {
+      console.log(`✅ No timestamp chunks to clean up`);
+      return 0;
+    }
+    
+    // Find the highest sequential chunk number
+    let maxSequential = -1;
+    for (const key of sequentialChunks) {
+      const match = key.match(/chunk:(\d+)$/);
+      if (match) {
+        const chunkNum = parseInt(match[1]);
+        if (chunkNum > maxSequential) {
+          maxSequential = chunkNum;
+        }
+      }
+    }
+    
+    let nextChunkId = maxSequential + 1;
+    let convertedCount = 0;
+    
+    // Convert timestamp chunks to sequential
+    for (const timestampKey of timestampChunks) {
+      try {
+        const value = await redis.get(timestampKey);
+        if (value) {
+          const data = JSON.parse(value);
+          
+          // Create new sequential key
+          const newKey = `${project}:${tableName}:chunk:${nextChunkId}`;
+          
+          // Copy data to new key
+          await redis.set(newKey, value, 'EX', 3600); // Default TTL
+          
+          // Delete old timestamp key
+          await redis.del(timestampKey);
+          
+          console.log(`🔄 Converted ${timestampKey} → ${newKey}`);
+          nextChunkId++;
+          convertedCount++;
+        }
+      } catch (err) {
+        console.error(`❌ Error converting ${timestampKey}:`, err);
+      }
+    }
+    
+    console.log(`✅ Converted ${convertedCount} timestamp chunks to sequential`);
+    return convertedCount;
+  } catch (err) {
+    console.error('❌ Error cleaning up timestamp chunks:', err);
+    return 0;
+  }
+}
+
+/**
+ * Clear unwanted order data from brmh-cache table
+ */
+async function clearUnwantedOrderData(project, tableName) {
+  try {
+    console.log(`🧹 Cleaning up unwanted order data from ${project}:${tableName}`);
+    
+    const searchPattern = `${project}:${tableName}:chunk:*`;
+    const keys = [];
+    let cursor = '0';
+    
+    do {
+      const result = await redis.scan(cursor, 'MATCH', searchPattern, 'COUNT', '100');
+      cursor = result[0];
+      keys.push(...result[1]);
+    } while (cursor !== '0');
+    
+    console.log(`🔍 Found ${keys.length} chunk keys to check`);
+    
+    let deletedCount = 0;
+    for (const key of keys) {
+      try {
+        const value = await redis.get(key);
+        if (value) {
+          const data = JSON.parse(value);
+          
+          // Check if this contains order data (not cache config data)
+          const isOrderData = data.length > 0 && data[0] && (
+            data[0].line_items ||
+            data[0].billing_address ||
+            data[0].shipping_address ||
+            data[0].customer ||
+            data[0].total_price ||
+            data[0].order_number
+          );
+          
+          if (isOrderData) {
+            console.log(`🗑️ Deleting order data from key: ${key}`);
+            await redis.del(key);
+            deletedCount++;
+          }
+        }
+      } catch (err) {
+        console.error(`❌ Error checking key ${key}:`, err);
+      }
+    }
+    
+    console.log(`✅ Cleaned up ${deletedCount} unwanted order data chunks`);
+    return deletedCount;
+  } catch (err) {
+    console.error('❌ Error cleaning up unwanted order data:', err);
+    return 0;
+  }
+}
+
+/**
  * Handler to update cache from Lambda function streaming DynamoDB changes
  * Request body: {
  *   type: "INSERT" | "MODIFY" | "REMOVE",
@@ -673,34 +1237,70 @@ export const updateCacheFromLambdaHandler = async (req, res) => {
       });
     }
 
-    // Get the table name from the item (assuming it's in the item structure)
-    let tableName = newItem?.tableName || oldItem?.tableName;
+    // Get the table name from the request (already extracted by the endpoint)
+    let tableName = req.body.extractedTableName;
     
-    // If tableName is in DynamoDB format, extract the string value
-    if (tableName && typeof tableName === 'object' && tableName.S) {
-      tableName = tableName.S;
-    }
-    
-    // If still no tableName, try to extract from the item structure
+    // If not provided in request, fall back to extracting from items
     if (!tableName) {
-      const item = newItem || oldItem;
-      if (item && item.tableName) {
-        if (typeof item.tableName === 'object' && item.tableName.S) {
-          tableName = item.tableName.S;
-        } else if (typeof item.tableName === 'string') {
-          tableName = item.tableName;
+      console.log("No extracted table name in request, falling back to item extraction");
+      tableName = newItem?.tableName || oldItem?.tableName;
+      
+      // If tableName is in DynamoDB format, extract the string value
+      if (tableName && typeof tableName === 'object' && tableName.S) {
+        tableName = tableName.S;
+      }
+      
+      // If still no tableName, try to extract from the item structure
+      if (!tableName) {
+        const item = newItem || oldItem;
+        if (item && item.tableName) {
+          if (typeof item.tableName === 'object' && item.tableName.S) {
+            tableName = item.tableName.S;
+          } else if (typeof item.tableName === 'string') {
+            tableName = item.tableName;
+          }
         }
       }
-    }
-    
-    // If still no tableName, use a default based on the item structure
-    if (!tableName) {
-      // Try to infer table name from the item content or use a default
-      console.log("No explicit table name found, using default");
-      tableName = 'brmh-cache'; // Default fallback
+      
+      // If still no tableName, use a default
+      if (!tableName) {
+        console.log("No table name found in items, using default");
+        tableName = 'brmh-cache'; // Default fallback
+      }
     }
 
     console.log(`📋 Processing ${type} operation for table: ${tableName}`);
+
+    // Prevent caching order data in brmh-cache table
+    if (tableName === 'brmh-cache') {
+      // Check if this is actually cache configuration data, not order data
+      const item = newItem || oldItem;
+      const isCacheConfig = item && (
+        item.id || 
+        item.methodId || 
+        item.accountId || 
+        item.project ||
+        item.status === 'active' ||
+        item.status === 'inactive'
+      );
+      
+      if (!isCacheConfig) {
+        console.log(`🚫 Skipping cache update for table ${tableName} - not cache configuration data`);
+        return res.status(200).json({
+          message: "Skipped - not cache configuration data",
+          tableName,
+          type,
+          reason: "Only cache configuration data should be cached in brmh-cache table"
+        });
+      }
+      
+      // Clean up any existing unwanted order data
+      const project = item?.project?.S || item?.project || 'default';
+      await clearUnwantedOrderData(project, tableName);
+      
+      // Also clean up timestamp-based chunks
+      await cleanupTimestampChunks(project, tableName);
+    }
 
     // Find active cache configurations for this table
     const cacheConfigs = await findActiveCacheConfigs(tableName);
@@ -862,8 +1462,12 @@ async function handleInsert(project, tableName, newItem, itemsPerKey, ttl) {
     const itemId = extractItemId(newItem);
     cacheKey = `${project}:${tableName}:${itemId}`;
     const value = JSON.stringify(newItem);
-    await redis.set(cacheKey, value, 'EX', ttl);
-    console.log(`✅ Cached single item: ${cacheKey}`);
+    if (ttl && ttl > 0) {
+      await redis.set(cacheKey, value, 'EX', ttl);
+    } else {
+      await redis.set(cacheKey, value); // No expiration
+    }
+    console.log(`✅ Cached single item: ${cacheKey}${ttl && ttl > 0 ? ` with TTL ${ttl}s` : ' with no expiration'}`);
   } else {
     // Multiple items per key - find the best chunk to add to or create new one
     const searchPattern = `${project}:${tableName}:chunk:*`;
@@ -904,14 +1508,34 @@ async function handleInsert(project, tableName, newItem, itemsPerKey, ttl) {
       const existingValue = await redis.get(bestChunkKey);
       const existingItems = JSON.parse(existingValue);
       existingItems.push(newItem);
-      await redis.set(bestChunkKey, JSON.stringify(existingItems), 'EX', ttl);
+      if (ttl && ttl > 0) {
+        await redis.set(bestChunkKey, JSON.stringify(existingItems), 'EX', ttl);
+      } else {
+        await redis.set(bestChunkKey, JSON.stringify(existingItems)); // No expiration
+      }
       console.log(`✅ Added to existing chunk: ${bestChunkKey} (${existingItems.length}/${itemsPerKey} items)`);
       cacheKey = bestChunkKey;
     } else {
-      // Create new chunk
-      const newChunkId = Date.now();
+      // Create new chunk with sequential numbering
+      let newChunkId = 0;
+      
+      // Find the highest existing chunk number
+      for (const chunkKey of existingChunks) {
+        const match = chunkKey.match(/chunk:(\d+)$/);
+        if (match) {
+          const chunkNum = parseInt(match[1]);
+          if (chunkNum >= newChunkId) {
+            newChunkId = chunkNum + 1;
+          }
+        }
+      }
+      
       const newChunkKey = `${project}:${tableName}:chunk:${newChunkId}`;
-      await redis.set(newChunkKey, JSON.stringify([newItem]), 'EX', ttl);
+      if (ttl && ttl > 0) {
+        await redis.set(newChunkKey, JSON.stringify([newItem]), 'EX', ttl);
+      } else {
+        await redis.set(newChunkKey, JSON.stringify([newItem])); // No expiration
+      }
       console.log(`✅ Created new chunk: ${newChunkKey} (1/${itemsPerKey} items)`);
       cacheKey = newChunkKey;
     }
@@ -957,7 +1581,11 @@ async function handleModify(project, tableName, newItem, oldItem, itemsPerKey, t
     
     const cacheKey = `${project}:${tableName}:${itemId}`;
     const value = JSON.stringify(newItem);
-    await redis.set(cacheKey, value, 'EX', ttl);
+    if (ttl && ttl > 0) {
+      await redis.set(cacheKey, value, 'EX', ttl);
+    } else {
+      await redis.set(cacheKey, value); // No expiration
+    }
     console.log(`✅ Updated cached item: ${cacheKey}`);
     
     return {
@@ -1013,7 +1641,11 @@ async function handleModify(project, tableName, newItem, oldItem, itemsPerKey, t
         if (itemIndex !== -1) {
           console.log(`✅ Found item at index ${itemIndex} in chunk ${key}`);
           items[itemIndex] = newItem;
-          await redis.set(key, JSON.stringify(items), 'EX', ttl);
+          if (ttl && ttl > 0) {
+            await redis.set(key, JSON.stringify(items), 'EX', ttl);
+          } else {
+            await redis.set(key, JSON.stringify(items)); // No expiration
+          }
           console.log(`✅ Updated item in chunk: ${key}`);
           
           return {
