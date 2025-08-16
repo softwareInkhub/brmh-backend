@@ -128,11 +128,11 @@ export const cacheTableHandler = async (req, res) => {
       });
     }
 
-    if (ttl < 1) {
-      console.error("'ttl' must be >= 1");
+    if (ttl !== undefined && ttl !== null && ttl < 0) {
+      console.error("'ttl' must be >= 0 (0 = no expiration)");
       return res.status(400).json({ 
-        error: "'ttl' must be >= 1",
-        message: "TTL must be a positive integer (seconds)"
+        error: "'ttl' must be >= 0",
+        message: "TTL must be >= 0 (0 = no expiration, positive = seconds)"
       });
     }
 
@@ -299,9 +299,13 @@ async function scanAndCacheWithBoundedBuffer(tableName, project, recordsPerKey, 
       cacheKeys.push(key);
       
       try {
-        await redis.set(key, value, 'EX', ttl);
+        if (ttl && ttl > 0) {
+          await redis.set(key, value, 'EX', ttl);
+        } else {
+          await redis.set(key, value); // No expiration
+        }
         successfulWrites++;
-        console.log(`✅ Redis write succeeded for key ${key} (chunk ${chunkIndex})`);
+        console.log(`✅ Redis write succeeded for key ${key} (chunk ${chunkIndex})${ttl && ttl > 0 ? ` with TTL ${ttl}s` : ' with no expiration'}`);
       } catch (err) {
         failedWrites++;
         console.error(`❌ Redis write failed for key ${key} (chunk ${chunkIndex}):`, err);
@@ -363,9 +367,13 @@ async function scanAndCacheWithBoundedBuffer(tableName, project, recordsPerKey, 
           cacheKeys.push(key);
           
           try {
-            await redis.set(key, value, 'EX', ttl);
+            if (ttl && ttl > 0) {
+              await redis.set(key, value, 'EX', ttl);
+            } else {
+              await redis.set(key, value); // No expiration
+            }
             successfulWrites++;
-            console.log(`✅ Redis write succeeded for key ${key} (final chunk)`);
+            console.log(`✅ Redis write succeeded for key ${key} (final chunk)${ttl && ttl > 0 ? ` with TTL ${ttl}s` : ' with no expiration'}`);
           } catch (err) {
             failedWrites++;
             console.error(`❌ Redis write failed for key ${key} (final chunk):`, err);
@@ -1443,8 +1451,12 @@ async function handleInsert(project, tableName, newItem, itemsPerKey, ttl) {
     const itemId = extractItemId(newItem);
     cacheKey = `${project}:${tableName}:${itemId}`;
     const value = JSON.stringify(newItem);
-    await redis.set(cacheKey, value, 'EX', ttl);
-    console.log(`✅ Cached single item: ${cacheKey}`);
+    if (ttl && ttl > 0) {
+      await redis.set(cacheKey, value, 'EX', ttl);
+    } else {
+      await redis.set(cacheKey, value); // No expiration
+    }
+    console.log(`✅ Cached single item: ${cacheKey}${ttl && ttl > 0 ? ` with TTL ${ttl}s` : ' with no expiration'}`);
   } else {
     // Multiple items per key - find the best chunk to add to or create new one
     const searchPattern = `${project}:${tableName}:chunk:*`;
@@ -1485,7 +1497,11 @@ async function handleInsert(project, tableName, newItem, itemsPerKey, ttl) {
       const existingValue = await redis.get(bestChunkKey);
       const existingItems = JSON.parse(existingValue);
       existingItems.push(newItem);
-      await redis.set(bestChunkKey, JSON.stringify(existingItems), 'EX', ttl);
+      if (ttl && ttl > 0) {
+        await redis.set(bestChunkKey, JSON.stringify(existingItems), 'EX', ttl);
+      } else {
+        await redis.set(bestChunkKey, JSON.stringify(existingItems)); // No expiration
+      }
       console.log(`✅ Added to existing chunk: ${bestChunkKey} (${existingItems.length}/${itemsPerKey} items)`);
       cacheKey = bestChunkKey;
     } else {
@@ -1504,7 +1520,11 @@ async function handleInsert(project, tableName, newItem, itemsPerKey, ttl) {
       }
       
       const newChunkKey = `${project}:${tableName}:chunk:${newChunkId}`;
-      await redis.set(newChunkKey, JSON.stringify([newItem]), 'EX', ttl);
+      if (ttl && ttl > 0) {
+        await redis.set(newChunkKey, JSON.stringify([newItem]), 'EX', ttl);
+      } else {
+        await redis.set(newChunkKey, JSON.stringify([newItem])); // No expiration
+      }
       console.log(`✅ Created new chunk: ${newChunkKey} (1/${itemsPerKey} items)`);
       cacheKey = newChunkKey;
     }
@@ -1550,7 +1570,11 @@ async function handleModify(project, tableName, newItem, oldItem, itemsPerKey, t
     
     const cacheKey = `${project}:${tableName}:${itemId}`;
     const value = JSON.stringify(newItem);
-    await redis.set(cacheKey, value, 'EX', ttl);
+    if (ttl && ttl > 0) {
+      await redis.set(cacheKey, value, 'EX', ttl);
+    } else {
+      await redis.set(cacheKey, value); // No expiration
+    }
     console.log(`✅ Updated cached item: ${cacheKey}`);
     
     return {
@@ -1606,7 +1630,11 @@ async function handleModify(project, tableName, newItem, oldItem, itemsPerKey, t
         if (itemIndex !== -1) {
           console.log(`✅ Found item at index ${itemIndex} in chunk ${key}`);
           items[itemIndex] = newItem;
-          await redis.set(key, JSON.stringify(items), 'EX', ttl);
+          if (ttl && ttl > 0) {
+            await redis.set(key, JSON.stringify(items), 'EX', ttl);
+          } else {
+            await redis.set(key, JSON.stringify(items)); // No expiration
+          }
           console.log(`✅ Updated item in chunk: ${key}`);
           
           return {
