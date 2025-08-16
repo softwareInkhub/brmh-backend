@@ -1444,6 +1444,10 @@ async function handleInsert(project, tableName, newItem, itemsPerKey, ttl) {
   console.log(`📦 New item:`, newItem);
   console.log(`⚙️ Config: project=${project}, itemsPerKey=${itemsPerKey}, ttl=${ttl}`);
   
+  // Unmarshall DynamoDB item to plain JSON
+  const unmarshalledItem = unmarshall(newItem);
+  console.log(`📦 Unmarshalled item:`, unmarshalledItem);
+  
   // Helper function to extract item ID from DynamoDB format
   const extractItemId = (item) => {
     if (item.id && typeof item.id === 'object' && item.id.S) return item.id.S;
@@ -1461,7 +1465,7 @@ async function handleInsert(project, tableName, newItem, itemsPerKey, ttl) {
     // Single item per key
     const itemId = extractItemId(newItem);
     cacheKey = `${project}:${tableName}:${itemId}`;
-    const value = JSON.stringify(newItem);
+    const value = JSON.stringify(unmarshalledItem);
     if (ttl && ttl > 0) {
       await redis.set(cacheKey, value, 'EX', ttl);
     } else {
@@ -1507,7 +1511,7 @@ async function handleInsert(project, tableName, newItem, itemsPerKey, ttl) {
       // Add to existing chunk that has space
       const existingValue = await redis.get(bestChunkKey);
       const existingItems = JSON.parse(existingValue);
-      existingItems.push(newItem);
+      existingItems.push(unmarshalledItem);
       if (ttl && ttl > 0) {
         await redis.set(bestChunkKey, JSON.stringify(existingItems), 'EX', ttl);
       } else {
@@ -1532,9 +1536,9 @@ async function handleInsert(project, tableName, newItem, itemsPerKey, ttl) {
       
       const newChunkKey = `${project}:${tableName}:chunk:${newChunkId}`;
       if (ttl && ttl > 0) {
-        await redis.set(newChunkKey, JSON.stringify([newItem]), 'EX', ttl);
+        await redis.set(newChunkKey, JSON.stringify([unmarshalledItem]), 'EX', ttl);
       } else {
-        await redis.set(newChunkKey, JSON.stringify([newItem])); // No expiration
+        await redis.set(newChunkKey, JSON.stringify([unmarshalledItem])); // No expiration
       }
       console.log(`✅ Created new chunk: ${newChunkKey} (1/${itemsPerKey} items)`);
       cacheKey = newChunkKey;
@@ -1554,6 +1558,12 @@ async function handleInsert(project, tableName, newItem, itemsPerKey, ttl) {
  */
 async function handleModify(project, tableName, newItem, oldItem, itemsPerKey, ttl) {
   console.log(`✏️ Handling MODIFY for ${tableName}`);
+  
+  // Unmarshall DynamoDB items to plain JSON
+  const unmarshalledNewItem = unmarshall(newItem);
+  const unmarshalledOldItem = unmarshall(oldItem);
+  console.log(`📦 Unmarshalled new item:`, unmarshalledNewItem);
+  console.log(`📦 Unmarshalled old item:`, unmarshalledOldItem);
   
   // Helper function to extract item ID from DynamoDB format
   const extractItemId = (item) => {
@@ -1580,7 +1590,7 @@ async function handleModify(project, tableName, newItem, oldItem, itemsPerKey, t
     }
     
     const cacheKey = `${project}:${tableName}:${itemId}`;
-    const value = JSON.stringify(newItem);
+    const value = JSON.stringify(unmarshalledNewItem);
     if (ttl && ttl > 0) {
       await redis.set(cacheKey, value, 'EX', ttl);
     } else {
@@ -1640,7 +1650,7 @@ async function handleModify(project, tableName, newItem, oldItem, itemsPerKey, t
         
         if (itemIndex !== -1) {
           console.log(`✅ Found item at index ${itemIndex} in chunk ${key}`);
-          items[itemIndex] = newItem;
+          items[itemIndex] = unmarshalledNewItem;
           if (ttl && ttl > 0) {
             await redis.set(key, JSON.stringify(items), 'EX', ttl);
           } else {
@@ -1670,6 +1680,10 @@ async function handleModify(project, tableName, newItem, oldItem, itemsPerKey, t
 async function handleRemove(project, tableName, oldItem, itemsPerKey) {
   console.log(`🗑️ Handling REMOVE for ${tableName}`);
   console.log(`📦 Old item to remove:`, oldItem);
+  
+  // Unmarshall DynamoDB item to plain JSON
+  const unmarshalledOldItem = unmarshall(oldItem);
+  console.log(`📦 Unmarshalled old item:`, unmarshalledOldItem);
   
   // Helper function to extract item ID from DynamoDB format
   const extractItemId = (item) => {
