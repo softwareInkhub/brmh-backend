@@ -52,6 +52,17 @@ import { execute } from './utils/execute.js';
 import { mockDataAgent } from './lib/mock-data-agent.js';
 import { fetchOrdersWithShortIdsHandler } from './utils/fetchOrder.js';
 
+import { 
+  loginHandler,
+  generateOAuthUrlHandler,
+  exchangeTokenHandler,
+  refreshTokenHandler,
+  validateTokenHandler,
+  debugPkceStoreHandler,
+  logoutHandler,
+  getLogoutUrlHandler
+} from './utils/brmh-auth.js';
+
 // Load environment variables
 dotenv.config();
 console.log("AWS_ACCESS_KEY_ID", process.env.AWS_ACCESS_KEY_ID);
@@ -184,6 +195,8 @@ const unifiedApiHandlers = {
   deleteSchema: unifiedHandlers.deleteSchema,
   getSchemaById: unifiedHandlers.getSchemaById,
   saveSchema: unifiedHandlers.saveSchema,
+  getSchemasForSelection: unifiedHandlers.getSchemasForSelection,
+  getSchemaWithReferences: unifiedHandlers.getSchemaWithReferences,
   // Register the createSchemasTable handler
   createSchemasTable: unifiedHandlers.createSchemasTable,
 
@@ -1043,6 +1056,14 @@ app.post("/indexing/update", async (req, res) => {
   }
 });
 
+// OAuth Routes
+app.get('/auth/oauth-url', generateOAuthUrlHandler);
+app.post('/auth/token', exchangeTokenHandler);
+app.post('/auth/refresh', refreshTokenHandler);
+app.post('/auth/validate', validateTokenHandler);
+app.post('/auth/logout', logoutHandler);
+app.get('/auth/logout-url', getLogoutUrlHandler);
+app.get('/auth/debug-pkce', debugPkceStoreHandler);
 
 
 const PORT = process.env.PORT || 5001;

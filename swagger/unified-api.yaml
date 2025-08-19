@@ -139,6 +139,54 @@ paths:
                 items:
                   type: object
 
+  /schema/selection:
+    get:
+      operationId: getSchemasForSelection
+      summary: Get schemas for child schema selection
+      parameters:
+        - name: search
+          in: query
+          schema:
+            type: string
+          description: Search term to filter schemas by name or method name
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+          description: Maximum number of schemas to return
+        - name: schemaType
+          in: query
+          schema:
+            type: string
+          description: Filter by schema type (matches stored schemaType on schema)
+      responses:
+        '200':
+          description: List of schemas for selection
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  schemas:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        schemaName:
+                          type: string
+                        methodName:
+                          type: string
+                          nullable: true
+                        description:
+                          type: string
+                  total:
+                    type: integer
+                  limit:
+                    type: integer
+
   /schema/{schemaId}:
     parameters:
       - name: schemaId
@@ -180,6 +228,30 @@ paths:
       responses:
         '204':
           description: Schema deleted successfully
+
+  /schema/{schemaId}/resolved:
+    parameters:
+      - name: schemaId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: resolveReferences
+        in: query
+        schema:
+          type: boolean
+          default: true
+        description: Whether to resolve schema references
+    get:
+      operationId: getSchemaWithReferences
+      summary: Get schema by ID with resolved references
+      responses:
+        '200':
+          description: Schema retrieved successfully with resolved references
+          content:
+            application/json:
+              schema:
+                type: object
 
   # Table Operations
   /schema/table:
