@@ -54,6 +54,11 @@ import { fetchOrdersWithShortIdsHandler } from './utils/fetchOrder.js';
 
 import { 
   loginHandler,
+  signupHandler,
+  phoneSignupHandler,
+  phoneLoginHandler,
+  verifyPhoneHandler,
+  resendOtpHandler,
   generateOAuthUrlHandler,
   exchangeTokenHandler,
   refreshTokenHandler,
@@ -1055,6 +1060,16 @@ app.post("/indexing/update", async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+// Auth Routes
+app.post('/auth/login', loginHandler);
+app.post('/auth/signup', signupHandler);
+
+// Phone Authentication Routes
+app.post('/auth/phone/signup', phoneSignupHandler);
+app.post('/auth/phone/login', phoneLoginHandler);
+app.post('/auth/phone/verify', verifyPhoneHandler);
+app.post('/auth/phone/resend-otp', resendOtpHandler);
 
 // OAuth Routes
 app.get('/auth/oauth-url', generateOAuthUrlHandler);

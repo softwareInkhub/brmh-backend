@@ -1,5 +1,5 @@
 // AWS Amplify Auth setup
-import { CognitoUserPool, CognitoUser, AuthenticationDetails } from 'amazon-cognito-identity-js';
+import { CognitoUserPool, CognitoUser, AuthenticationDetails, CognitoUserAttribute } from 'amazon-cognito-identity-js';
 import crypto from 'crypto';
 import jwksClient from 'jwks-rsa';
 import jwt from 'jsonwebtoken';
@@ -302,7 +302,186 @@ async function loginHandler(req, res) {
   });
 }
 
-export { signupHandler, loginHandler };
+// Phone number signup handler
+async function phoneSignupHandler(req, res) {
+  if (!userPool) {
+    return res.status(500).json({ 
+      success: false, 
+      error: 'Authentication service not configured. Please set AWS_COGNITO_USER_POOL_ID and AWS_COGNITO_CLIENT_ID environment variables.' 
+    });
+  }
+  
+  const { phoneNumber, password, email } = req.body;
+  try {
+    console.log('[Auth] Phone signup request', {
+      phoneNumber,
+      hasPassword: Boolean(password),
+      hasEmail: Boolean(email)
+    });
+  } catch {}
+  
+  // Format phone number to E.164 format if not already
+  const formattedPhone = phoneNumber.startsWith('+') ? phoneNumber : `+${phoneNumber}`;
+  
+  const attributeList = [
+    new CognitoUserAttribute({ Name: 'phone_number', Value: formattedPhone })
+  ];
+  
+  if (email) {
+    attributeList.push(new CognitoUserAttribute({ Name: 'email', Value: email }));
+  }
+  
+  // Try signing up using phone as username (works when pool uses phone as username)
+  userPool.signUp(formattedPhone, password, attributeList, null, (err, result) => {
+    if (!err) {
+      try { console.log('[Auth] Phone signup success (phone as username)', { username: formattedPhone }); } catch {}
+      return res.status(200).json({ 
+        success: true, 
+        result,
+        username: formattedPhone,
+        message: 'Account created! Please check your phone for verification code.'
+      });
+    }
+
+    // If pool is configured with phone number as an alias (not username),
+    // Cognito rejects phone-looking usernames. Fallback to a generated username
+    // while still attaching the phone_number attribute so phone login works.
+    const msg = (err && err.message) ? String(err.message) : '';
+    const isAliasRejection = /phone number format|alias/i.test(msg);
+    if (!isAliasRejection) {
+      console.error('Phone signup error:', err);
+      return res.status(400).json({ success: false, error: err.message });
+    }
+
+    const digits = formattedPhone.replace(/\D/g, '');
+    const generatedUsername = `ph_${digits}_${Date.now()}`;
+    try { console.log('[Auth] Phone signup falling back to generated username', { generatedUsername }); } catch {}
+    userPool.signUp(generatedUsername, password, attributeList, null, (fallbackErr, fallbackResult) => {
+      if (fallbackErr) {
+        console.error('Phone signup fallback error:', fallbackErr);
+        return res.status(400).json({ success: false, error: fallbackErr.message });
+      }
+      try { console.log('[Auth] Phone signup success (generated username)'); } catch {}
+      return res.status(200).json({
+        success: true,
+        result: fallbackResult,
+        username: generatedUsername,
+        message: 'Account created! Please check your phone for verification code.',
+        note: 'Pool uses phone as alias; a username was generated internally.'
+      });
+    });
+  });
+}
+
+// Phone number login handler (with OTP)
+async function phoneLoginHandler(req, res) {
+  if (!userPool) {
+    return res.status(500).json({ 
+      success: false, 
+      error: 'Authentication service not configured. Please set AWS_COGNITO_USER_POOL_ID and AWS_COGNITO_CLIENT_ID environment variables.' 
+    });
+  }
+  
+  const { phoneNumber, password, otp } = req.body;
+  try {
+    console.log('[Auth] Phone login request', {
+      phoneNumber,
+      hasPassword: Boolean(password),
+      hasOtp: Boolean(otp)
+    });
+  } catch {}
+  
+  // Format phone number to E.164 format if not already
+  const formattedPhone = phoneNumber.startsWith('+') ? phoneNumber : `+${phoneNumber}`;
+  
+  const user = new CognitoUser({ Username: formattedPhone, Pool: userPool });
+  const authDetails = new AuthenticationDetails({ Username: formattedPhone, Password: password });
+  
+  user.authenticateUser(authDetails, {
+    onSuccess: (result) => {
+      try { console.log('[Auth] Phone login success'); } catch {}
+      res.status(200).json({ success: true, result });
+    },
+    onFailure: (err) => {
+      res.status(401).json({ success: false, error: err.message });
+    },
+    newPasswordRequired: (userAttributes, requiredAttributes) => {
+      res.status(400).json({ 
+        success: false, 
+        error: 'New password required',
+        requiresNewPassword: true,
+        userAttributes,
+        requiredAttributes
+      });
+    }
+  });
+}
+
+// Verify phone number with OTP
+async function verifyPhoneHandler(req, res) {
+  if (!userPool) {
+    return res.status(500).json({ 
+      success: false, 
+      error: 'Authentication service not configured. Please set AWS_COGNITO_USER_POOL_ID and AWS_COGNITO_CLIENT_ID environment variables.' 
+    });
+  }
+  
+  const { phoneNumber, code, username } = req.body;
+  try { console.log('[Auth] Verify phone (OTP) request', { phoneNumber, username, hasCode: Boolean(code) }); } catch {}
+  
+  // Format phone number to E.164 format if not already
+  const formattedPhone = phoneNumber ? (phoneNumber.startsWith('+') ? phoneNumber : `+${phoneNumber}`) : undefined;
+  const usernameToUse = username || formattedPhone;
+  
+  const user = new CognitoUser({ Username: usernameToUse, Pool: userPool });
+  
+  user.confirmRegistration(code, true, (err, result) => {
+    if (err) {
+      console.error('Phone verification error:', err);
+      return res.status(400).json({ success: false, error: err.message });
+    }
+    try { console.log('[Auth] Verify phone success'); } catch {}
+    res.status(200).json({ 
+      success: true, 
+      result,
+      message: 'Phone number verified successfully!'
+    });
+  });
+}
+
+// Resend OTP
+async function resendOtpHandler(req, res) {
+  if (!userPool) {
+    return res.status(500).json({ 
+      success: false, 
+      error: 'Authentication service not configured. Please set AWS_COGNITO_USER_POOL_ID and AWS_COGNITO_CLIENT_ID environment variables.' 
+    });
+  }
+  
+  const { phoneNumber, username } = req.body;
+  try { console.log('[Auth] Resend OTP request', { phoneNumber, username }); } catch {}
+  
+  // Format phone number to E.164 format if not already
+  const formattedPhone = phoneNumber ? (phoneNumber.startsWith('+') ? phoneNumber : `+${phoneNumber}`) : undefined;
+  const usernameToUse = username || formattedPhone;
+  
+  const user = new CognitoUser({ Username: usernameToUse, Pool: userPool });
+  
+  user.resendConfirmationCode((err, result) => {
+    if (err) {
+      console.error('Resend OTP error:', err);
+      return res.status(400).json({ success: false, error: err.message });
+    }
+    try { console.log('[Auth] Resend OTP success'); } catch {}
+    res.status(200).json({ 
+      success: true, 
+      result,
+      message: 'OTP resent successfully!'
+    });
+  });
+}
+
+export { signupHandler, loginHandler, phoneSignupHandler, phoneLoginHandler, verifyPhoneHandler, resendOtpHandler };
 // Debug endpoint to check PKCE store
 async function debugPkceStoreHandler(req, res) {
   try {
