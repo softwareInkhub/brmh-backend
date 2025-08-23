@@ -1,6 +1,26 @@
 import axios from 'axios';
 import { DynamoDBClient, DescribeTableCommand } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
+import { createItem, updateItem, getItem, deleteItem } from './crud.js';
+import { 
+  cacheTableHandler, 
+  getCachedDataHandler, 
+  getPaginatedCacheKeysHandler,
+  clearCacheHandler, 
+  getCacheStatsHandler,
+  cacheHealthHandler,
+  testCacheConnection,
+  clearUnwantedOrderDataHandler,
+  cleanupTimestampChunksHandler,
+  getCachedDataInSequenceHandler
+} from './cache.js';
+import {
+  indexTableHandler,
+  searchIndexHandler,
+  listIndicesHandler,
+  deleteIndicesHandler,
+  searchHealthHandler
+} from './search-indexing.js';
 
 // DynamoDB table names
 const NAMESPACES_TABLE = 'brmh-namespaces';
@@ -440,7 +460,174 @@ const executeNamespace = async (event) => {
   }
 };
 
-// Main execute handler - routes to paginated or single execution
+// CRUD execution handler
+const executeCrud = async (event) => {
+  try {
+    const body = typeof event.body === "string" ? JSON.parse(event.body) : (event.body || event);
+    const { crudOperation, tableName, ...crudParams } = body;
+
+    if (!crudOperation || !tableName) {
+      return {
+        statusCode: 400,
+        body: JSON.stringify({ error: "crudOperation and tableName are required for CRUD operations" })
+      };
+    }
+
+    console.log(`[CRUD Execute] Operation: ${crudOperation}, Table: ${tableName}`);
+
+    // Route to appropriate CRUD function
+    switch (crudOperation.toLowerCase()) {
+      case 'post':
+        return await createItem(tableName, crudParams);
+      
+      case 'put':
+        return await updateItem(tableName, crudParams);
+      
+      case 'patch':
+        return await updateItem(tableName, crudParams);
+      
+      case 'get':
+        return await getItem(tableName, crudParams);
+      
+      case 'delete':
+        return await deleteItem(tableName, crudParams);
+      
+      default:
+        return {
+          statusCode: 400,
+          body: JSON.stringify({ error: `Invalid CRUD operation: ${crudOperation}. Valid operations: GET, POST, PUT, PATCH, DELETE` })
+        };
+    }
+
+  } catch (error) {
+    console.error("[CRUD Execute] Error:", error);
+    return {
+      statusCode: 500,
+      body: JSON.stringify({ error: error.message })
+    };
+  }
+};
+
+// Cache execution handler
+const executeCache = async (event) => {
+  try {
+    const body = typeof event.body === "string" ? JSON.parse(event.body) : (event.body || event);
+    const { cacheOperation, ...cacheParams } = body;
+
+    if (!cacheOperation) {
+      return {
+        statusCode: 400,
+        body: JSON.stringify({ error: "cacheOperation is required for cache operations" })
+      };
+    }
+
+    console.log(`[Cache Execute] Operation: ${cacheOperation}`);
+
+    // Create mock request and response objects for the handlers
+    const mockReq = { body: cacheParams, query: cacheParams };
+    const mockRes = {
+      status: (code) => ({ code }),
+      json: (data) => ({ statusCode: code || 200, body: JSON.stringify(data) })
+    };
+
+    // Route to appropriate cache function using HTTP method names
+    switch (cacheOperation.toLowerCase()) {
+      case 'get':
+        // Get cached data
+        return await getCachedDataHandler(mockReq, mockRes);
+      
+      case 'post':
+        // Cache table data
+        return await cacheTableHandler(mockReq, mockRes);
+      
+      case 'put':
+        // Update cache data (same as POST for now)
+        return await cacheTableHandler(mockReq, mockRes);
+      
+      case 'patch':
+        // Partial cache update (same as POST for now)
+        return await cacheTableHandler(mockReq, mockRes);
+      
+      case 'delete':
+        // Clear cache
+        return await clearCacheHandler(mockReq, mockRes);
+      
+      default:
+        return {
+          statusCode: 400,
+          body: JSON.stringify({ 
+            error: `Invalid cache operation: ${cacheOperation}. Valid operations: GET, POST, PUT, PATCH, DELETE` 
+          })
+        };
+    }
+
+  } catch (error) {
+    console.error("[Cache Execute] Error:", error);
+    return {
+      statusCode: 500,
+      body: JSON.stringify({ error: error.message })
+    };
+  }
+};
+
+// Indexing execution handler
+const executeIndexing = async (event) => {
+  try {
+    const body = typeof event.body === "string" ? JSON.parse(event.body) : (event.body || event);
+    const { indexingOperation, ...indexingParams } = body;
+
+    if (!indexingOperation) {
+      return {
+        statusCode: 400,
+        body: JSON.stringify({ error: "indexingOperation is required for indexing operations" })
+      };
+    }
+
+    console.log(`[Indexing Execute] Operation: ${indexingOperation}`);
+
+    // Create mock request and response objects for the handlers
+    const mockReq = { body: indexingParams, query: indexingParams };
+    const mockRes = {
+      status: (code) => ({ code }),
+      json: (data) => ({ statusCode: code || 200, body: JSON.stringify(data) })
+    };
+
+    // Route to appropriate indexing function
+    switch (indexingOperation.toLowerCase()) {
+      case 'index-table':
+        return await indexTableHandler(mockReq, mockRes);
+      
+      case 'search-index':
+        return await searchIndexHandler(mockReq, mockRes);
+      
+      case 'list-indices':
+        return await listIndicesHandler(mockReq, mockRes);
+      
+      case 'delete-indices':
+        return await deleteIndicesHandler(mockReq, mockRes);
+      
+      case 'search-health':
+        return await searchHealthHandler(mockReq, mockRes);
+      
+      default:
+        return {
+          statusCode: 400,
+          body: JSON.stringify({ 
+            error: `Invalid indexing operation: ${indexingOperation}. Valid operations: index-table, search-index, list-indices, delete-indices, search-health` 
+          })
+        };
+    }
+
+  } catch (error) {
+    console.error("[Indexing Execute] Error:", error);
+    return {
+      statusCode: 500,
+      body: JSON.stringify({ error: error.message })
+    };
+  }
+};
+
+// Main execute handler - routes to paginated, single, namespace, CRUD, cache, or indexing execution
 export const execute = async (event) => {
   try {
     const body = typeof event.body === "string" ? JSON.parse(event.body) : (event.body || event);
@@ -453,6 +640,15 @@ export const execute = async (event) => {
     } else if (executeType === "namespace") {
       // Use namespace execution
       return await executeNamespace(event);
+    } else if (executeType === "crud") {
+      // Use CRUD execution
+      return await executeCrud(event);
+    } else if (executeType === "cache") {
+      // Use cache execution
+      return await executeCache(event);
+    } else if (executeType === "indexing") {
+      // Use indexing execution
+      return await executeIndexing(event);
     } else {
       // Use single execution
       return await executeSingle(event);

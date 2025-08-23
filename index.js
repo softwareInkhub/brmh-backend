@@ -32,7 +32,12 @@ import {
   testCacheConnection,
   clearUnwantedOrderDataHandler,
   cleanupTimestampChunksHandler,
-  getCachedDataInSequenceHandler
+  getCachedDataInSequenceHandler,
+  updateCacheFromLambdaHandler,
+  getActiveBulkCacheOperations,
+  clearActiveBulkCacheOperations,
+  getPendingCacheUpdates,
+  clearPendingCacheUpdates
 } from './utils/cache.js';
 
 import { updateCacheFromLambdaHandler } from './utils/cache.js';
@@ -51,6 +56,22 @@ import { execute } from './utils/execute.js';
 
 import { mockDataAgent } from './lib/mock-data-agent.js';
 import { fetchOrdersWithShortIdsHandler } from './utils/fetchOrder.js';
+
+import { 
+  loginHandler,
+  signupHandler,
+  phoneSignupHandler,
+  phoneLoginHandler,
+  verifyPhoneHandler,
+  resendOtpHandler,
+  generateOAuthUrlHandler,
+  exchangeTokenHandler,
+  refreshTokenHandler,
+  validateTokenHandler,
+  debugPkceStoreHandler,
+  logoutHandler,
+  getLogoutUrlHandler
+} from './utils/brmh-auth.js';
 
 // Load environment variables
 dotenv.config();
@@ -184,6 +205,8 @@ const unifiedApiHandlers = {
   deleteSchema: unifiedHandlers.deleteSchema,
   getSchemaById: unifiedHandlers.getSchemaById,
   saveSchema: unifiedHandlers.saveSchema,
+  getSchemasForSelection: unifiedHandlers.getSchemasForSelection,
+  getSchemaWithReferences: unifiedHandlers.getSchemaWithReferences,
   // Register the createSchemasTable handler
   createSchemasTable: unifiedHandlers.createSchemasTable,
 
@@ -737,6 +760,14 @@ app.get('/test-valkey-connection', async (req, res) => {
 // Cache update from Lambda function
 app.post('/cache-data', updateCacheFromLambdaHandler);
 
+// Bulk cache operation management
+app.get('/cache/bulk-operations', getActiveBulkCacheOperations);
+app.delete('/cache/bulk-operations', clearActiveBulkCacheOperations);
+
+// Pending cache updates management
+app.get('/cache/pending-updates', getPendingCacheUpdates);
+app.delete('/cache/pending-updates', clearPendingCacheUpdates);
+
 // --- Search Indexing API Routes ---
 app.post('/search/index', indexTableHandler);
 app.post('/search/query', searchIndexHandler);
@@ -1043,6 +1074,45 @@ app.post("/indexing/update", async (req, res) => {
   }
 });
 
+// Auth Routes
+app.post('/auth/login', loginHandler);
+app.post('/auth/signup', signupHandler);
+
+// Phone Authentication Routes
+app.post('/auth/phone/signup', phoneSignupHandler);
+app.post('/auth/phone/login', phoneLoginHandler);
+app.post('/auth/phone/verify', verifyPhoneHandler);
+app.post('/auth/phone/resend-otp', resendOtpHandler);
+
+// OAuth Routes
+app.get('/auth/oauth-url', generateOAuthUrlHandler);
+app.post('/auth/token', exchangeTokenHandler);
+app.post('/auth/refresh', refreshTokenHandler);
+app.post('/auth/validate', validateTokenHandler);
+app.post('/auth/logout', logoutHandler);
+app.get('/auth/logout-url', getLogoutUrlHandler);
+app.get('/auth/debug-pkce', debugPkceStoreHandler);
+
+// Simple redirect to Cognito Hosted UI logout (useful for frontend buttons)
+app.get('/auth/logout-redirect', (req, res) => {
+  try {
+    const domain = process.env.AWS_COGNITO_DOMAIN;
+    const clientId = process.env.AWS_COGNITO_CLIENT_ID;
+    const logoutRedirectUri = process.env.AUTH_LOGOUT_REDIRECT_URI || process.env.AUTH_REDIRECT_URI || 'http://localhost:3000';
+
+    if (!domain || !clientId) {
+      return res.status(500).json({
+        error: 'OAuth configuration missing. Set AWS_COGNITO_DOMAIN, AWS_COGNITO_CLIENT_ID, and AUTH_LOGOUT_REDIRECT_URI/AUTH_REDIRECT_URI.'
+      });
+    }
+
+    const url = `https://${domain}/logout?client_id=${encodeURIComponent(clientId)}&logout_uri=${encodeURIComponent(logoutRedirectUri)}`;
+    return res.redirect(url);
+  } catch (error) {
+    console.error('Error building logout redirect URL:', error);
+    return res.status(500).json({ error: 'Failed to build logout redirect URL', details: error.message });
+  }
+});
 
 
 const PORT = process.env.PORT || 5001;

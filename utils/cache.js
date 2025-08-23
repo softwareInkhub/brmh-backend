@@ -5,6 +5,19 @@ import Redis from "ioredis";
 
 console.log('Cache service: importing modules and initializing clients');
 
+// In-memory lock to prevent race conditions between bulk cache and updates
+const activeBulkCacheOperations = new Set();
+
+// Queue system for pending cache updates
+const pendingCacheUpdates = new Map();
+
+// Logging configuration
+const LOG_CONFIG = {
+  VERBOSE: process.env.CACHE_LOG_VERBOSE === 'true',
+  CHUNK_LOG_INTERVAL: 10, // Log every Nth chunk
+  PROGRESS_LOG_INTERVAL: 10 // Log progress every Nth operation
+};
+
 // Initialize Redis client with enhanced configuration
 const redis = new Redis({
   host: process.env.REDIS_HOST || 'localhost',
@@ -109,6 +122,21 @@ export const cacheTableHandler = async (req, res) => {
   try {
     const { project, table, recordsPerKey = 1, ttl = 3600 } = req.body;
 
+    // Check if bulk cache operation is already in progress for this table
+    const operationKey = `${project}:${table}`;
+    if (activeBulkCacheOperations.has(operationKey)) {
+      console.log(`🚫 Bulk cache operation already in progress for ${operationKey}`);
+      return res.status(409).json({
+        error: "Bulk cache operation in progress",
+        message: `A bulk cache operation is already running for project: ${project}, table: ${table}`,
+        operationKey
+      });
+    }
+
+    // Add lock for this operation
+    activeBulkCacheOperations.add(operationKey);
+    console.log(`🔒 Acquired bulk cache lock for ${operationKey}`);
+
     console.log('Cache handler invoked with request:', JSON.stringify(req.body));
 
     // Validation
@@ -182,6 +210,14 @@ export const cacheTableHandler = async (req, res) => {
       durationMs: duration,
       timestamp: new Date().toISOString()
     });
+  } finally {
+    // Always release the lock, even if operation fails
+    const operationKey = `${req.body.project}:${req.body.table}`;
+    activeBulkCacheOperations.delete(operationKey);
+    console.log(`🔓 Released bulk cache lock for ${operationKey}`);
+    
+    // Process any pending cache updates
+    await processPendingCacheUpdates(operationKey);
   }
 };
 
@@ -472,7 +508,7 @@ export const getCachedDataHandler = async (req, res) => {
         data: parsedData
       });
          } else {
-       // Get all keys for project:table
+       // Get all keys for project:table (keys only, no data)
        const searchPattern = `${project}:${table}:*`;
        console.log(`🔎 Searching for all keys with pattern: ${searchPattern}`);
        
@@ -514,49 +550,12 @@ export const getCachedDataHandler = async (req, res) => {
           
           console.log(`📋 Sorted keys:`, sortedKeys);
           
-          // Get data count for each key
-          const keysWithCounts = [];
-          let totalItems = 0;
-          
-          for (const key of sortedKeys) {
-            try {
-              const value = await redis.get(key);
-              if (value) {
-                const data = JSON.parse(value);
-                const itemCount = Array.isArray(data) ? data.length : 1;
-                totalItems += itemCount;
-                
-                keysWithCounts.push({
-                  key: key,
-                  itemCount: itemCount,
-                  dataType: Array.isArray(data) ? 'array' : 'object'
-                });
-                
-                console.log(`📊 ${key}: ${itemCount} item${itemCount !== 1 ? 's' : ''} (${Array.isArray(data) ? 'array' : 'object'})`);
-              } else {
-                keysWithCounts.push({
-                  key: key,
-                  itemCount: 0,
-                  dataType: 'empty'
-                });
-                console.log(`📊 ${key}: 0 items (empty)`);
-              }
-            } catch (err) {
-              console.error(`❌ Error reading data for key ${key}:`, err);
-              keysWithCounts.push({
-                key: key,
-                itemCount: 0,
-                dataType: 'error'
-              });
-            }
-          }
-          
-          console.log(`📈 Total items across all keys: ${totalItems}`);
-          
+          // Return only keys, not the actual data to avoid timeout
           return res.status(200).json({
-            message: "Cache keys retrieved in sequence",
+            message: "Cache keys retrieved in sequence (keys only)",
             keysFound: sortedKeys.length,
-            keys: sortedKeys
+            keys: sortedKeys,
+            note: "Use ?key=specific_key to get actual data for a specific key"
           });
         }
       
@@ -582,9 +581,9 @@ export const getCachedDataHandler = async (req, res) => {
 export const getCachedDataInSequenceHandler = async (req, res) => {
   console.log('🔍 Get cached data in sequence request:', req.query);
   try {
-    const { project, table, page = 1, limit = 10 } = req.query;
+    const { project, table, page = 1, limit = 1000, includeData = 'false' } = req.query;
 
-    console.log(`📋 Query params: project=${project}, table=${table}, page=${page}, limit=${limit}`);
+    console.log(`📋 Query params: project=${project}, table=${table}, page=${page}, limit=${limit}, includeData=${includeData}`);
 
     if (!project || !table) {
       return res.status(400).json({
@@ -645,86 +644,95 @@ export const getCachedDataInSequenceHandler = async (req, res) => {
       }
     });
     
-    console.log(`📋 Sorted keys:`, sortedKeys);
+    console.log(`📋 Total sorted keys found: ${sortedKeys.length}`);
     
-    // Get all data in sequence first with detailed count information
-    const allData = [];
-    const keysWithData = [];
-    const keysWithCounts = [];
-    let totalItems = 0;
-    
-    for (const k of sortedKeys) {
-      try {
-        const value = await redis.get(k);
-        if (value) {
-          const parsedData = JSON.parse(value);
-          const itemCount = Array.isArray(parsedData) ? parsedData.length : 1;
-          totalItems += itemCount;
-          
-          // If it's an array (chunk), spread the items
-          if (Array.isArray(parsedData)) {
-            allData.push(...parsedData);
-            console.log(`📦 Retrieved chunk ${k} with ${parsedData.length} items`);
-          } else {
-            // If it's a single item
-            allData.push(parsedData);
-            console.log(`📦 Retrieved single item ${k} with 1 item`);
-          }
-          
-          keysWithData.push(k);
-          keysWithCounts.push({
-            key: k,
-            itemCount: itemCount,
-            dataType: Array.isArray(parsedData) ? 'array' : 'object'
-          });
-        } else {
-          console.log(`📦 Empty key: ${k}`);
-          keysWithCounts.push({
-            key: k,
-            itemCount: 0,
-            dataType: 'empty'
-          });
-        }
-      } catch (err) {
-        console.error(`❌ Error reading data for key ${k}:`, err);
-        keysWithCounts.push({
-          key: k,
-          itemCount: 0,
-          dataType: 'error'
-        });
-      }
-    }
-    
-    console.log(`📊 Total items retrieved: ${allData.length} from ${keysWithData.length} keys`);
-    console.log(`📈 Total items across all keys: ${totalItems}`);
-    
-    // Apply pagination
+    // Apply pagination to keys first
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
     const startIndex = (pageNum - 1) * limitNum;
     const endIndex = startIndex + limitNum;
-    const totalPages = Math.ceil(allData.length / limitNum);
+    const totalPages = Math.ceil(sortedKeys.length / limitNum);
     const hasMore = pageNum < totalPages;
     
-    const paginatedData = allData.slice(startIndex, endIndex);
+    const paginatedKeys = sortedKeys.slice(startIndex, endIndex);
     
-    console.log(`📄 Pagination: page ${pageNum}/${totalPages}, showing ${paginatedData.length} items`);
+    console.log(`📄 Pagination: page ${pageNum}/${totalPages}, showing ${paginatedKeys.length} keys out of ${sortedKeys.length} total`);
     
-    return res.status(200).json({
-      message: "Cached data retrieved in sequence",
-      keysFound: keysWithData.length,
-      totalItems: allData.length,
-      keys: keysWithData,
-      data: paginatedData,
-      pagination: {
-        currentPage: pageNum,
-        totalPages: totalPages,
-        hasMore: hasMore,
-        itemsPerPage: limitNum,
-        startIndex: startIndex,
-        endIndex: endIndex
+    // Check if user wants data (explicitly check for 'true' string)
+    const shouldIncludeData = includeData === 'true' || includeData === true;
+    console.log(`🔍 includeData=${includeData}, shouldIncludeData=${shouldIncludeData}`);
+    console.log(`🔍 includeData type: ${typeof includeData}, value: "${includeData}"`);
+    console.log(`🔍 All query params:`, req.query);
+    
+    // Force keys-only if includeData is not explicitly 'true'
+    console.log(`🔍 DEBUG: includeData="${includeData}", shouldIncludeData=${shouldIncludeData}, will fetch data: ${shouldIncludeData && includeData === 'true'}`);
+    if (shouldIncludeData && includeData === 'true') {
+      const allData = [];
+      const keysWithData = [];
+      let totalItems = 0;
+      
+      for (const k of paginatedKeys) {
+        try {
+          const value = await redis.get(k);
+          if (value) {
+            const parsedData = JSON.parse(value);
+            const itemCount = Array.isArray(parsedData) ? parsedData.length : 1;
+            totalItems += itemCount;
+            
+            // If it's an array (chunk), spread the items
+                    if (Array.isArray(parsedData)) {
+          allData.push(...parsedData);
+          // Only log every Nth chunk to reduce noise
+          if (keysWithData.length % LOG_CONFIG.CHUNK_LOG_INTERVAL === 0) {
+            console.log(`📦 Retrieved ${keysWithData.length} chunks so far, latest: ${k} with ${parsedData.length} items`);
+          }
+        } else {
+          // If it's a single item
+          allData.push(parsedData);
+          console.log(`📦 Retrieved single item ${k} with 1 item`);
+        }
+            
+            keysWithData.push(k);
+          } else {
+            console.log(`📦 Empty key: ${k}`);
+          }
+        } catch (err) {
+          console.error(`❌ Error reading data for key ${k}:`, err);
+        }
       }
-    });
+      
+      console.log(`📊 Total items retrieved: ${allData.length} from ${keysWithData.length} keys`);
+      
+      return res.status(200).json({
+        message: "Cached data retrieved in sequence with pagination",
+        keysFound: keysWithData.length,
+        totalItems: allData.length,
+        keys: keysWithData,
+        data: allData,
+        pagination: {
+          currentPage: pageNum,
+          totalPages: totalPages,
+          hasMore: hasMore,
+          totalItems: allData.length
+        }
+      });
+    } else {
+      // Return only keys without data (default behavior)
+      console.log(`✅ Returning keys only (${paginatedKeys.length} keys out of ${sortedKeys.length} total)`);
+      return res.status(200).json({
+        message: "Cache keys retrieved in sequence with pagination (keys only)",
+        keysFound: paginatedKeys.length,
+        totalKeys: sortedKeys.length,
+        keys: paginatedKeys,
+        note: "Use ?includeData=true to get actual data for these keys",
+        pagination: {
+          currentPage: pageNum,
+          totalPages: totalPages,
+          hasMore: hasMore,
+          totalItems: sortedKeys.length
+        }
+      });
+    }
 
   } catch (err) {
     console.error("🔥 Get cached data in sequence failed:", err);
@@ -1109,7 +1117,8 @@ async function cleanupTimestampChunks(project, tableName) {
     let convertedCount = 0;
     
     // Convert timestamp chunks to sequential
-    for (const timestampKey of timestampChunks) {
+    for (let i = 0; i < timestampChunks.length; i++) {
+      const timestampKey = timestampChunks[i];
       try {
         const value = await redis.get(timestampKey);
         if (value) {
@@ -1124,7 +1133,10 @@ async function cleanupTimestampChunks(project, tableName) {
           // Delete old timestamp key
           await redis.del(timestampKey);
           
-          console.log(`🔄 Converted ${timestampKey} → ${newKey}`);
+          // Only log every 5th conversion to reduce noise
+          if (convertedCount % 5 === 0) {
+            console.log(`🔄 Converted ${timestampKey} → ${newKey} (${convertedCount + 1}/${timestampChunks.length})`);
+          }
           nextChunkId++;
           convertedCount++;
         }
@@ -1161,6 +1173,7 @@ async function clearUnwantedOrderData(project, tableName) {
     console.log(`🔍 Found ${keys.length} chunk keys to check`);
     
     let deletedCount = 0;
+    let checkedCount = 0;
     for (const key of keys) {
       try {
         const value = await redis.get(key);
@@ -1182,6 +1195,12 @@ async function clearUnwantedOrderData(project, tableName) {
             await redis.del(key);
             deletedCount++;
           }
+        }
+        checkedCount++;
+        
+        // Only log progress every 10 chunks to reduce noise
+        if (checkedCount % 10 === 0) {
+          console.log(`🔍 Checked ${checkedCount}/${keys.length} chunks, deleted ${deletedCount} so far`);
         }
       } catch (err) {
         console.error(`❌ Error checking key ${key}:`, err);
@@ -1210,39 +1229,11 @@ export const updateCacheFromLambdaHandler = async (req, res) => {
   try {
     const { type, newItem, oldItem } = req.body;
 
-    console.log('🔄 Cache update from Lambda:', { type, hasNewItem: !!newItem, hasOldItem: !!oldItem });
-
-    // Validation
-    if (!type || !['INSERT', 'MODIFY', 'REMOVE'].includes(type)) {
-      console.error("Invalid type in request:", type);
-      return res.status(400).json({ 
-        error: "Invalid type",
-        message: "Type must be INSERT, MODIFY, or REMOVE"
-      });
-    }
-
-    if (!newItem && type === 'INSERT') {
-      console.error("Missing newItem for INSERT operation");
-      return res.status(400).json({ 
-        error: "Missing newItem",
-        message: "newItem is required for INSERT operations"
-      });
-    }
-
-    if (!oldItem && (type === 'MODIFY' || type === 'REMOVE')) {
-      console.error("Missing oldItem for MODIFY/REMOVE operation");
-      return res.status(400).json({ 
-        error: "Missing oldItem",
-        message: "oldItem is required for MODIFY/REMOVE operations"
-      });
-    }
-
     // Get the table name from the request (already extracted by the endpoint)
     let tableName = req.body.extractedTableName;
     
     // If not provided in request, fall back to extracting from items
     if (!tableName) {
-      console.log("No extracted table name in request, falling back to item extraction");
       tableName = newItem?.tableName || oldItem?.tableName;
       
       // If tableName is in DynamoDB format, extract the string value
@@ -1264,16 +1255,70 @@ export const updateCacheFromLambdaHandler = async (req, res) => {
       
       // If still no tableName, use a default
       if (!tableName) {
-        console.log("No table name found in items, using default");
         tableName = 'brmh-cache'; // Default fallback
       }
     }
 
-    console.log(`📋 Processing ${type} operation for table: ${tableName}`);
+    // Check if bulk cache operation is in progress for this table
+    const project = newItem?.project?.S || newItem?.project || oldItem?.project?.S || oldItem?.project || 'default';
+    const operationKey = `${project}:${tableName}`;
+    
+    if (activeBulkCacheOperations.has(operationKey)) {
+      // Queue the update for later processing
+      if (!pendingCacheUpdates.has(operationKey)) {
+        pendingCacheUpdates.set(operationKey, []);
+      }
+      
+      const queuedUpdate = {
+        type,
+        newItem,
+        oldItem,
+        tableName,
+        project,
+        timestamp: new Date().toISOString()
+      };
+      
+      pendingCacheUpdates.get(operationKey).push(queuedUpdate);
+      
+      console.log(`📦 Queued ${type} for ${operationKey} (${pendingCacheUpdates.get(operationKey).length} pending)`);
+      
+      return res.status(202).json({
+        message: "Cache update queued for later processing",
+        reason: "Bulk cache operation in progress",
+        tableName,
+        type,
+        operationKey,
+        queuedUpdates: pendingCacheUpdates.get(operationKey).length,
+        estimatedWaitTime: "Until bulk cache completes"
+      });
+    }
+
+    console.log(`🔄 Cache ${type}: ${tableName}`);
+
+    // Validation
+    if (!type || !['INSERT', 'MODIFY', 'REMOVE'].includes(type)) {
+      return res.status(400).json({ 
+        error: "Invalid type",
+        message: "Type must be INSERT, MODIFY, or REMOVE"
+      });
+    }
+
+    if (!newItem && type === 'INSERT') {
+      return res.status(400).json({ 
+        error: "Missing newItem",
+        message: "newItem is required for INSERT operations"
+      });
+    }
+
+    if (!oldItem && (type === 'MODIFY' || type === 'REMOVE')) {
+      return res.status(400).json({ 
+        error: "Missing oldItem",
+        message: "oldItem is required for MODIFY/REMOVE operations"
+      });
+    }
 
     // Prevent caching order data in brmh-cache table
     if (tableName === 'brmh-cache') {
-      // Check if this is actually cache configuration data, not order data
       const item = newItem || oldItem;
       const isCacheConfig = item && (
         item.id || 
@@ -1285,7 +1330,6 @@ export const updateCacheFromLambdaHandler = async (req, res) => {
       );
       
       if (!isCacheConfig) {
-        console.log(`🚫 Skipping cache update for table ${tableName} - not cache configuration data`);
         return res.status(200).json({
           message: "Skipped - not cache configuration data",
           tableName,
@@ -1294,20 +1338,22 @@ export const updateCacheFromLambdaHandler = async (req, res) => {
         });
       }
       
-      // Clean up any existing unwanted order data
+      // Clean up any existing unwanted order data (non-blocking)
       const project = item?.project?.S || item?.project || 'default';
-      await clearUnwantedOrderData(project, tableName);
-      
-      // Also clean up timestamp-based chunks
-      await cleanupTimestampChunks(project, tableName);
+      setImmediate(async () => {
+        try {
+          await clearUnwantedOrderData(project, tableName);
+          await cleanupTimestampChunks(project, tableName);
+        } catch (err) {
+          console.error(`❌ Cleanup failed for ${tableName}:`, err.message);
+        }
+      });
     }
 
     // Find active cache configurations for this table
     const cacheConfigs = await findActiveCacheConfigs(tableName);
     
     if (cacheConfigs.length === 0) {
-      console.log(`ℹ️ No active cache configurations found for table: ${tableName}`);
-      console.log(`💡 Available tables in cache configs:`, cacheConfigs.map(c => c.tableName));
       return res.status(200).json({
         message: "No active cache configurations found",
         tableName,
@@ -1316,30 +1362,30 @@ export const updateCacheFromLambdaHandler = async (req, res) => {
       });
     }
 
-    console.log(`📊 Found ${cacheConfigs.length} active cache configurations for table: ${tableName}`);
-
-    // Process each cache configuration
+    // Process each cache configuration (non-blocking)
     const results = [];
-    for (const config of cacheConfigs) {
+    const processPromises = cacheConfigs.map(async (config) => {
       try {
         const result = await processCacheUpdate(config, type, newItem, oldItem);
-        results.push(result);
+        return result;
       } catch (err) {
-        console.error(`❌ Failed to process cache config ${config.id}:`, err);
-        results.push({
+        return {
           configId: config.id,
           success: false,
           error: err.message
-        });
+        };
       }
-    }
+    });
+
+    // Wait for all cache updates to complete
+    const allResults = await Promise.all(processPromises);
+    results.push(...allResults);
 
     const successfulUpdates = results.filter(r => r.success).length;
     const failedUpdates = results.filter(r => !r.success).length;
     const duration = Date.now() - start;
 
-    console.log(`✅ Cache update complete: ${successfulUpdates} successful, ${failedUpdates} failed`);
-    console.log(`⏱️ Update duration (ms):`, duration);
+    console.log(`✅ Cache ${type} complete: ${successfulUpdates}/${cacheConfigs.length} success (${duration}ms)`);
 
     return res.status(200).json({
       message: "Cache update processed",
@@ -1371,27 +1417,12 @@ export const updateCacheFromLambdaHandler = async (req, res) => {
  */
 async function findActiveCacheConfigs(tableName) {
   try {
-    console.log(`🔍 Searching for active cache configs for table: ${tableName}`);
-    
-    // First, let's scan all cache configurations to see what we have
     const scanCommand = new ScanCommand({
       TableName: 'brmh-cache'
     });
 
     const scanResponse = await ddb.send(scanCommand);
     const allConfigs = scanResponse.Items.map(unmarshall);
-    
-    console.log(`📋 Found ${allConfigs.length} total cache configurations:`);
-    allConfigs.forEach((config, index) => {
-      console.log(`  Config ${index + 1}:`, {
-        id: config.id,
-        tableName: config.tableName,
-        project: config.project,
-        status: config.status,
-        methodId: config.methodId,
-        accountId: config.accountId
-      });
-    });
 
     // Filter for active configs matching the table name
     const activeConfigs = allConfigs.filter(config => 
@@ -1399,10 +1430,9 @@ async function findActiveCacheConfigs(tableName) {
       config.tableName === tableName
     );
     
-    console.log(`✅ Found ${activeConfigs.length} active cache configurations for table: ${tableName}`);
     return activeConfigs;
   } catch (err) {
-    console.error('❌ Error finding cache configs:', err);
+    console.error('❌ Error finding cache configs:', err.message);
     throw err;
   }
 }
@@ -1412,10 +1442,8 @@ async function findActiveCacheConfigs(tableName) {
  */
 async function processCacheUpdate(config, type, newItem, oldItem) {
   const { id: configId, itemsPerKey, timeToLive, tableName, project } = config;
-  const projectName = project || 'default'; // Use project from config or default
+  const projectName = project || 'default';
   
-  console.log(`🔄 Processing cache update for config ${configId}:`, { type, itemsPerKey, timeToLive, tableName, project: projectName });
-
   try {
     switch (type) {
       case 'INSERT':
@@ -1431,7 +1459,7 @@ async function processCacheUpdate(config, type, newItem, oldItem) {
         throw new Error(`Unknown operation type: ${type}`);
     }
   } catch (err) {
-    console.error(`❌ Error processing ${type} operation:`, err);
+    console.error(`❌ Cache ${type} failed for config ${configId}:`, err.message);
     throw err;
   }
 }
@@ -1440,10 +1468,6 @@ async function processCacheUpdate(config, type, newItem, oldItem) {
  * Handle INSERT operations
  */
 async function handleInsert(project, tableName, newItem, itemsPerKey, ttl) {
-  console.log(`➕ Handling INSERT for ${tableName}`);
-  console.log(`📦 New item:`, newItem);
-  console.log(`⚙️ Config: project=${project}, itemsPerKey=${itemsPerKey}, ttl=${ttl}`);
-  
   // Unmarshall DynamoDB item to plain JSON
   const unmarshalledItem = unmarshall(newItem);
   console.log(`📦 Unmarshalled item:`, unmarshalledItem);
@@ -1485,8 +1509,6 @@ async function handleInsert(project, tableName, newItem, itemsPerKey, ttl) {
       existingChunks.push(...result[1]);
     } while (cursor !== '0');
     
-    console.log(`🔍 Found ${existingChunks.length} existing chunks`);
-    
     let bestChunkKey = null;
     let bestChunkSize = 0;
     
@@ -1496,8 +1518,6 @@ async function handleInsert(project, tableName, newItem, itemsPerKey, ttl) {
       if (chunkValue) {
         const chunkItems = JSON.parse(chunkValue);
         const chunkSize = chunkItems.length;
-        
-        console.log(`📦 Chunk ${chunkKey}: ${chunkSize}/${itemsPerKey} items`);
         
         // Prefer chunks that have space and are closest to being full
         if (chunkSize < itemsPerKey && chunkSize > bestChunkSize) {
@@ -1517,7 +1537,6 @@ async function handleInsert(project, tableName, newItem, itemsPerKey, ttl) {
       } else {
         await redis.set(bestChunkKey, JSON.stringify(existingItems)); // No expiration
       }
-      console.log(`✅ Added to existing chunk: ${bestChunkKey} (${existingItems.length}/${itemsPerKey} items)`);
       cacheKey = bestChunkKey;
     } else {
       // Create new chunk with sequential numbering
@@ -1540,7 +1559,6 @@ async function handleInsert(project, tableName, newItem, itemsPerKey, ttl) {
       } else {
         await redis.set(newChunkKey, JSON.stringify([unmarshalledItem])); // No expiration
       }
-      console.log(`✅ Created new chunk: ${newChunkKey} (1/${itemsPerKey} items)`);
       cacheKey = newChunkKey;
     }
   }
@@ -1557,13 +1575,9 @@ async function handleInsert(project, tableName, newItem, itemsPerKey, ttl) {
  * Handle MODIFY operations
  */
 async function handleModify(project, tableName, newItem, oldItem, itemsPerKey, ttl) {
-  console.log(`✏️ Handling MODIFY for ${tableName}`);
-  
   // Unmarshall DynamoDB items to plain JSON
   const unmarshalledNewItem = unmarshall(newItem);
   const unmarshalledOldItem = unmarshall(oldItem);
-  console.log(`📦 Unmarshalled new item:`, unmarshalledNewItem);
-  console.log(`📦 Unmarshalled old item:`, unmarshalledOldItem);
   
   // Helper function to extract item ID from DynamoDB format
   const extractItemId = (item) => {
@@ -1678,12 +1692,8 @@ async function handleModify(project, tableName, newItem, oldItem, itemsPerKey, t
  * Handle REMOVE operations
  */
 async function handleRemove(project, tableName, oldItem, itemsPerKey) {
-  console.log(`🗑️ Handling REMOVE for ${tableName}`);
-  console.log(`📦 Old item to remove:`, oldItem);
-  
   // Unmarshall DynamoDB item to plain JSON
   const unmarshalledOldItem = unmarshall(oldItem);
-  console.log(`📦 Unmarshalled old item:`, unmarshalledOldItem);
   
   // Helper function to extract item ID from DynamoDB format
   const extractItemId = (item) => {
@@ -1697,12 +1707,10 @@ async function handleRemove(project, tableName, oldItem, itemsPerKey) {
   };
   
   const itemId = extractItemId(oldItem);
-  console.log(`🔍 Looking for item with ID: ${itemId}`);
   
   if (itemsPerKey === 1) {
     // Remove single item
     if (!itemId) {
-      console.log(`❌ No valid item ID found for removal`);
       return {
         configId: project,
         success: false,
@@ -1713,7 +1721,6 @@ async function handleRemove(project, tableName, oldItem, itemsPerKey) {
     
     const cacheKey = `${project}:${tableName}:${itemId}`;
     await redis.del(cacheKey);
-    console.log(`✅ Removed cached item: ${cacheKey}`);
     
     return {
       configId: project,
@@ -1724,7 +1731,6 @@ async function handleRemove(project, tableName, oldItem, itemsPerKey) {
   } else {
     // For chunked data, find and remove from chunk
     const searchPattern = `${project}:${tableName}:chunk:*`;
-    console.log(`🔍 Searching for chunks with pattern: ${searchPattern}`);
     
     // Use SCAN for Valkey compatibility
     const keys = [];
@@ -1736,19 +1742,15 @@ async function handleRemove(project, tableName, oldItem, itemsPerKey) {
       keys.push(...result[1]);
     } while (cursor !== '0');
     
-    console.log(`📦 Found ${keys.length} chunks to search through`);
-    
     for (const key of keys) {
       const value = await redis.get(key);
       if (value) {
         const items = JSON.parse(value);
-        console.log(`🔍 Searching in chunk ${key} with ${items.length} items`);
         
         // Helper function to compare items considering DynamoDB format
         const findItemIndex = (items, targetId) => {
           return items.findIndex(item => {
             const currentItemId = extractItemId(item);
-            console.log(`🔍 Comparing item ID: ${currentItemId} with target: ${targetId}`);
             return currentItemId === targetId;
           });
         };
@@ -1756,17 +1758,14 @@ async function handleRemove(project, tableName, oldItem, itemsPerKey) {
         const itemIndex = findItemIndex(items, itemId);
         
         if (itemIndex !== -1) {
-          console.log(`✅ Found item at index ${itemIndex} in chunk ${key}`);
           items.splice(itemIndex, 1);
           
           if (items.length === 0) {
             // Remove empty chunk
             await redis.del(key);
-            console.log(`✅ Removed empty chunk: ${key}`);
           } else {
             // Update chunk with remaining items
             await redis.set(key, JSON.stringify(items));
-            console.log(`✅ Updated chunk after removal: ${key} (${items.length} items remaining)`);
           }
           
           return {
@@ -1779,7 +1778,6 @@ async function handleRemove(project, tableName, oldItem, itemsPerKey) {
       }
     }
     
-    console.log(`⚠️ Item with ID ${itemId} not found in any cache chunks`);
     return {
       configId: project,
       success: false,
@@ -1789,6 +1787,197 @@ async function handleRemove(project, tableName, oldItem, itemsPerKey) {
     };
   }
 }
+
+/**
+ * Process pending cache updates after bulk cache operation completes
+ */
+async function processPendingCacheUpdates(operationKey) {
+  try {
+    const pendingUpdates = pendingCacheUpdates.get(operationKey);
+    
+    if (!pendingUpdates || pendingUpdates.length === 0) {
+      console.log(`📭 No pending updates to process for ${operationKey}`);
+      return;
+    }
+    
+    console.log(`🔄 Processing ${pendingUpdates.length} pending cache updates for ${operationKey}`);
+    
+    // Find active cache configurations for this table
+    const [project, tableName] = operationKey.split(':');
+    
+    // Get cache configurations for this table
+    const cacheConfigs = await findActiveCacheConfigs(tableName);
+    
+    if (cacheConfigs.length === 0) {
+      console.log(`⚠️ No active cache configurations found for ${operationKey}, skipping pending updates`);
+      pendingCacheUpdates.delete(operationKey);
+      return;
+    }
+    
+    let processedCount = 0;
+    let failedCount = 0;
+    
+    for (const update of pendingUpdates) {
+      try {
+        console.log(`📦 Processing queued update: ${update.type} for ${update.tableName}`);
+        
+        // Process each cache configuration
+        for (const config of cacheConfigs) {
+          const result = await processCacheUpdate(config, update.type, update.newItem, update.oldItem);
+          if (result.success) {
+            console.log(`✅ Queued update processed successfully for config ${config.id}`);
+          } else {
+            console.error(`❌ Failed to process queued update for config ${config.id}:`, result.error);
+            failedCount++;
+          }
+        }
+        
+        processedCount++;
+      } catch (err) {
+        console.error(`❌ Error processing queued update:`, err);
+        failedCount++;
+      }
+    }
+    
+    // Clear the processed updates
+    pendingCacheUpdates.delete(operationKey);
+    
+    console.log(`✅ Completed processing pending updates for ${operationKey}: ${processedCount} processed, ${failedCount} failed`);
+    
+  } catch (err) {
+    console.error(`🔥 Error in processPendingCacheUpdates for ${operationKey}:`, err);
+  }
+}
+
+/**
+ * Get active bulk cache operations
+ */
+export const getActiveBulkCacheOperations = async (req, res) => {
+  try {
+    const activeOperations = Array.from(activeBulkCacheOperations);
+    
+    console.log(`📋 Active bulk cache operations: ${activeOperations.length}`);
+    
+    return res.status(200).json({
+      message: "Active bulk cache operations retrieved",
+      activeOperations,
+      count: activeOperations.length,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error("🔥 Get active bulk cache operations failed:", err);
+    return res.status(500).json({
+      message: "Failed to retrieve active bulk cache operations",
+      error: err.message
+    });
+  }
+};
+
+/**
+ * Clear all active bulk cache operations (emergency reset)
+ */
+export const clearActiveBulkCacheOperations = async (req, res) => {
+  try {
+    const clearedCount = activeBulkCacheOperations.size;
+    activeBulkCacheOperations.clear();
+    
+    console.log(`🧹 Cleared ${clearedCount} active bulk cache operations`);
+    
+    return res.status(200).json({
+      message: "Active bulk cache operations cleared",
+      clearedCount,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error("🔥 Clear active bulk cache operations failed:", err);
+    return res.status(500).json({
+      message: "Failed to clear active bulk cache operations",
+      error: err.message
+    });
+  }
+};
+
+/**
+ * Get pending cache updates
+ */
+export const getPendingCacheUpdates = async (req, res) => {
+  try {
+    const pendingUpdates = {};
+    
+    for (const [operationKey, updates] of pendingCacheUpdates.entries()) {
+      pendingUpdates[operationKey] = {
+        count: updates.length,
+        updates: updates.map(update => ({
+          type: update.type,
+          tableName: update.tableName,
+          timestamp: update.timestamp
+        }))
+      };
+    }
+    
+    const totalPending = Array.from(pendingCacheUpdates.values()).reduce((sum, updates) => sum + updates.length, 0);
+    
+    console.log(`📋 Pending cache updates: ${totalPending} total across ${pendingCacheUpdates.size} operations`);
+    
+    return res.status(200).json({
+      message: "Pending cache updates retrieved",
+      pendingUpdates,
+      totalPending,
+      operationCount: pendingCacheUpdates.size,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error("🔥 Get pending cache updates failed:", err);
+    return res.status(500).json({
+      message: "Failed to retrieve pending cache updates",
+      error: err.message
+    });
+  }
+};
+
+/**
+ * Clear pending cache updates for a specific operation or all
+ */
+export const clearPendingCacheUpdates = async (req, res) => {
+  try {
+    const { operationKey } = req.query;
+    
+    if (operationKey) {
+      // Clear specific operation
+      const clearedCount = pendingCacheUpdates.get(operationKey)?.length || 0;
+      pendingCacheUpdates.delete(operationKey);
+      
+      console.log(`🧹 Cleared ${clearedCount} pending updates for ${operationKey}`);
+      
+      return res.status(200).json({
+        message: "Pending cache updates cleared for specific operation",
+        operationKey,
+        clearedCount,
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      // Clear all pending updates
+      const totalCleared = Array.from(pendingCacheUpdates.values()).reduce((sum, updates) => sum + updates.length, 0);
+      const operationCount = pendingCacheUpdates.size;
+      pendingCacheUpdates.clear();
+      
+      console.log(`🧹 Cleared all pending cache updates: ${totalCleared} updates across ${operationCount} operations`);
+      
+      return res.status(200).json({
+        message: "All pending cache updates cleared",
+        totalCleared,
+        operationCount,
+        timestamp: new Date().toISOString()
+      });
+    }
+  } catch (err) {
+    console.error("🔥 Clear pending cache updates failed:", err);
+    return res.status(500).json({
+      message: "Failed to clear pending cache updates",
+      error: err.message
+    });
+  }
+};
 
 // Graceful shutdown
 process.on('SIGINT', async () => {
