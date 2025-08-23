@@ -24,7 +24,7 @@ jobs:
     - name: Deploy to AWS
       uses: appleboy/ssh-action@master
       with:
-        host: ec2-52-5-157-232.compute-1.amazonaws.com
+        host: ec2-34-238-24-134.compute-1.amazonaws.com
         username: ubuntu
         key: ${{ secrets.EC2_SSH_KEY }}
         script: |
@@ -34,10 +34,10 @@ jobs:
           # Install PM2 globally with sudo
           sudo npm install -g pm2
           # Stop any existing instances
-          pm2 stop brmh-backend || true
-          pm2 delete brmh-backend || true
+          pm2 stop brmh-backend-v2 || true
+          pm2 delete brmh-backend-v2 || true
           # Start the application as a system service
-          pm2 start npm --name "brmh-backend" -- start
+          pm2 start npm --name "brmh-backend-v2" -- start
           # Save PM2 process list
           pm2 save
           # Remove any existing startup script
