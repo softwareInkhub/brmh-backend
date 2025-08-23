@@ -2,7 +2,16 @@
 
 ## Overview
 
-The BRMH (Backend Resource Management Hub) cache system provides high-performance data caching using AWS ElastiCache (Valkey) with Redis-compatible operations. The system supports both individual item caching and chunked data storage with automatic duplicate detection and management.
+The BRMH (Backend Resource Management Hub) cache system provides high-performance data caching using AWS ElastiCache (Valkey) with Redis-compatible operations. The system supports both individual item caching and chunked data storage with automatic duplicate detection, non-blocking operations, and optimized performance.
+
+## Recent Optimizations (Latest Update)
+
+### Performance Improvements
+- **Non-blocking cache updates**: Background processing prevents API blocking
+- **Parallel cache configuration processing**: Multiple configs processed simultaneously
+- **Optimized logging**: Reduced verbosity with one-liner status messages
+- **Queue system**: Prevents data loss during concurrent bulk operations
+- **Enhanced pagination**: Better handling of large datasets with improved limits
 
 ## Architecture
 
@@ -11,6 +20,8 @@ The BRMH (Backend Resource Management Hub) cache system provides high-performanc
 - **DynamoDB**: Primary data source for caching
 - **Express.js**: API endpoints for cache operations
 - **ioredis**: Redis client for Node.js
+- **Lambda Functions**: Data streaming and cache update triggers
+- **Queue System**: In-memory queue for pending cache updates
 
 ### Cache Key Structure
 ```
@@ -80,64 +91,122 @@ Caches entire DynamoDB table data with duplicate detection.
 ### Get Cache Keys
 **GET** `/cache/data?project={project}&table={table}`
 
-Retrieves all cache keys for a specific project and table.
+Retrieves all cache keys for a specific project and table (keys only, no data).
 
 **Response:**
 ```json
 {
-  "message": "Cache keys retrieved in sequence",
-  "keysFound": 285,
+  "message": "Cache keys retrieved in sequence (keys only)",
+  "keysFound": 132,
   "keys": [
     "my-app:shopify-inkhub-get-products:chunk:0",
     "my-app:shopify-inkhub-get-products:chunk:1"
-  ]
+  ],
+  "note": "Use ?key=specific_key to get actual data for a specific key"
 }
 ```
 
-**Console Output:**
-```
-📊 my-app:shopify-inkhub-get-products:chunk:0: 100 items (array)
-📊 my-app:shopify-inkhub-get-products:chunk:1: 100 items (array)
-📈 Total items across all keys: 28500
-```
+### Get Cache Data in Sequence (Paginated)
+**GET** `/cache/data-in-sequence?project={project}&table={table}&page={page}&limit={limit}&includeData={true|false}`
 
-### Get Cache Data in Sequence
-**GET** `/cache/data-in-sequence?project={project}&table={table}&page={page}&limit={limit}`
+Retrieves cached data with pagination support. By default, returns keys only unless `includeData=true` is specified.
 
-Retrieves cached data with pagination support.
+**Parameters:**
+- `page`: Page number (default: 1)
+- `limit`: Items per page (default: 1000)
+- `includeData`: Whether to include actual data (default: false)
 
-**Response:**
+**Response (Keys Only - Default):**
 ```json
 {
-  "message": "Cached data retrieved in sequence",
-  "keysFound": 285,
-  "totalItems": 1000,
+  "message": "Cache keys retrieved in sequence with pagination (keys only)",
+  "keysFound": 100,
+  "totalKeys": 132,
+  "keys": ["chunk:0", "chunk:1", "chunk:2"],
+  "note": "Use ?includeData=true to get actual data for these keys",
+  "pagination": {
+    "currentPage": 1,
+    "totalPages": 2,
+    "hasMore": true,
+    "totalItems": 132
+  }
+}
+```
+
+**Response (With Data):**
+```json
+{
+  "message": "Cached data retrieved in sequence with pagination",
+  "keysFound": 100,
+  "totalItems": 10000,
   "keys": ["chunk:0", "chunk:1"],
   "data": [...],
   "pagination": {
     "currentPage": 1,
     "totalPages": 10,
     "hasMore": true,
-    "itemsPerPage": 100,
-    "startIndex": 0,
-    "endIndex": 100
+    "totalItems": 10000
   }
 }
 ```
 
-### Update Cache from Lambda
-**POST** `/cache/update`
 
-Updates cache when DynamoDB data changes (triggered by Lambda).
+
+### Update Cache from Lambda
+**POST** `/cache-data`
+
+Updates cache when DynamoDB data changes (triggered by Lambda). This endpoint is non-blocking and processes updates in parallel.
 
 **Request Body:**
 ```json
 {
-  "tableName": "shopify-inkhub-get-products",
+  "type": "INSERT|MODIFY|REMOVE",
   "newItem": {...},
-  "oldItem": {...}
+  "oldItem": {...},
+  "extractedTableName": "shopify-inkhub-get-products"
 }
 ```
+
+**Response (Success):**
+```json
+{
+  "message": "Cache update processed",
+  "tableName": "shopify-inkhub-get-products",
+  "type": "INSERT",
+  "totalConfigs": 2,
+  "successfulUpdates": 2,
+  "failedUpdates": 0,
+  "results": [...],
+  "durationMs": 150
+}
+```
+
+**Response (Queued - During Bulk Operation):**
+```json
+{
+  "message": "Cache update queued for later processing",
+  "reason": "Bulk cache operation in progress",
+  "tableName": "shopify-inkhub-get-products",
+  "type": "INSERT",
+  "operationKey": "my-app:shopify-inkhub-get-products",
+  "queuedUpdates": 3,
+  "estimatedWaitTime": "Until bulk cache completes"
+}
+```
+
+### Queue Management Endpoints
+
+**GET** `/cache/bulk-operations`
+Returns currently active bulk cache operations.
+
+**DELETE** `/cache/bulk-operations`
+Clears all active bulk cache operation locks (emergency reset).
+
+**GET** `/cache/pending-updates`
+Returns the current state of pending updates queue.
+
+**DELETE** `/cache/pending-updates?operationKey={key}`
+Clears pending updates for a specific operation key or all pending updates.
 
 ## Duplicate Detection & Management
 
@@ -158,10 +227,9 @@ The cache system automatically detects and handles duplicates during insert oper
 
 ### Console Output Examples
 ```
-⏭️ Skipping duplicate item: 12345
-⚠️ Found 2 duplicate items in chunk 5: ['67890', '11111']
-✅ Redis write succeeded for key my-app:table:chunk:5 (with 3 unique items)
-⏭️ Skipping chunk 10 - all items are duplicates
+🔄 Cache INSERT: shopify-inkhub-get-products
+✅ Cache INSERT complete: 2/2 success (150ms)
+📦 Queued INSERT for my-app:shopify-inkhub-get-products (3 pending)
 ```
 
 ## Configuration
@@ -189,17 +257,41 @@ REDIS_PASSWORD=your-password
 
 ## Performance Optimizations
 
-### 1. Bounded Buffer
+### 1. Non-Blocking Operations
+- **Background processing**: Cleanup operations run in background using `setImmediate()`
+- **Parallel processing**: Multiple cache configurations processed simultaneously
+- **Immediate response**: API responds immediately while processing continues
+- **No API blocking**: Other endpoints remain responsive during cache updates
+
+### 2. Queue System
+- **Concurrency control**: Prevents data loss during concurrent bulk operations
+- **In-memory queue**: Pending updates queued when bulk operations are active
+- **Automatic processing**: Queued updates processed after bulk operation completes
+- **Race condition protection**: Ensures data integrity during high concurrency
+
+### 3. Optimized Logging
+- **One-liner messages**: Reduced verbosity with concise status updates
+- **No repetitive logs**: Eliminated duplicate and verbose logging
+- **Performance tracking**: Duration and success rate logging
+- **Clean PM2 logs**: Minimal noise in production logs
+
+### 4. Enhanced Pagination
+- **Improved limits**: Default limit increased from 10 to 1000
+- **Keys-only default**: Returns keys by default to prevent timeouts
+- **Explicit data retrieval**: Data only fetched when `includeData=true`
+- **Better pagination info**: Enhanced pagination metadata
+
+### 5. Bounded Buffer
 - Processes data in chunks to manage memory usage
 - Writes chunks as soon as buffer is full
 - Prevents memory overflow with large datasets
 
-### 2. SCAN vs KEYS
+### 6. SCAN vs KEYS
 - Uses `SCAN` command for Valkey compatibility
 - Avoids blocking operations on large datasets
 - Supports pattern matching for key retrieval
 
-### 3. Sequential Chunking
+### 7. Sequential Chunking
 - Chunks are numbered sequentially (chunk:0, chunk:1, etc.)
 - Enables efficient data retrieval in order
 - Supports pagination for large datasets
@@ -226,6 +318,19 @@ REDIS_PASSWORD=your-password
    ```
    **Solution:** Enable offline queue in Redis configuration
 
+4. **Cache Update Queued**
+   ```
+   Status: 202 Accepted
+   Message: "Cache update queued for later processing"
+   ```
+   **Solution:** This is normal during bulk operations. Updates will be processed automatically.
+
+5. **Gateway Timeout (504)**
+   ```
+   Error: 504 Gateway Timeout
+   ```
+   **Solution:** Use pagination or set `includeData=false` for large datasets
+
 ## Monitoring & Debugging
 
 ### Cache Health Check
@@ -241,6 +346,15 @@ Converts timestamp-based chunks to sequential numbering.
 **POST** `/cache/clear-unwanted-order-data`
 
 Removes non-cache-config data from cache table.
+
+### Queue Management
+**GET** `/cache/bulk-operations`
+
+Check currently active bulk cache operations.
+
+**GET** `/cache/pending-updates`
+
+View pending cache updates in queue.
 
 ## Best Practices
 
@@ -259,10 +373,17 @@ Removes non-cache-config data from cache table.
 - Implement cache eviction policies if needed
 - Use bounded buffer for large dataset processing
 
-### 4. Error Recovery
+### 4. Performance Optimization
+- Use `includeData=false` for key-only operations to prevent timeouts
+- Leverage pagination for large datasets
+- Monitor queue status during high concurrency periods
+- Use parallel processing for multiple cache configurations
+
+### 5. Error Recovery
 - Implement retry logic for failed cache operations
 - Log cache errors for debugging
 - Have fallback mechanisms for cache failures
+- Monitor queue system for stuck operations
 
 ## Example Usage
 
@@ -283,10 +404,26 @@ const cacheTable = async (tableName) => {
   return response.json();
 };
 
-// Get cached data
+// Get cache keys only (fast, no data)
+const getCacheKeys = async (tableName) => {
+  const response = await fetch(
+    `/cache/data-in-sequence?project=my-app&table=${tableName}&page=1&limit=1000`
+  );
+  return response.json();
+};
+
+// Get cached data with pagination
 const getCachedData = async (tableName, page = 1, limit = 100) => {
   const response = await fetch(
-    `/cache/data-in-sequence?project=my-app&table=${tableName}&page=${page}&limit=${limit}`
+    `/cache/data-in-sequence?project=my-app&table=${tableName}&page=${page}&limit=${limit}&includeData=true`
+  );
+  return response.json();
+};
+
+// Get specific cache key data
+const getSpecificCacheData = async (tableName, key) => {
+  const response = await fetch(
+    `/cache/data?project=my-app&table=${tableName}&key=${key}`
   );
   return response.json();
 };
@@ -301,6 +438,15 @@ const getCacheKeys = async (tableName) => {
   );
   return response.json();
 };
+
+// Monitor queue status
+const getQueueStatus = async () => {
+  const [bulkOps, pendingUpdates] = await Promise.all([
+    fetch('/cache/bulk-operations').then(r => r.json()),
+    fetch('/cache/pending-updates').then(r => r.json())
+  ]);
+  return { bulkOps, pendingUpdates };
+};
 ```
 
 ## Troubleshooting
@@ -309,16 +455,26 @@ const getCacheKeys = async (tableName) => {
 1. Check Lambda trigger configuration
 2. Verify DynamoDB stream settings
 3. Ensure cache update endpoint is accessible
+4. Check queue status for stuck operations
 
 ### Performance Issues
 1. Monitor cache hit rates
 2. Check for memory pressure
 3. Optimize chunk sizes based on data patterns
+4. Use `includeData=false` for key-only operations
+5. Monitor queue system during high concurrency
 
 ### Data Inconsistency
 1. Verify TTL settings
 2. Check for cache invalidation logic
 3. Monitor duplicate detection logs
+4. Check for queued updates that haven't been processed
+
+### Timeout Issues
+1. Use pagination for large datasets
+2. Set `includeData=false` for key-only operations
+3. Increase API Gateway timeout limits
+4. Monitor cache update queue status
 
 ## Support
 

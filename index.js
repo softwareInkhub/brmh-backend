@@ -32,7 +32,12 @@ import {
   testCacheConnection,
   clearUnwantedOrderDataHandler,
   cleanupTimestampChunksHandler,
-  getCachedDataInSequenceHandler
+  getCachedDataInSequenceHandler,
+  updateCacheFromLambdaHandler,
+  getActiveBulkCacheOperations,
+  clearActiveBulkCacheOperations,
+  getPendingCacheUpdates,
+  clearPendingCacheUpdates
 } from './utils/cache.js';
 
 import { updateCacheFromLambdaHandler } from './utils/cache.js';
@@ -754,6 +759,14 @@ app.get('/test-valkey-connection', async (req, res) => {
 
 // Cache update from Lambda function
 app.post('/cache-data', updateCacheFromLambdaHandler);
+
+// Bulk cache operation management
+app.get('/cache/bulk-operations', getActiveBulkCacheOperations);
+app.delete('/cache/bulk-operations', clearActiveBulkCacheOperations);
+
+// Pending cache updates management
+app.get('/cache/pending-updates', getPendingCacheUpdates);
+app.delete('/cache/pending-updates', clearPendingCacheUpdates);
 
 // --- Search Indexing API Routes ---
 app.post('/search/index', indexTableHandler);

@@ -207,6 +207,8 @@ Redis cache operations for data caching and retrieval using standard HTTP method
 
 **⚠️ Important Note:** For large datasets (60,000+ items), use `includeData=false` to avoid timeouts. The system will return only keys by default to prevent 504 Gateway Timeout errors.
 
+**🔄 Race Condition Protection:** The system prevents conflicts between bulk caching operations and Lambda-triggered cache updates. If a bulk cache operation is in progress, cache updates are queued and processed automatically after the bulk operation completes.
+
 #### Parameters:
 - `cacheOperation` (string, required) - HTTP method: GET, POST, PUT, PATCH, DELETE
 - Additional parameters depend on the operation
@@ -316,6 +318,117 @@ Redis cache operations for data caching and retrieval using standard HTTP method
   "pattern": "user*"
 }
 ```
+
+### Bulk Cache Operation Management
+
+#### Get Active Bulk Cache Operations
+```bash
+GET /cache/bulk-operations
+```
+
+**Response:**
+```json
+{
+  "message": "Active bulk cache operations retrieved",
+  "activeOperations": ["my-app:orders", "my-app:products"],
+  "count": 2,
+  "timestamp": "2024-01-15T10:30:00.000Z"
+}
+```
+
+#### Clear All Active Bulk Cache Operations (Emergency Reset)
+```bash
+DELETE /cache/bulk-operations
+```
+
+**Response:**
+```json
+{
+  "message": "Active bulk cache operations cleared",
+  "clearedCount": 2,
+  "timestamp": "2024-01-15T10:30:00.000Z"
+}
+```
+
+### Pending Cache Updates Management
+
+#### Get Pending Cache Updates
+```bash
+GET /cache/pending-updates
+```
+
+**Response:**
+```json
+{
+  "message": "Pending cache updates retrieved",
+  "pendingUpdates": {
+    "my-app:orders": {
+      "count": 5,
+      "updates": [
+        {
+          "type": "INSERT",
+          "tableName": "orders",
+          "timestamp": "2024-01-15T10:30:00.000Z"
+        }
+      ]
+    }
+  },
+  "totalPending": 5,
+  "operationCount": 1
+}
+```
+
+#### Clear Pending Cache Updates
+```bash
+# Clear all pending updates
+DELETE /cache/pending-updates
+
+# Clear specific operation
+DELETE /cache/pending-updates?operationKey=my-app:orders
+```
+
+**Response:**
+```json
+{
+  "message": "All pending cache updates cleared",
+  "totalCleared": 5,
+  "operationCount": 1,
+  "timestamp": "2024-01-15T10:30:00.000Z"
+}
+```
+
+### Race Condition Protection
+
+The system automatically prevents conflicts between:
+- **Bulk caching operations** (POST/PUT/PATCH cache operations)
+- **Lambda-triggered cache updates** (INSERT/MODIFY/REMOVE operations)
+
+**Behavior:**
+- If a bulk cache operation is running, cache updates are **queued** for later processing
+- Cache updates return `202 Accepted` with queue information
+- Bulk operations complete without interruption
+- Queued updates are **automatically processed** after bulk cache completes
+- **No data loss** - all updates are preserved and processed
+
+**Example Queue Response:**
+```json
+{
+  "message": "Cache update queued for later processing",
+  "reason": "Bulk cache operation in progress",
+  "tableName": "orders",
+  "type": "INSERT",
+  "operationKey": "my-app:orders",
+  "queuedUpdates": 3,
+  "estimatedWaitTime": "Until bulk cache completes"
+}
+```
+
+**Processing Flow:**
+1. **Bulk cache starts** → Acquires lock
+2. **Lambda update arrives** → Queued in memory
+3. **Bulk cache completes** → Releases lock
+4. **Queued updates processed** → All updates applied automatically
+5. **Queue cleared** → Ready for next operation
 
 ### 6. Indexing Execution (`executeType: "indexing"`)
 
@@ -446,12 +559,4 @@ Use indexing execution for Algolia-based full-text search capabilities.
 Ensure these environment variables are set:
 - `AWS_REGION` - AWS region for DynamoDB
 - `AWS_ACCESS_KEY_ID` - AWS access key
-- `AWS_SECRET_ACCESS_KEY` - AWS secret key
-- `BACKEND_URL` - Backend URL for namespace operations
-- `REDIS_HOST` - Redis/Valkey host
-- `REDIS_PORT` - Redis/Valkey port
-- `REDIS_PASSWORD` - Redis/Valkey password (if required)
-- `REDIS_TLS` - Enable TLS for Redis (true/false)
-- `ALGOLIA_APP_ID` - Algolia application ID
-- `ALGOLIA_API_KEY` - Algolia API key
-- `ALGOLIA_INDEX_PREFIX` - Prefix for Algolia indices (optional)
+- `AWS_SECRET_ACCESS_KEY`
