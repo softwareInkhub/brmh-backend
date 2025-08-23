@@ -1080,6 +1080,27 @@ app.post('/auth/logout', logoutHandler);
 app.get('/auth/logout-url', getLogoutUrlHandler);
 app.get('/auth/debug-pkce', debugPkceStoreHandler);
 
+// Simple redirect to Cognito Hosted UI logout (useful for frontend buttons)
+app.get('/auth/logout-redirect', (req, res) => {
+  try {
+    const domain = process.env.AWS_COGNITO_DOMAIN;
+    const clientId = process.env.AWS_COGNITO_CLIENT_ID;
+    const logoutRedirectUri = process.env.AUTH_LOGOUT_REDIRECT_URI || process.env.AUTH_REDIRECT_URI || 'http://localhost:3000';
+
+    if (!domain || !clientId) {
+      return res.status(500).json({
+        error: 'OAuth configuration missing. Set AWS_COGNITO_DOMAIN, AWS_COGNITO_CLIENT_ID, and AUTH_LOGOUT_REDIRECT_URI/AUTH_REDIRECT_URI.'
+      });
+    }
+
+    const url = `https://${domain}/logout?client_id=${encodeURIComponent(clientId)}&logout_uri=${encodeURIComponent(logoutRedirectUri)}`;
+    return res.redirect(url);
+  } catch (error) {
+    console.error('Error building logout redirect URL:', error);
+    return res.status(500).json({ error: 'Failed to build logout redirect URL', details: error.message });
+  }
+});
+
 
 const PORT = process.env.PORT || 5001;
 
