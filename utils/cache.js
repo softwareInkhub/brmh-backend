@@ -662,9 +662,11 @@ export const getCachedDataInSequenceHandler = async (req, res) => {
     const shouldIncludeData = includeData === 'true' || includeData === true;
     console.log(`🔍 includeData=${includeData}, shouldIncludeData=${shouldIncludeData}`);
     console.log(`🔍 includeData type: ${typeof includeData}, value: "${includeData}"`);
+    console.log(`🔍 All query params:`, req.query);
     
-    // Only fetch data if includeData is explicitly true
-    if (shouldIncludeData) {
+    // Force keys-only if includeData is not explicitly 'true'
+    console.log(`🔍 DEBUG: includeData="${includeData}", shouldIncludeData=${shouldIncludeData}, will fetch data: ${shouldIncludeData && includeData === 'true'}`);
+    if (shouldIncludeData && includeData === 'true') {
       const allData = [];
       const keysWithData = [];
       let totalItems = 0;
