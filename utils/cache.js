@@ -525,8 +525,6 @@ export const getCachedDataHandler = async (req, res) => {
        console.log(`📦 Found ${keys.length} total keys for ${project}:${table}`);
         
         if (keys.length > 0) {
-          console.log(`📋 Keys found:`, keys);
-          
           // Sort keys to get chunks in sequence
           const sortedKeys = keys.sort((a, b) => {
             // Extract chunk numbers for comparison
@@ -548,14 +546,12 @@ export const getCachedDataHandler = async (req, res) => {
             }
           });
           
-          console.log(`📋 Sorted keys:`, sortedKeys);
-          
           // Return only keys, not the actual data to avoid timeout
           return res.status(200).json({
             message: "Cache keys retrieved in sequence (keys only)",
             keysFound: sortedKeys.length,
             keys: sortedKeys,
-            note: "Use ?key=specific_key to get actual data for a specific key"
+            note: "Use ?key=chunk:0 to get actual data for a specific key"
           });
         }
       
@@ -581,9 +577,9 @@ export const getCachedDataHandler = async (req, res) => {
 export const getCachedDataInSequenceHandler = async (req, res) => {
   console.log('🔍 Get cached data in sequence request:', req.query);
   try {
-    const { project, table, page = 1, limit = 1000, includeData = 'false' } = req.query;
+    const { project, table, page = 1, limit = 1000 } = req.query;
 
-    console.log(`📋 Query params: project=${project}, table=${table}, page=${page}, limit=${limit}, includeData=${includeData}`);
+    console.log(`📋 Query params: project=${project}, table=${table}, page=${page}, limit=${limit}`);
 
     if (!project || !table) {
       return res.status(400).json({
@@ -658,81 +654,21 @@ export const getCachedDataInSequenceHandler = async (req, res) => {
     
     console.log(`📄 Pagination: page ${pageNum}/${totalPages}, showing ${paginatedKeys.length} keys out of ${sortedKeys.length} total`);
     
-    // Check if user wants data (explicitly check for 'true' string)
-    const shouldIncludeData = includeData === 'true' || includeData === true;
-    console.log(`🔍 includeData=${includeData}, shouldIncludeData=${shouldIncludeData}`);
-    console.log(`🔍 includeData type: ${typeof includeData}, value: "${includeData}"`);
-    console.log(`🔍 All query params:`, req.query);
-    
-    // Force keys-only if includeData is not explicitly 'true'
-    console.log(`🔍 DEBUG: includeData="${includeData}", shouldIncludeData=${shouldIncludeData}, will fetch data: ${shouldIncludeData && includeData === 'true'}`);
-    if (shouldIncludeData && includeData === 'true') {
-      const allData = [];
-      const keysWithData = [];
-      let totalItems = 0;
-      
-      for (const k of paginatedKeys) {
-        try {
-          const value = await redis.get(k);
-          if (value) {
-            const parsedData = JSON.parse(value);
-            const itemCount = Array.isArray(parsedData) ? parsedData.length : 1;
-            totalItems += itemCount;
-            
-            // If it's an array (chunk), spread the items
-                    if (Array.isArray(parsedData)) {
-          allData.push(...parsedData);
-          // Only log every Nth chunk to reduce noise
-          if (keysWithData.length % LOG_CONFIG.CHUNK_LOG_INTERVAL === 0) {
-            console.log(`📦 Retrieved ${keysWithData.length} chunks so far, latest: ${k} with ${parsedData.length} items`);
-          }
-        } else {
-          // If it's a single item
-          allData.push(parsedData);
-          console.log(`📦 Retrieved single item ${k} with 1 item`);
-        }
-            
-            keysWithData.push(k);
-          } else {
-            console.log(`📦 Empty key: ${k}`);
-          }
-        } catch (err) {
-          console.error(`❌ Error reading data for key ${k}:`, err);
-        }
+    // Always return keys only - no data fetching in this endpoint
+    console.log(`✅ Returning keys only (${paginatedKeys.length} keys out of ${sortedKeys.length} total)`);
+    return res.status(200).json({
+      message: "Cache keys retrieved in sequence with pagination (keys only)",
+      keysFound: paginatedKeys.length,
+      totalKeys: sortedKeys.length,
+      keys: paginatedKeys,
+      note: "Use ?key=chunk:0 to get actual data for a specific key",
+      pagination: {
+        currentPage: pageNum,
+        totalPages: totalPages,
+        hasMore: hasMore,
+        totalItems: sortedKeys.length
       }
-      
-      console.log(`📊 Total items retrieved: ${allData.length} from ${keysWithData.length} keys`);
-      
-      return res.status(200).json({
-        message: "Cached data retrieved in sequence with pagination",
-        keysFound: keysWithData.length,
-        totalItems: allData.length,
-        keys: keysWithData,
-        data: allData,
-        pagination: {
-          currentPage: pageNum,
-          totalPages: totalPages,
-          hasMore: hasMore,
-          totalItems: allData.length
-        }
-      });
-    } else {
-      // Return only keys without data (default behavior)
-      console.log(`✅ Returning keys only (${paginatedKeys.length} keys out of ${sortedKeys.length} total)`);
-      return res.status(200).json({
-        message: "Cache keys retrieved in sequence with pagination (keys only)",
-        keysFound: paginatedKeys.length,
-        totalKeys: sortedKeys.length,
-        keys: paginatedKeys,
-        note: "Use ?includeData=true to get actual data for these keys",
-        pagination: {
-          currentPage: pageNum,
-          totalPages: totalPages,
-          hasMore: hasMore,
-          totalItems: sortedKeys.length
-        }
-      });
-    }
+    });
 
   } catch (err) {
     console.error("🔥 Get cached data in sequence failed:", err);
