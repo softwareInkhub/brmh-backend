@@ -33,7 +33,6 @@ import {
   clearUnwantedOrderDataHandler,
   cleanupTimestampChunksHandler,
   getCachedDataInSequenceHandler,
-  updateCacheFromLambdaHandler,
   getActiveBulkCacheOperations,
   clearActiveBulkCacheOperations,
   getPendingCacheUpdates,
