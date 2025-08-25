@@ -365,6 +365,38 @@ app.post('/lambda/cleanup', async (req, res) => {
   }
 });
 
+// API Gateway creation endpoint
+app.post('/lambda/create-api-gateway', async (req, res) => {
+  try {
+    const { functionName, functionArn, runtime, handler } = req.body;
+    
+    if (!functionName || !functionArn) {
+      return res.status(400).json({ error: 'Function name and ARN are required' });
+    }
+    
+    console.log(`[API Gateway] Creating API Gateway for function: ${functionName}`);
+    console.log(`[API Gateway] Function ARN: ${functionArn}`);
+    
+    const result = await lambdaDeploymentManager.createApiGateway(
+      functionName,
+      functionArn,
+      runtime || 'nodejs18.x',
+      handler || 'index.handler'
+    );
+    
+    console.log(`[API Gateway] API Gateway creation result:`, result);
+    
+    res.json(result);
+  } catch (error) {
+    console.error('[API Gateway] Error:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to create API Gateway',
+      details: error.message 
+    });
+  }
+});
+
 // Serve Swagger UI for all APIs
 const awsOpenapiSpec = yaml.load(fs.readFileSync(path.join(__dirname, 'swagger/aws-dynamodb.yaml'), 'utf8'));
 const mainOpenapiSpec = yaml.load(fs.readFileSync(path.join(__dirname, 'swagger/unified-api.yaml'), 'utf8'));
