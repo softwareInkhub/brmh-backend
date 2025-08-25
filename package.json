@@ -16,6 +16,7 @@
   "license": "ISC",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.56.0",
+    "@aws-sdk/client-apigatewayv2": "^3.873.0",
     "@aws-sdk/client-dynamodb": "^3.540.0",
     "@aws-sdk/client-iam": "^3.855.0",
     "@aws-sdk/client-lambda": "^3.855.0",
