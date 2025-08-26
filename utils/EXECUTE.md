@@ -560,3 +560,107 @@ Ensure these environment variables are set:
 - `AWS_REGION` - AWS region for DynamoDB
 - `AWS_ACCESS_KEY_ID` - AWS access key
 - `AWS_SECRET_ACCESS_KEY`
+  "project": "my-app",
+  "table": "products",
+  "query": "laptop",
+  "filters": "category:electronics",
+  "hitsPerPage": 20,
+  "page": 0
+}
+```
+
+##### List Available Indices
+```json
+{
+  "executeType": "indexing",
+  "indexingOperation": "list-indices",
+  "project": "my-app",
+  "table": "products"
+}
+```
+
+##### Delete Indices
+```json
+{
+  "executeType": "indexing",
+  "indexingOperation": "delete-indices",
+  "project": "my-app",
+  "table": "products",
+  "keepLatest": 2
+}
+```
+
+##### Search Health Check
+```json
+{
+  "executeType": "indexing",
+  "indexingOperation": "search-health"
+}
+```
+
+## Response Format
+
+All execution types return a consistent response format:
+
+```json
+{
+  "success": true,
+  "status": 200,
+  "data": { /* response data */ },
+  "savedCount": 0,
+  "metadata": {
+    "namespace": "namespace-name",
+    "account": "account-name", 
+    "method": "method-name",
+    "tableName": "table-name"
+  }
+}
+```
+
+## Error Handling
+
+Errors are returned with appropriate HTTP status codes:
+
+```json
+{
+  "error": "Error message",
+  "details": "Additional error details"
+}
+```
+
+## Common Use Cases
+
+### 1. Data Synchronization
+Use sync execution to periodically sync data from external APIs to DynamoDB.
+
+### 2. API Testing
+Use single execution to test external APIs and optionally save responses.
+
+### 3. Namespace Management
+Use namespace execution to leverage pre-configured API integrations.
+
+### 4. Direct Database Operations
+Use CRUD execution for direct DynamoDB operations without external API calls.
+
+### 5. Cache Management
+Use cache execution for Redis-based data caching and retrieval operations.
+
+### 6. Search Indexing
+Use indexing execution for Algolia-based full-text search capabilities.
+
+## Best Practices
+
+1. **Error Handling**: Always check the `success` field in responses
+2. **Pagination**: Use appropriate pagination parameters for large datasets
+3. **Rate Limiting**: Consider API rate limits when using sync operations
+4. **Data Validation**: Validate data before saving to DynamoDB
+5. **Logging**: Monitor execution logs for debugging and monitoring
+6. **Cache TTL**: Set appropriate TTL values for cached data
+7. **Index Management**: Regularly clean up old search indices
+
+## Environment Variables
+
+Ensure these environment variables are set:
+- `AWS_REGION` - AWS region for DynamoDB
+- `AWS_ACCESS_KEY_ID` - AWS access key
+- `AWS_SECRET_ACCESS_KEY`

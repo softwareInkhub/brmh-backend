@@ -288,11 +288,11 @@ function getNested(obj, path) {
   return path?.split('.').reduce((acc, key) => acc?.[key], obj);
 }
 
-// Namespace execution handler - fetches details from namespace, account, and method IDs
+    // Namespace execution handler - fetches details from namespace, account, and method IDs
 const executeNamespace = async (event) => {
   try {
     const body = typeof event.body === "string" ? JSON.parse(event.body) : (event.body || event);
-    const { namespaceId, accountId, methodId, save = false, tableName, idField = "id" } = body;
+    const { namespaceId, accountId, methodId, save = false, tableName, idField = "id", requestBody: overrideBody } = body;
 
     // Validate required parameters
     if (!namespaceId || !accountId || !methodId) {
@@ -342,6 +342,7 @@ const executeNamespace = async (event) => {
     const methodType = methodConfig['namespace-method-type'] || 'GET';
     const headers = methodConfig['namespace-method-header'] || {};
     const queryParams = methodConfig['namespace-method-queryParams'] || {};
+    const requestBody = overrideBody || methodConfig['namespace-method-body'] || {};
 
     if (!url) {
       return {
@@ -394,6 +395,7 @@ const executeNamespace = async (event) => {
     console.log(`[Namespace Execute] Executing ${methodType} request to: ${fullUrl}`);
     console.log(`[Namespace Execute] Headers:`, finalHeaders);
     console.log(`[Namespace Execute] Query params:`, queryParams);
+    console.log(`[Namespace Execute] Request body:`, requestBody);
 
     // Build URL with query params
     const urlObj = new URL(fullUrl);
@@ -406,6 +408,7 @@ const executeNamespace = async (event) => {
       method: methodType.toUpperCase(),
       url: urlObj.toString(),
       headers: finalHeaders,
+      data: requestBody, // Add request body support
       validateStatus: () => true
     });
 

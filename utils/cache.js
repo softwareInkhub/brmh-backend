@@ -1929,4 +1929,3 @@ process.on('SIGTERM', async () => {
   console.log('✅ Cache service shutdown complete');
   process.exit(0);
 });
-

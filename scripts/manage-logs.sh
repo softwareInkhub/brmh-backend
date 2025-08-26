@@ -73,3 +73,4 @@ case "$1" in
         echo "  monitor - Monitor logs in real-time"
         ;;
 esac
+
