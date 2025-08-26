@@ -273,14 +273,14 @@ Promise.all([
 // --- Lambda Deployment API Routes ---
 app.post('/lambda/deploy', async (req, res) => {
   try {
-    const { functionName, code, runtime = 'nodejs18.x', handler = 'index.handler', memorySize = 128, timeout = 30, dependencies = {} } = req.body;
+    const { functionName, code, runtime = 'nodejs18.x', handler = 'index.handler', memorySize = 128, timeout = 30, dependencies = {}, environment = '', createApiGateway = true } = req.body;
     
     if (!functionName || !code) {
       return res.status(400).json({ error: 'functionName and code are required' });
     }
 
     console.log(`[Lambda Deployment] Deploying function: ${functionName}`);
-    console.log(`[Lambda Deployment] Request body:`, { functionName, runtime, handler, memorySize, timeout, dependencies });
+    console.log(`[Lambda Deployment] Request body:`, { functionName, runtime, handler, memorySize, timeout, dependencies, environment, createApiGateway });
     
     // Set timeout for the entire deployment process (10 minutes)
     const deploymentPromise = lambdaDeploymentManager.deployLambdaFunction(
@@ -290,7 +290,9 @@ app.post('/lambda/deploy', async (req, res) => {
       handler, 
       memorySize, 
       timeout,
-      dependencies
+      dependencies,
+      environment,
+      createApiGateway
     );
     
     const timeoutPromise = new Promise((_, reject) => {
@@ -368,7 +370,7 @@ app.post('/lambda/cleanup', async (req, res) => {
 // API Gateway creation endpoint
 app.post('/lambda/create-api-gateway', async (req, res) => {
   try {
-    const { functionName, functionArn, runtime, handler } = req.body;
+    const { functionName, functionArn, runtime, handler, deploymentId } = req.body;
     
     if (!functionName || !functionArn) {
       return res.status(400).json({ error: 'Function name and ARN are required' });
@@ -376,12 +378,14 @@ app.post('/lambda/create-api-gateway', async (req, res) => {
     
     console.log(`[API Gateway] Creating API Gateway for function: ${functionName}`);
     console.log(`[API Gateway] Function ARN: ${functionArn}`);
+    console.log(`[API Gateway] Deployment ID: ${deploymentId}`);
     
     const result = await lambdaDeploymentManager.createApiGateway(
       functionName,
       functionArn,
       runtime || 'nodejs18.x',
-      handler || 'index.handler'
+      handler || 'index.handler',
+      deploymentId
     );
     
     console.log(`[API Gateway] API Gateway creation result:`, result);
@@ -392,6 +396,81 @@ app.post('/lambda/create-api-gateway', async (req, res) => {
     res.status(500).json({ 
       success: false,
       error: 'Failed to create API Gateway',
+      details: error.message 
+    });
+  }
+});
+
+// Get deployment metadata endpoint
+app.get('/lambda/deployments/:deploymentId', async (req, res) => {
+  try {
+    const { deploymentId } = req.params;
+    
+    console.log(`[Deployments] Getting metadata for deployment: ${deploymentId}`);
+    
+    const metadata = await lambdaDeploymentManager.getDeploymentMetadata(deploymentId);
+    
+    if (!metadata) {
+      return res.status(404).json({ error: 'Deployment not found' });
+    }
+    
+    res.json(metadata);
+  } catch (error) {
+    console.error('[Deployments] Error:', error);
+    res.status(500).json({ 
+      error: 'Failed to get deployment metadata',
+      details: error.message 
+    });
+  }
+});
+
+// List deployments endpoint
+app.get('/lambda/deployments', async (req, res) => {
+  try {
+    const { functionName } = req.query;
+    
+    console.log(`[Deployments] Listing deployments${functionName ? ` for function: ${functionName}` : ''}`);
+    
+    const deployments = await lambdaDeploymentManager.listDeployments(functionName);
+    
+    res.json({ deployments });
+  } catch (error) {
+    console.error('[Deployments] Error:', error);
+    res.status(500).json({ 
+      error: 'Failed to list deployments',
+      details: error.message 
+    });
+  }
+});
+
+// Save files to S3 endpoint
+app.post('/workspace/save-files-to-s3', async (req, res) => {
+  try {
+    const { namespaceId, projectName, zipData, fileCount, files } = req.body;
+    
+    if (!namespaceId || !zipData) {
+      return res.status(400).json({ error: 'namespaceId and zipData are required' });
+    }
+    
+    console.log(`[Workspace] Saving files to S3 for namespace: ${namespaceId}`);
+    console.log(`[Workspace] Project name: ${projectName}`);
+    console.log(`[Workspace] File count: ${fileCount}`);
+    
+    const result = await lambdaDeploymentManager.saveFilesToS3(
+      namespaceId,
+      projectName,
+      zipData,
+      fileCount,
+      files
+    );
+    
+    console.log(`[Workspace] S3 save result:`, result);
+    
+    res.json(result);
+  } catch (error) {
+    console.error('[Workspace] Error saving files to S3:', error);
+    res.status(500).json({ 
+      error: 'Failed to save files to S3',
       details: error.message 
     });
   }
