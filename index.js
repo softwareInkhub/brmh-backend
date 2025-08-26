@@ -551,7 +551,24 @@ app.post('/ai-agent', (req, res) => aiAgentHandler({ request: { requestBody: req
 
 // AI Agent streaming endpoint for chat and schema editing
 app.post('/ai-agent/stream', async (req, res) => {
+  console.log('[AI Agent] !!! STREAMING ENDPOINT CALLED !!!');
   const { message, namespace, history, schema } = req.body;
+  
+  // Import the intent detection function
+  const { detectIntent } = await import('./lib/llm-agent-system.js');
+  
+  // Log the intent detection for debugging
+  const intent = detectIntent(message);
+  console.log('[AI Agent] Streaming request intent analysis:', {
+    message,
+    intent: intent.intent,
+    shouldGenerateLambda: intent.shouldGenerateLambda,
+    shouldGenerateSchema: intent.shouldGenerateSchema,
+    isQuestion: intent.isQuestion,
+    isCasualMention: intent.isCasualMention,
+    isExplanatory: intent.isExplanatory
+  });
+  
   try {
     await agentSystem.handleStreamingWithAgents(res, namespace, message, history, schema);
   } catch (error) {
@@ -562,11 +579,39 @@ app.post('/ai-agent/stream', async (req, res) => {
 
 // AI Agent Lambda codegen endpoint
 app.post('/ai-agent/lambda-codegen', async (req, res) => {
-  const { message, namespace, selectedSchema, functionName, runtime, handler, memory, timeout, environment } = req.body;
-  console.log('[AI Agent] Lambda codegen request:', { message, selectedSchema, functionName, runtime, handler, memory, timeout, environment });
+  console.log('[AI Agent] !!! LAMBDA CODEGEN ENDPOINT CALLED !!!');
+  const { message, originalMessage, namespace, selectedSchema, functionName, runtime, handler, memory, timeout, environment } = req.body;
+  console.log('[AI Agent] Lambda codegen request received:', { message, originalMessage, selectedSchema, functionName, runtime, handler, memory, timeout, environment, namespace });
+
+  // Import the intent detection function
+  const { detectIntent } = await import('./lib/llm-agent-system.js');
+  
+  // Use robust intent detection to validate the request - use original message for intent detection
+  const intent = detectIntent(originalMessage || message);
+  
+  console.log('[AI Agent] Intent validation for lambda generation:', {
+    originalMessage: originalMessage || message,
+    intent: intent.intent,
+    shouldGenerateLambda: intent.shouldGenerateLambda,
+    isQuestion: intent.isQuestion,
+    isCasualMention: intent.isCasualMention,
+    isExplanatory: intent.isExplanatory
+  });
+
+  // Only proceed with lambda generation if explicitly requested
+  if (!intent.shouldGenerateLambda) {
+    console.log('[AI Agent] Rejecting lambda generation request - not explicitly requested');
+    res.write(`data: ${JSON.stringify({ 
+      error: 'Lambda generation not requested', 
+      details: 'This message does not contain an explicit request to generate a lambda function. Please use explicit action words like "generate", "create", "build", etc. along with lambda-related keywords.',
+      intent: intent.intent
+    })}\n\n`);
+    res.end();
+    return;
+  }
 
   try {
-    // Use the dedicated lambda codegen handler with streaming
+    // Use the enhanced lambda codegen handler with streaming and automatic schema selection
     await handleLambdaCodegen({
       message,
       selectedSchema,
@@ -576,6 +621,7 @@ app.post('/ai-agent/lambda-codegen', async (req, res) => {
       memory,
       timeout,
       environment,
+      namespace, // Pass namespace for automatic schema selection
       res // Pass the response object for streaming
     });
 
@@ -585,6 +631,8 @@ app.post('/ai-agent/lambda-codegen', async (req, res) => {
     res.end();
   }
 });
+
+
 
 // AI Agent Workspace State endpoints
 app.post('/ai-agent/get-workspace-state', async (req, res) => {
@@ -738,6 +786,148 @@ app.post('/unified/namespace/:namespaceId/add-schema', async (req, res) => {
     return res.json({ success: true, updatedNamespace: result });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Web Scraping Agent endpoints
+import WebScrapingAgent from './lib/web-scraping-agent.js';
+
+const webScrapingAgent = new WebScrapingAgent();
+
+// Get supported services
+app.get('/web-scraping/supported-services', async (req, res) => {
+  try {
+    const services = webScrapingAgent.getSupportedServices();
+    res.json({ success: true, services });
+  } catch (error) {
+    console.error('Error getting supported services:', error);
+    res.status(500).json({ error: 'Failed to get supported services' });
+  }
+});
+
+// Scrape service and save to namespace
+app.post('/web-scraping/scrape-and-save', async (req, res) => {
+  try {
+    const { serviceName, namespaceId, options = {} } = req.body;
+    
+    if (!serviceName || !namespaceId) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Missing required fields: serviceName and namespaceId' 
+      });
+    }
+
+    console.log(`[Web Scraping] Starting scrape for ${serviceName} to namespace ${namespaceId}`);
+    
+    // Set up streaming response
+    res.writeHead(200, {
+      'Content-Type': 'text/plain',
+      'Transfer-Encoding': 'chunked',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive'
+    });
+
+    // Send initial status
+    res.write(`data: ${JSON.stringify({ 
+      type: 'status', 
+      message: `Starting web scraping for ${serviceName}...`,
+      timestamp: new Date().toISOString()
+    })}\n\n`);
+
+    try {
+      // Scrape the service
+      const scrapedData = await webScrapingAgent.scrapeService(serviceName, options);
+      
+      res.write(`data: ${JSON.stringify({ 
+        type: 'status', 
+        message: `Scraping completed. Found ${scrapedData.apis.length} APIs, ${scrapedData.schemas.length} schemas, ${scrapedData.documentation.length} docs`,
+        timestamp: new Date().toISOString(),
+        results: {
+          apis: scrapedData.apis.length,
+          schemas: scrapedData.schemas.length,
+          documentation: scrapedData.documentation.length
+        }
+      })}\n\n`);
+
+      // Save to namespace
+      res.write(`data: ${JSON.stringify({ 
+        type: 'status', 
+        message: 'Saving scraped data to namespace...',
+        timestamp: new Date().toISOString()
+      })}\n\n`);
+
+      const saveResult = await webScrapingAgent.saveToNamespace(scrapedData, namespaceId, docClient);
+      
+      if (saveResult.success) {
+        res.write(`data: ${JSON.stringify({ 
+          type: 'success', 
+          message: 'Successfully saved scraped data to namespace!',
+          timestamp: new Date().toISOString(),
+          summary: saveResult.summary
+        })}\n\n`);
+      } else {
+        res.write(`data: ${JSON.stringify({ 
+          type: 'error', 
+          message: `Error saving data: ${saveResult.error}`,
+          timestamp: new Date().toISOString()
+        })}\n\n`);
+      }
+
+    } catch (error) {
+      console.error(`[Web Scraping] Error:`, error);
+      res.write(`data: ${JSON.stringify({ 
+        type: 'error', 
+        message: `Scraping failed: ${error.message}`,
+        timestamp: new Date().toISOString()
+      })}\n\n`);
+    }
+
+    res.write('data: [DONE]\n\n');
+    res.end();
+
+  } catch (error) {
+    console.error('Error in web scraping endpoint:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to process web scraping request' 
+    });
+  }
+});
+
+// Scrape service without saving (for preview)
+app.post('/web-scraping/scrape-preview', async (req, res) => {
+  try {
+    const { serviceName, options = {} } = req.body;
+    
+    if (!serviceName) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Missing required field: serviceName' 
+      });
+    }
+
+    console.log(`[Web Scraping] Starting preview scrape for ${serviceName}`);
+    
+    const scrapedData = await webScrapingAgent.scrapeService(serviceName, options);
+    
+    res.json({ 
+      success: true, 
+      data: scrapedData,
+      summary: {
+        service: scrapedData.service,
+        apis: scrapedData.apis.length,
+        schemas: scrapedData.schemas.length,
+        documentation: scrapedData.documentation.length,
+        errors: scrapedData.errors
+      }
+    });
+
+  } catch (error) {
+    console.error('Error in web scraping preview endpoint:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to process web scraping preview request' 
+    });
   }
 });
 
