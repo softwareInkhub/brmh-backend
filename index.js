@@ -476,6 +476,63 @@ app.post('/workspace/save-files-to-s3', async (req, res) => {
   }
 });
 
+// Save Lambda function to namespace library endpoint
+app.post('/workspace/save-lambda', async (req, res) => {
+  try {
+    const { namespaceId, lambdaData } = req.body;
+    
+    if (!namespaceId || !lambdaData) {
+      return res.status(400).json({ error: 'namespaceId and lambdaData are required' });
+    }
+    
+    console.log(`[Workspace] Saving Lambda function to namespace: ${namespaceId}`);
+    console.log(`[Workspace] Function name: ${lambdaData.functionName}`);
+    console.log(`[Workspace] Lambda ID: ${lambdaData.id}`);
+    
+    // Save Lambda metadata to DynamoDB
+    const result = await lambdaDeploymentManager.saveLambdaToNamespace(
+      namespaceId,
+      lambdaData
+    );
+    
+    console.log(`[Workspace] Lambda save result:`, result);
+    
+    res.json(result);
+  } catch (error) {
+    console.error('[Workspace] Error saving Lambda to namespace:', error);
+    res.status(500).json({ 
+      error: 'Failed to save Lambda to namespace',
+      details: error.message 
+    });
+  }
+});
+
+// Get saved Lambda functions for a namespace
+app.get('/workspace/lambdas/:namespaceId', async (req, res) => {
+  try {
+    const { namespaceId } = req.params;
+    
+    if (!namespaceId) {
+      return res.status(400).json({ error: 'namespaceId is required' });
+    }
+    
+    console.log(`[Workspace] Fetching Lambda functions for namespace: ${namespaceId}`);
+    
+    // Get Lambda functions from DynamoDB
+    const result = await lambdaDeploymentManager.getLambdasForNamespace(namespaceId);
+    
+    console.log(`[Workspace] Found ${result.lambdas.length} Lambda functions`);
+    
+    res.json(result);
+  } catch (error) {
+    console.error('[Workspace] Error fetching Lambda functions:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch Lambda functions',
+      details: error.message 
+    });
+  }
+});
+
 // Serve Swagger UI for all APIs
 const awsOpenapiSpec = yaml.load(fs.readFileSync(path.join(__dirname, 'swagger/aws-dynamodb.yaml'), 'utf8'));
 const mainOpenapiSpec = yaml.load(fs.readFileSync(path.join(__dirname, 'swagger/unified-api.yaml'), 'utf8'));
