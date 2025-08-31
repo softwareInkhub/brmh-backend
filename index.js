@@ -691,6 +691,55 @@ app.post('/ai-agent/lambda-codegen', async (req, res) => {
 
 
 
+// Workspace Guidance and Navigation endpoint
+app.post('/ai-agent/workspace-guidance', async (req, res) => {
+  try {
+    const { message, namespaceId } = req.body;
+    console.log('[Workspace Guidance] Request received:', { message, namespaceId });
+
+    // Import the guidance functions
+    const { detectIntentWithGuidance, generateWorkspaceGuidance, getRealNamespaceData } = await import('./lib/llm-agent-system.js');
+    
+    // Detect intent and check for guidance requests
+    const intentWithGuidance = detectIntentWithGuidance(message);
+    
+    if (!intentWithGuidance.shouldProvideGuidance) {
+      return res.status(400).json({ 
+        error: 'Not a guidance request', 
+        message: 'This endpoint is for workspace guidance requests only' 
+      });
+    }
+
+    // Get namespace context for personalized guidance
+    let namespaceData = null;
+    if (namespaceId) {
+      try {
+        namespaceData = await getRealNamespaceData(namespaceId);
+      } catch (err) {
+        console.warn('[Workspace Guidance] Failed to get namespace data:', err.message);
+      }
+    }
+    
+    // Generate workspace guidance
+    const guidance = generateWorkspaceGuidance(intentWithGuidance.intent, intentWithGuidance.feature, namespaceData);
+    
+    res.json({
+      success: true,
+      guidance: {
+        feature: intentWithGuidance.feature,
+        suggestions: guidance.suggestions,
+        nextSteps: guidance.nextSteps,
+        uiActions: guidance.uiActions,
+        context: guidance.context
+      }
+    });
+    
+  } catch (error) {
+    console.error('[Workspace Guidance] Error:', error);
+    res.status(500).json({ error: 'Failed to generate workspace guidance' });
+  }
+});
+
 // AI Agent Workspace State endpoints
 app.post('/ai-agent/get-workspace-state', async (req, res) => {
   try {
@@ -862,19 +911,19 @@ app.get('/web-scraping/supported-services', async (req, res) => {
   }
 });
 
-// Scrape service and save to namespace
+// Scrape service and save to namespace (with automatic namespace management)
 app.post('/web-scraping/scrape-and-save', async (req, res) => {
   try {
     const { serviceName, namespaceId, options = {} } = req.body;
     
-    if (!serviceName || !namespaceId) {
+    if (!serviceName) {
       return res.status(400).json({ 
         success: false, 
-        error: 'Missing required fields: serviceName and namespaceId' 
+        error: 'Missing required field: serviceName' 
       });
     }
 
-    console.log(`[Web Scraping] Starting scrape for ${serviceName} to namespace ${namespaceId}`);
+    console.log(`[Web Scraping] Starting scrape for ${serviceName}${namespaceId ? ` to namespace ${namespaceId}` : ' (will auto-manage namespace)'}`);
     
     // Set up streaming response
     res.writeHead(200, {
@@ -892,17 +941,30 @@ app.post('/web-scraping/scrape-and-save', async (req, res) => {
     })}\n\n`);
 
     try {
-      // Scrape the service
-      const scrapedData = await webScrapingAgent.scrapeService(serviceName, options);
+      // Scrape the service with namespace management
+      const scrapedData = await webScrapingAgent.scrapeService(serviceName, options, docClient);
+      
+      // Handle namespace information
+      let namespaceMessage = '';
+      if (scrapedData.namespaceInfo) {
+        if (namespaceId && scrapedData.namespaceInfo['namespace-id'] === namespaceId) {
+          namespaceMessage = `Using existing namespace: ${namespaceId}`;
+        } else if (namespaceId) {
+          namespaceMessage = `Found existing namespace: ${scrapedData.namespaceInfo['namespace-id']} (different from requested: ${namespaceId})`;
+        } else {
+          namespaceMessage = `Created new namespace: ${scrapedData.namespaceInfo['namespace-id']}`;
+        }
+      }
       
       res.write(`data: ${JSON.stringify({ 
         type: 'status', 
-        message: `Scraping completed. Found ${scrapedData.apis.length} APIs, ${scrapedData.schemas.length} schemas, ${scrapedData.documentation.length} docs`,
+        message: `Scraping completed. Found ${scrapedData.apis.length} APIs, ${scrapedData.schemas.length} schemas, ${scrapedData.documentation.length} docs. ${namespaceMessage}`,
         timestamp: new Date().toISOString(),
         results: {
           apis: scrapedData.apis.length,
           schemas: scrapedData.schemas.length,
-          documentation: scrapedData.documentation.length
+          documentation: scrapedData.documentation.length,
+          namespaceInfo: scrapedData.namespaceInfo
         }
       })}\n\n`);
 
@@ -913,7 +975,9 @@ app.post('/web-scraping/scrape-and-save', async (req, res) => {
         timestamp: new Date().toISOString()
       })}\n\n`);
 
-      const saveResult = await webScrapingAgent.saveToNamespace(scrapedData, namespaceId, docClient);
+      // Use the namespace from scraping results or the provided namespaceId
+      const targetNamespaceId = namespaceId || (scrapedData.namespaceInfo ? scrapedData.namespaceInfo['namespace-id'] : null);
+      const saveResult = await webScrapingAgent.saveToNamespace(scrapedData, targetNamespaceId, docClient);
       
       if (saveResult.success) {
         res.write(`data: ${JSON.stringify({ 
@@ -951,6 +1015,102 @@ app.post('/web-scraping/scrape-and-save', async (req, res) => {
   }
 });
 
+// Scrape service with automatic namespace management (no namespaceId required)
+app.post('/web-scraping/scrape-auto-namespace', async (req, res) => {
+  try {
+    const { serviceName, options = {} } = req.body;
+    
+    if (!serviceName) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Missing required field: serviceName' 
+      });
+    }
+
+    console.log(`[Web Scraping] Starting auto-namespace scrape for ${serviceName}`);
+    
+    // Set up streaming response
+    res.writeHead(200, {
+      'Content-Type': 'text/plain',
+      'Transfer-Encoding': 'chunked',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive'
+    });
+
+    // Send initial status
+    res.write(`data: ${JSON.stringify({ 
+      type: 'status', 
+      message: `Starting web scraping for ${serviceName} with automatic namespace management...`,
+      timestamp: new Date().toISOString()
+    })}\n\n`);
+
+    try {
+      // Scrape the service with automatic namespace management
+      const scrapedData = await webScrapingAgent.scrapeService(serviceName, options, docClient);
+      
+      // Handle namespace information
+      let namespaceMessage = '';
+      if (scrapedData.namespaceInfo) {
+        namespaceMessage = `Using namespace: ${scrapedData.namespaceInfo['namespace-id']} (${scrapedData.namespaceInfo['created-via'] === 'web-scraping' ? 'newly created' : 'existing'})`;
+      }
+      
+      res.write(`data: ${JSON.stringify({ 
+        type: 'status', 
+        message: `Scraping completed. Found ${scrapedData.apis.length} APIs, ${scrapedData.schemas.length} schemas, ${scrapedData.documentation.length} docs. ${namespaceMessage}`,
+        timestamp: new Date().toISOString(),
+        results: {
+          apis: scrapedData.apis.length,
+          schemas: scrapedData.schemas.length,
+          documentation: scrapedData.documentation.length,
+          namespaceInfo: scrapedData.namespaceInfo
+        }
+      })}\n\n`);
+
+      // Save to namespace
+      res.write(`data: ${JSON.stringify({ 
+        type: 'status', 
+        message: 'Saving scraped data to namespace...',
+        timestamp: new Date().toISOString()
+      })}\n\n`);
+
+      const saveResult = await webScrapingAgent.saveToNamespace(scrapedData, null, docClient);
+      
+      if (saveResult.success) {
+        res.write(`data: ${JSON.stringify({ 
+          type: 'success', 
+          message: 'Successfully saved scraped data to namespace!',
+          timestamp: new Date().toISOString(),
+          summary: saveResult.summary
+        })}\n\n`);
+      } else {
+        res.write(`data: ${JSON.stringify({ 
+          type: 'error', 
+          message: `Error saving data: ${saveResult.error}`,
+          timestamp: new Date().toISOString()
+        })}\n\n`);
+      }
+
+    } catch (error) {
+      console.error(`[Web Scraping] Error:`, error);
+      res.write(`data: ${JSON.stringify({ 
+        type: 'error', 
+        message: `Scraping failed: ${error.message}`,
+        timestamp: new Date().toISOString()
+      })}\n\n`);
+    }
+
+    res.write('data: [DONE]\n\n');
+    res.end();
+
+  } catch (error) {
+    console.error('Error in web scraping auto-namespace endpoint:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to process web scraping auto-namespace request' 
+    });
+  }
+});
+
 // Scrape service without saving (for preview)
 app.post('/web-scraping/scrape-preview', async (req, res) => {
   try {
@@ -965,7 +1125,7 @@ app.post('/web-scraping/scrape-preview', async (req, res) => {
 
     console.log(`[Web Scraping] Starting preview scrape for ${serviceName}`);
     
-    const scrapedData = await webScrapingAgent.scrapeService(serviceName, options);
+    const scrapedData = await webScrapingAgent.scrapeService(serviceName, options, null, null);
     
     res.json({ 
       success: true, 
@@ -984,6 +1144,66 @@ app.post('/web-scraping/scrape-preview', async (req, res) => {
     res.status(500).json({ 
       success: false, 
       error: 'Failed to process web scraping preview request' 
+    });
+  }
+});
+
+// Endpoint to migrate existing namespaces (create missing methods for scraped APIs)
+app.post('/web-scraping/migrate-existing-namespaces', async (req, res) => {
+  try {
+    console.log('[Web Scraping] Starting migration of existing namespaces...');
+    
+    // Set up streaming response
+    res.writeHead(200, {
+      'Content-Type': 'text/plain',
+      'Transfer-Encoding': 'chunked',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive'
+    });
+
+    // Send initial status
+    res.write(`data: ${JSON.stringify({ 
+      type: 'status', 
+      message: 'Starting migration of existing namespaces...',
+      timestamp: new Date().toISOString()
+    })}\n\n`);
+
+    try {
+      // Run the migration
+      const migrationResult = await webScrapingAgent.migrateExistingNamespaces(docClient);
+      
+      if (migrationResult.success) {
+        res.write(`data: ${JSON.stringify({ 
+          type: 'success', 
+          message: 'Migration completed successfully!',
+          timestamp: new Date().toISOString(),
+          summary: migrationResult.summary
+        })}\n\n`);
+      } else {
+        res.write(`data: ${JSON.stringify({ 
+          type: 'error', 
+          message: `Migration failed: ${migrationResult.error}`,
+          timestamp: new Date().toISOString()
+        })}\n\n`);
+      }
+
+    } catch (error) {
+      console.error(`[Web Scraping] Migration error:`, error);
+      res.write(`data: ${JSON.stringify({ 
+        type: 'error', 
+        message: `Migration failed: ${error.message}`,
+        timestamp: new Date().toISOString()
+      })}\n\n`);
+    }
+
+    res.write('data: [DONE]\n\n');
+    res.end();
+
+  } catch (error) {
+    console.error('Error in migration endpoint:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to process migration request' 
     });
   }
 });
