@@ -10,6 +10,7 @@ import yaml from 'js-yaml';
 import { v4 as uuidv4 } from 'uuid';
 import cors from 'cors'
 import axios from 'axios';
+import multer from 'multer';
 import { handlers as dynamodbHandlers } from './lib/dynamodb-handlers.js';
 import dotenv from 'dotenv';
 import { exec } from 'child_process';
@@ -97,6 +98,22 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(express.text({ limit: '50mb' })); // Add support for text/plain
+
+// Configure multer for file uploads
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    // Only allow image files
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed'), false);
+    }
+  }
+});
 // File storage configuration
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -1056,9 +1073,18 @@ app.all('/dynamodb/*', async (req, res) => {
   }
 });
 
-// Handle Unified API routes
-app.all('/unified/*', async (req, res) => {
+// Handle Unified API routes with file upload support
+app.all('/unified/*', upload.single('icon'), async (req, res) => {
   try {
+    // Parse tags if they're sent as JSON string
+    if (req.body.tags && typeof req.body.tags === 'string') {
+      try {
+        req.body.tags = JSON.parse(req.body.tags);
+      } catch (error) {
+        req.body.tags = [];
+      }
+    }
+
     const response = await unifiedApi.handleRequest(
       {
         method: req.method,
@@ -1333,6 +1359,34 @@ app.get('/mock-data/tables', async (req, res) => {
       error: 'Failed to list available tables', 
       details: error.message 
     });
+  }
+});
+
+// Icon serving endpoint
+app.get('/api/icon/:s3Key(*)', async (req, res) => {
+  try {
+    const { s3Key } = req.params;
+    const decodedS3Key = decodeURIComponent(s3Key);
+    
+    console.log('Serving icon:', decodedS3Key);
+    
+    const { S3Client, GetObjectCommand } = await import('@aws-sdk/client-s3');
+    const s3Client = new S3Client({ region: process.env.AWS_REGION || 'us-east-1' });
+    
+    const response = await s3Client.send(new GetObjectCommand({
+      Bucket: 'brmh',
+      Key: decodedS3Key
+    }));
+
+    // Set appropriate headers
+    res.setHeader('Content-Type', response.ContentType || 'image/png');
+    res.setHeader('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
+    
+    // Pipe the S3 object stream directly to the response
+    response.Body.pipe(res);
+  } catch (error) {
+    console.error('Error serving icon:', error);
+    res.status(404).json({ error: 'Icon not found' });
   }
 });
 

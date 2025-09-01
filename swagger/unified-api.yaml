@@ -539,7 +539,7 @@ paths:
       requestBody:
         required: true
         content:
-          application/json:
+          multipart/form-data:
             schema:
               type: object
               required: ["namespace-name", "namespace-url"]
@@ -548,6 +548,10 @@ paths:
                   type: string
                 namespace-url:
                   type: string
+                icon:
+                  type: string
+                  format: binary
+                  description: Icon image file (optional)
                 tags:
                   type: array
                   items:
@@ -584,7 +588,7 @@ paths:
       requestBody:
         required: true
         content:
-          application/json:
+          multipart/form-data:
             schema:
               type: object
               required: ["namespace-name", "namespace-url"]
@@ -593,6 +597,10 @@ paths:
                   type: string
                 namespace-url:
                   type: string
+                icon:
+                  type: string
+                  format: binary
+                  description: Icon image file (optional)
                 tags:
                   type: array
                   items:
