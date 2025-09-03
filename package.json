@@ -9,8 +9,7 @@
     "dev": "nodemon index.js",
     "build": "npm ci --only=production",
     "setup-memory": "node scripts/create-memory-table.js",
-    "check-namespaces": "node scripts/check-namespaces.js",
-
+    "check-namespaces": "node scripts/check-namespaces.js"
   },
   "keywords": [],
   "author": "",
