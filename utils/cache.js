@@ -164,7 +164,7 @@ export const cacheTableHandler = async (req, res) => {
       });
     }
 
-    console.log(`📤 Starting bounded buffer cache operation for table: ${table}, project: ${project}`);
+    console.log(`📤 Starting bounded buffer cache operation for table: ${table}, project: ${project}, TTL: ${ttl} (${ttl === 0 ? 'no expiration' : ttl + ' seconds'})`);
     
     const {
       totalScanned,
@@ -334,15 +334,15 @@ async function scanAndCacheWithBoundedBuffer(tableName, project, recordsPerKey, 
       attemptedKeys++;
       cacheKeys.push(key);
       
-      try {
-        if (ttl && ttl > 0) {
-          await redis.set(key, value, 'EX', ttl);
-        } else {
-          await redis.set(key, value); // No expiration
-        }
-        successfulWrites++;
-        console.log(`✅ Redis write succeeded for key ${key} (chunk ${chunkIndex})${ttl && ttl > 0 ? ` with TTL ${ttl}s` : ' with no expiration'}`);
-      } catch (err) {
+              try {
+          if (ttl > 0) {
+            await redis.set(key, value, 'EX', ttl);
+          } else {
+            await redis.set(key, value); // No expiration when ttl is 0
+          }
+          successfulWrites++;
+          console.log(`✅ Redis write succeeded for key ${key} (chunk ${chunkIndex})${ttl > 0 ? ` with TTL ${ttl}s` : ' with no expiration'}`);
+        } catch (err) { 
         failedWrites++;
         console.error(`❌ Redis write failed for key ${key} (chunk ${chunkIndex}):`, err);
       }
@@ -370,9 +370,13 @@ async function scanAndCacheWithBoundedBuffer(tableName, project, recordsPerKey, 
         cacheKeys.push(key);
         
         try {
-          await redis.set(key, value, 'EX', ttl);
+          if (ttl > 0) {
+            await redis.set(key, value, 'EX', ttl);
+          } else {
+            await redis.set(key, value); // No expiration when ttl is 0
+          }
           successfulWrites++;
-          console.log(`✅ Redis write succeeded for key ${key} (final chunk)`);
+          console.log(`✅ Redis write succeeded for key ${key} (final chunk)${ttl > 0 ? ` with TTL ${ttl}s` : ' with no expiration'}`);
         } catch (err) {
           failedWrites++;
           console.error(`❌ Redis write failed for key ${key} (final chunk):`, err);
@@ -420,9 +424,13 @@ async function scanAndCacheWithBoundedBuffer(tableName, project, recordsPerKey, 
         cacheKeys.push(key);
         
         try {
-          await redis.set(key, value, 'EX', ttl);
+          if (ttl > 0) {
+            await redis.set(key, value, 'EX', ttl);
+          } else {
+            await redis.set(key, value); // No expiration when ttl is 0
+          }
           successfulWrites++;
-          console.log(`✅ Redis write succeeded for key ${key} (final chunk)`);
+          console.log(`✅ Redis write succeeded for key ${key} (final chunk)${ttl > 0 ? ` with TTL ${ttl}s` : ' with no expiration'}`);
         } catch (err) {
           failedWrites++;
           console.error(`❌ Redis write failed for key ${key} (final chunk):`, err);
