@@ -3,6 +3,8 @@ import { CognitoUserPool, CognitoUser, AuthenticationDetails, CognitoUserAttribu
 import crypto from 'crypto';
 import jwksClient from 'jwks-rsa';
 import jwt from 'jsonwebtoken';
+import { PutCommand, GetCommand, UpdateCommand, DeleteCommand } from "@aws-sdk/lib-dynamodb";
+import { docClient } from '../lib/dynamodb-client.js';
 
 // PKCE utility functions
 const base64url = (b) => b.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -209,6 +211,121 @@ function initializeJwks() {
 // Initialize JWKS on module load
 initializeJwks();
 
+// User management functions for DynamoDB
+const USERS_TABLE = process.env.USERS_TABLE || 'users';
+
+// Create user record in DynamoDB
+async function createUserRecord(userData) {
+  try {
+    const userRecord = {
+      userId: userData.sub || userData.username,
+      username: userData.username,
+      email: userData.email,
+      phoneNumber: userData.phoneNumber,
+      cognitoUsername: userData.cognitoUsername,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      status: 'active',
+      // Add any additional metadata
+      metadata: {
+        signupMethod: userData.signupMethod || 'email',
+        verified: userData.verified || false,
+        lastLogin: null,
+        loginCount: 0
+      }
+    };
+
+    console.log('[Auth] Creating user record in DynamoDB:', {
+      userId: userRecord.userId,
+      username: userRecord.username,
+      email: userRecord.email
+    });
+
+    const command = new PutCommand({
+      TableName: USERS_TABLE,
+      Item: userRecord
+    });
+
+    await docClient.send(command);
+    console.log('[Auth] User record created successfully in DynamoDB');
+    return userRecord;
+  } catch (error) {
+    console.error('[Auth] Error creating user record in DynamoDB:', error);
+    throw error;
+  }
+}
+
+// Get user record from DynamoDB
+async function getUserRecord(userId) {
+  try {
+    const command = new GetCommand({
+      TableName: USERS_TABLE,
+      Key: { userId }
+    });
+
+    const response = await docClient.send(command);
+    return response.Item;
+  } catch (error) {
+    console.error('[Auth] Error getting user record from DynamoDB:', error);
+    throw error;
+  }
+}
+
+// Update user record in DynamoDB
+async function updateUserRecord(userId, updates) {
+  try {
+    const updateExpression = [];
+    const expressionAttributeNames = {};
+    const expressionAttributeValues = {};
+
+    Object.keys(updates).forEach((key, index) => {
+      const attrName = `#attr${index}`;
+      const attrValue = `:val${index}`;
+      
+      updateExpression.push(`${attrName} = ${attrValue}`);
+      expressionAttributeNames[attrName] = key;
+      expressionAttributeValues[attrValue] = updates[key];
+    });
+
+    // Always update the updatedAt timestamp
+    updateExpression.push('#updatedAt = :updatedAt');
+    expressionAttributeNames['#updatedAt'] = 'updatedAt';
+    expressionAttributeValues[':updatedAt'] = new Date().toISOString();
+
+    const command = new UpdateCommand({
+      TableName: USERS_TABLE,
+      Key: { userId },
+      UpdateExpression: `SET ${updateExpression.join(', ')}`,
+      ExpressionAttributeNames: expressionAttributeNames,
+      ExpressionAttributeValues: expressionAttributeValues,
+      ReturnValues: 'ALL_NEW'
+    });
+
+    const response = await docClient.send(command);
+    console.log('[Auth] User record updated successfully in DynamoDB');
+    return response.Attributes;
+  } catch (error) {
+    console.error('[Auth] Error updating user record in DynamoDB:', error);
+    throw error;
+  }
+}
+
+// Delete user record from DynamoDB
+async function deleteUserRecord(userId) {
+  try {
+    const command = new DeleteCommand({
+      TableName: USERS_TABLE,
+      Key: { userId }
+    });
+
+    await docClient.send(command);
+    console.log('[Auth] User record deleted successfully from DynamoDB');
+  } catch (error) {
+    console.error('[Auth] Error deleting user record from DynamoDB:', error);
+    throw error;
+  }
+}
+
 // JWT validation middleware
 function validateJwtToken(token) {
   return new Promise((resolve, reject) => {
@@ -278,9 +395,46 @@ async function signupHandler(req, res) {
   }
   
   const { username, password, email } = req.body;
-  userPool.signUp(username, password, [{ Name: 'email', Value: email }], null, (err, result) => {
-    if (err) return res.status(400).json({ success: false, error: err.message });
-    res.status(200).json({ success: true, result });
+  
+  userPool.signUp(username, password, [{ Name: 'email', Value: email }], null, async (err, result) => {
+    if (err) {
+      console.error('[Auth] Signup error:', err);
+      return res.status(400).json({ success: false, error: err.message });
+    }
+    
+    try {
+      // Create user record in DynamoDB
+      const userData = {
+        sub: result.userSub,
+        username: username,
+        email: email,
+        cognitoUsername: username,
+        signupMethod: 'email',
+        verified: false
+      };
+      
+      await createUserRecord(userData);
+      
+      console.log('[Auth] User signup successful:', {
+        username,
+        userSub: result.userSub
+      });
+      
+      res.status(200).json({ 
+        success: true, 
+        result,
+        message: 'Account created successfully! Please check your email for verification.'
+      });
+    } catch (dbError) {
+      console.error('[Auth] Error creating user record in DynamoDB:', dbError);
+      // Still return success for Cognito signup, but log the DynamoDB error
+      res.status(200).json({ 
+        success: true, 
+        result,
+        warning: 'Account created in Cognito but failed to save metadata',
+        message: 'Account created successfully! Please check your email for verification.'
+      });
+    }
   });
 }
 
@@ -296,8 +450,25 @@ async function loginHandler(req, res) {
   const { username, password } = req.body;
   const user = new CognitoUser({ Username: username, Pool: userPool });
   const authDetails = new AuthenticationDetails({ Username: username, Password: password });
+  
   user.authenticateUser(authDetails, {
-    onSuccess: (result) => res.status(200).json({ success: true, result }),
+    onSuccess: async (result) => {
+      try {
+        // Update user record with login activity
+        const userRecord = await getUserRecord(result.accessToken.payload.sub);
+        if (userRecord) {
+          await updateUserRecord(result.accessToken.payload.sub, {
+            'metadata.lastLogin': new Date().toISOString(),
+            'metadata.loginCount': (userRecord.metadata?.loginCount || 0) + 1
+          });
+        }
+      } catch (dbError) {
+        console.error('[Auth] Error updating user login activity:', dbError);
+        // Don't fail the login if DynamoDB update fails
+      }
+      
+      res.status(200).json({ success: true, result });
+    },
     onFailure: (err) => res.status(401).json({ success: false, error: err.message }),
   });
 }
@@ -332,9 +503,28 @@ async function phoneSignupHandler(req, res) {
   }
   
   // Try signing up using phone as username (works when pool uses phone as username)
-  userPool.signUp(formattedPhone, password, attributeList, null, (err, result) => {
+  userPool.signUp(formattedPhone, password, attributeList, null, async (err, result) => {
     if (!err) {
-      try { console.log('[Auth] Phone signup success (phone as username)', { username: formattedPhone }); } catch {}
+      try { 
+        console.log('[Auth] Phone signup success (phone as username)', { username: formattedPhone }); 
+        
+        // Create user record in DynamoDB
+        const userData = {
+          sub: result.userSub,
+          username: formattedPhone,
+          phoneNumber: formattedPhone,
+          email: email,
+          cognitoUsername: formattedPhone,
+          signupMethod: 'phone',
+          verified: false
+        };
+        
+        await createUserRecord(userData);
+        
+      } catch (dbError) {
+        console.error('[Auth] Error creating user record in DynamoDB:', dbError);
+      }
+      
       return res.status(200).json({ 
         success: true, 
         result,
@@ -356,12 +546,32 @@ async function phoneSignupHandler(req, res) {
     const digits = formattedPhone.replace(/\D/g, '');
     const generatedUsername = `ph_${digits}_${Date.now()}`;
     try { console.log('[Auth] Phone signup falling back to generated username', { generatedUsername }); } catch {}
-    userPool.signUp(generatedUsername, password, attributeList, null, (fallbackErr, fallbackResult) => {
+    userPool.signUp(generatedUsername, password, attributeList, null, async (fallbackErr, fallbackResult) => {
       if (fallbackErr) {
         console.error('Phone signup fallback error:', fallbackErr);
         return res.status(400).json({ success: false, error: fallbackErr.message });
       }
-      try { console.log('[Auth] Phone signup success (generated username)'); } catch {}
+      
+      try { 
+        console.log('[Auth] Phone signup success (generated username)'); 
+        
+        // Create user record in DynamoDB
+        const userData = {
+          sub: fallbackResult.userSub,
+          username: generatedUsername,
+          phoneNumber: formattedPhone,
+          email: email,
+          cognitoUsername: generatedUsername,
+          signupMethod: 'phone',
+          verified: false
+        };
+        
+        await createUserRecord(userData);
+        
+      } catch (dbError) {
+        console.error('[Auth] Error creating user record in DynamoDB:', dbError);
+      }
+      
       return res.status(200).json({
         success: true,
         result: fallbackResult,
@@ -398,8 +608,23 @@ async function phoneLoginHandler(req, res) {
   const authDetails = new AuthenticationDetails({ Username: formattedPhone, Password: password });
   
   user.authenticateUser(authDetails, {
-    onSuccess: (result) => {
-      try { console.log('[Auth] Phone login success'); } catch {}
+    onSuccess: async (result) => {
+      try { 
+        console.log('[Auth] Phone login success'); 
+        
+        // Update user record with login activity
+        const userRecord = await getUserRecord(result.accessToken.payload.sub);
+        if (userRecord) {
+          await updateUserRecord(result.accessToken.payload.sub, {
+            'metadata.lastLogin': new Date().toISOString(),
+            'metadata.loginCount': (userRecord.metadata?.loginCount || 0) + 1
+          });
+        }
+      } catch (dbError) {
+        console.error('[Auth] Error updating user login activity:', dbError);
+        // Don't fail the login if DynamoDB update fails
+      }
+      
       res.status(200).json({ success: true, result });
     },
     onFailure: (err) => {
@@ -435,12 +660,27 @@ async function verifyPhoneHandler(req, res) {
   
   const user = new CognitoUser({ Username: usernameToUse, Pool: userPool });
   
-  user.confirmRegistration(code, true, (err, result) => {
+  user.confirmRegistration(code, true, async (err, result) => {
     if (err) {
       console.error('Phone verification error:', err);
       return res.status(400).json({ success: false, error: err.message });
     }
-    try { console.log('[Auth] Verify phone success'); } catch {}
+    
+    try { 
+      console.log('[Auth] Verify phone success'); 
+      
+      // Update user record to mark as verified
+      const userRecord = await getUserRecord(usernameToUse);
+      if (userRecord) {
+        await updateUserRecord(usernameToUse, {
+          'metadata.verified': true
+        });
+      }
+    } catch (dbError) {
+      console.error('[Auth] Error updating user verification status:', dbError);
+      // Don't fail verification if DynamoDB update fails
+    }
+    
     res.status(200).json({ 
       success: true, 
       result,
@@ -572,5 +812,10 @@ export {
   validateJwtToken,
   debugPkceStoreHandler,
   logoutHandler,
-  getLogoutUrlHandler
+  getLogoutUrlHandler,
+  // User management functions
+  createUserRecord,
+  getUserRecord,
+  updateUserRecord,
+  deleteUserRecord
 };

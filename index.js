@@ -10,6 +10,7 @@ import yaml from 'js-yaml';
 import { v4 as uuidv4 } from 'uuid';
 import cors from 'cors'
 import axios from 'axios';
+import multer from 'multer';
 import { handlers as dynamodbHandlers } from './lib/dynamodb-handlers.js';
 import dotenv from 'dotenv';
 import { exec } from 'child_process';
@@ -97,6 +98,22 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(express.text({ limit: '50mb' })); // Add support for text/plain
+
+// Configure multer for file uploads
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    // Only allow image files
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed'), false);
+    }
+  }
+});
 // File storage configuration
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -476,6 +493,63 @@ app.post('/workspace/save-files-to-s3', async (req, res) => {
   }
 });
 
+// Save Lambda function to namespace library endpoint
+app.post('/workspace/save-lambda', async (req, res) => {
+  try {
+    const { namespaceId, lambdaData } = req.body;
+    
+    if (!namespaceId || !lambdaData) {
+      return res.status(400).json({ error: 'namespaceId and lambdaData are required' });
+    }
+    
+    console.log(`[Workspace] Saving Lambda function to namespace: ${namespaceId}`);
+    console.log(`[Workspace] Function name: ${lambdaData.functionName}`);
+    console.log(`[Workspace] Lambda ID: ${lambdaData.id}`);
+    
+    // Save Lambda metadata to DynamoDB
+    const result = await lambdaDeploymentManager.saveLambdaToNamespace(
+      namespaceId,
+      lambdaData
+    );
+    
+    console.log(`[Workspace] Lambda save result:`, result);
+    
+    res.json(result);
+  } catch (error) {
+    console.error('[Workspace] Error saving Lambda to namespace:', error);
+    res.status(500).json({ 
+      error: 'Failed to save Lambda to namespace',
+      details: error.message 
+    });
+  }
+});
+
+// Get saved Lambda functions for a namespace
+app.get('/workspace/lambdas/:namespaceId', async (req, res) => {
+  try {
+    const { namespaceId } = req.params;
+    
+    if (!namespaceId) {
+      return res.status(400).json({ error: 'namespaceId is required' });
+    }
+    
+    console.log(`[Workspace] Fetching Lambda functions for namespace: ${namespaceId}`);
+    
+    // Get Lambda functions from DynamoDB
+    const result = await lambdaDeploymentManager.getLambdasForNamespace(namespaceId);
+    
+    console.log(`[Workspace] Found ${result.lambdas.length} Lambda functions`);
+    
+    res.json(result);
+  } catch (error) {
+    console.error('[Workspace] Error fetching Lambda functions:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch Lambda functions',
+      details: error.message 
+    });
+  }
+});
+
 // Serve Swagger UI for all APIs
 const awsOpenapiSpec = yaml.load(fs.readFileSync(path.join(__dirname, 'swagger/aws-dynamodb.yaml'), 'utf8'));
 const mainOpenapiSpec = yaml.load(fs.readFileSync(path.join(__dirname, 'swagger/unified-api.yaml'), 'utf8'));
@@ -551,7 +625,24 @@ app.post('/ai-agent', (req, res) => aiAgentHandler({ request: { requestBody: req
 
 // AI Agent streaming endpoint for chat and schema editing
 app.post('/ai-agent/stream', async (req, res) => {
+  console.log('[AI Agent] !!! STREAMING ENDPOINT CALLED !!!');
   const { message, namespace, history, schema } = req.body;
+  
+  // Import the intent detection function
+  const { detectIntent } = await import('./lib/llm-agent-system.js');
+  
+  // Log the intent detection for debugging
+  const intent = detectIntent(message);
+  console.log('[AI Agent] Streaming request intent analysis:', {
+    message,
+    intent: intent.intent,
+    shouldGenerateLambda: intent.shouldGenerateLambda,
+    shouldGenerateSchema: intent.shouldGenerateSchema,
+    isQuestion: intent.isQuestion,
+    isCasualMention: intent.isCasualMention,
+    isExplanatory: intent.isExplanatory
+  });
+  
   try {
     await agentSystem.handleStreamingWithAgents(res, namespace, message, history, schema);
   } catch (error) {
@@ -562,11 +653,39 @@ app.post('/ai-agent/stream', async (req, res) => {
 
 // AI Agent Lambda codegen endpoint
 app.post('/ai-agent/lambda-codegen', async (req, res) => {
-  const { message, namespace, selectedSchema, functionName, runtime, handler, memory, timeout, environment } = req.body;
-  console.log('[AI Agent] Lambda codegen request:', { message, selectedSchema, functionName, runtime, handler, memory, timeout, environment });
+  console.log('[AI Agent] !!! LAMBDA CODEGEN ENDPOINT CALLED !!!');
+  const { message, originalMessage, namespace, selectedSchema, functionName, runtime, handler, memory, timeout, environment } = req.body;
+  console.log('[AI Agent] Lambda codegen request received:', { message, originalMessage, selectedSchema, functionName, runtime, handler, memory, timeout, environment, namespace });
+
+  // Import the intent detection function
+  const { detectIntent } = await import('./lib/llm-agent-system.js');
+  
+  // Use robust intent detection to validate the request - use original message for intent detection
+  const intent = detectIntent(originalMessage || message);
+  
+  console.log('[AI Agent] Intent validation for lambda generation:', {
+    originalMessage: originalMessage || message,
+    intent: intent.intent,
+    shouldGenerateLambda: intent.shouldGenerateLambda,
+    isQuestion: intent.isQuestion,
+    isCasualMention: intent.isCasualMention,
+    isExplanatory: intent.isExplanatory
+  });
+
+  // Only proceed with lambda generation if explicitly requested
+  if (!intent.shouldGenerateLambda) {
+    console.log('[AI Agent] Rejecting lambda generation request - not explicitly requested');
+    res.write(`data: ${JSON.stringify({ 
+      error: 'Lambda generation not requested', 
+      details: 'This message does not contain an explicit request to generate a lambda function. Please use explicit action words like "generate", "create", "build", etc. along with lambda-related keywords.',
+      intent: intent.intent
+    })}\n\n`);
+    res.end();
+    return;
+  }
 
   try {
-    // Use the dedicated lambda codegen handler with streaming
+    // Use the enhanced lambda codegen handler with streaming and automatic schema selection
     await handleLambdaCodegen({
       message,
       selectedSchema,
@@ -576,6 +695,7 @@ app.post('/ai-agent/lambda-codegen', async (req, res) => {
       memory,
       timeout,
       environment,
+      namespace, // Pass namespace for automatic schema selection
       res // Pass the response object for streaming
     });
 
@@ -583,6 +703,57 @@ app.post('/ai-agent/lambda-codegen', async (req, res) => {
     console.error('[AI Agent] Lambda codegen error:', error);
     res.write(`data: ${JSON.stringify({ error: 'Failed to generate Lambda code', details: error.message })}\n\n`);
     res.end();
+  }
+});
+
+
+
+// Workspace Guidance and Navigation endpoint
+app.post('/ai-agent/workspace-guidance', async (req, res) => {
+  try {
+    const { message, namespaceId } = req.body;
+    console.log('[Workspace Guidance] Request received:', { message, namespaceId });
+
+    // Import the guidance functions
+    const { detectIntentWithGuidance, generateWorkspaceGuidance, getRealNamespaceData } = await import('./lib/llm-agent-system.js');
+    
+    // Detect intent and check for guidance requests
+    const intentWithGuidance = detectIntentWithGuidance(message);
+    
+    if (!intentWithGuidance.shouldProvideGuidance) {
+      return res.status(400).json({ 
+        error: 'Not a guidance request', 
+        message: 'This endpoint is for workspace guidance requests only' 
+      });
+    }
+
+    // Get namespace context for personalized guidance
+    let namespaceData = null;
+    if (namespaceId) {
+      try {
+        namespaceData = await getRealNamespaceData(namespaceId);
+      } catch (err) {
+        console.warn('[Workspace Guidance] Failed to get namespace data:', err.message);
+      }
+    }
+    
+    // Generate workspace guidance
+    const guidance = generateWorkspaceGuidance(intentWithGuidance.intent, intentWithGuidance.feature, namespaceData);
+    
+    res.json({
+      success: true,
+      guidance: {
+        feature: intentWithGuidance.feature,
+        suggestions: guidance.suggestions,
+        nextSteps: guidance.nextSteps,
+        uiActions: guidance.uiActions,
+        context: guidance.context
+      }
+    });
+    
+  } catch (error) {
+    console.error('[Workspace Guidance] Error:', error);
+    res.status(500).json({ error: 'Failed to generate workspace guidance' });
   }
 });
 
@@ -738,6 +909,319 @@ app.post('/unified/namespace/:namespaceId/add-schema', async (req, res) => {
     return res.json({ success: true, updatedNamespace: result });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Web Scraping Agent endpoints
+import WebScrapingAgent from './lib/web-scraping-agent.js';
+
+const webScrapingAgent = new WebScrapingAgent();
+
+// Get supported services
+app.get('/web-scraping/supported-services', async (req, res) => {
+  try {
+    const services = webScrapingAgent.getSupportedServices();
+    res.json({ success: true, services });
+  } catch (error) {
+    console.error('Error getting supported services:', error);
+    res.status(500).json({ error: 'Failed to get supported services' });
+  }
+});
+
+// Scrape service and save to namespace (with automatic namespace management)
+app.post('/web-scraping/scrape-and-save', async (req, res) => {
+  try {
+    const { serviceName, namespaceId, options = {} } = req.body;
+    
+    if (!serviceName) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Missing required field: serviceName' 
+      });
+    }
+
+    console.log(`[Web Scraping] Starting scrape for ${serviceName}${namespaceId ? ` to namespace ${namespaceId}` : ' (will auto-manage namespace)'}`);
+    
+    // Set up streaming response
+    res.writeHead(200, {
+      'Content-Type': 'text/plain',
+      'Transfer-Encoding': 'chunked',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive'
+    });
+
+    // Send initial status
+    res.write(`data: ${JSON.stringify({ 
+      type: 'status', 
+      message: `Starting web scraping for ${serviceName}...`,
+      timestamp: new Date().toISOString()
+    })}\n\n`);
+
+    try {
+      // Scrape the service with namespace management
+      const scrapedData = await webScrapingAgent.scrapeService(serviceName, options, docClient);
+      
+      // Handle namespace information
+      let namespaceMessage = '';
+      if (scrapedData.namespaceInfo) {
+        if (namespaceId && scrapedData.namespaceInfo['namespace-id'] === namespaceId) {
+          namespaceMessage = `Using existing namespace: ${namespaceId}`;
+        } else if (namespaceId) {
+          namespaceMessage = `Found existing namespace: ${scrapedData.namespaceInfo['namespace-id']} (different from requested: ${namespaceId})`;
+        } else {
+          namespaceMessage = `Created new namespace: ${scrapedData.namespaceInfo['namespace-id']}`;
+        }
+      }
+      
+      res.write(`data: ${JSON.stringify({ 
+        type: 'status', 
+        message: `Scraping completed. Found ${scrapedData.apis.length} APIs, ${scrapedData.schemas.length} schemas, ${scrapedData.documentation.length} docs. ${namespaceMessage}`,
+        timestamp: new Date().toISOString(),
+        results: {
+          apis: scrapedData.apis.length,
+          schemas: scrapedData.schemas.length,
+          documentation: scrapedData.documentation.length,
+          namespaceInfo: scrapedData.namespaceInfo
+        }
+      })}\n\n`);
+
+      // Save to namespace
+      res.write(`data: ${JSON.stringify({ 
+        type: 'status', 
+        message: 'Saving scraped data to namespace...',
+        timestamp: new Date().toISOString()
+      })}\n\n`);
+
+      // Use the namespace from scraping results or the provided namespaceId
+      const targetNamespaceId = namespaceId || (scrapedData.namespaceInfo ? scrapedData.namespaceInfo['namespace-id'] : null);
+      const saveResult = await webScrapingAgent.saveToNamespace(scrapedData, targetNamespaceId, docClient);
+      
+      if (saveResult.success) {
+        res.write(`data: ${JSON.stringify({ 
+          type: 'success', 
+          message: 'Successfully saved scraped data to namespace!',
+          timestamp: new Date().toISOString(),
+          summary: saveResult.summary
+        })}\n\n`);
+      } else {
+        res.write(`data: ${JSON.stringify({ 
+          type: 'error', 
+          message: `Error saving data: ${saveResult.error}`,
+          timestamp: new Date().toISOString()
+        })}\n\n`);
+      }
+
+    } catch (error) {
+      console.error(`[Web Scraping] Error:`, error);
+      res.write(`data: ${JSON.stringify({ 
+        type: 'error', 
+        message: `Scraping failed: ${error.message}`,
+        timestamp: new Date().toISOString()
+      })}\n\n`);
+    }
+
+    res.write('data: [DONE]\n\n');
+    res.end();
+
+  } catch (error) {
+    console.error('Error in web scraping endpoint:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to process web scraping request' 
+    });
+  }
+});
+
+// Scrape service with automatic namespace management (no namespaceId required)
+app.post('/web-scraping/scrape-auto-namespace', async (req, res) => {
+  try {
+    const { serviceName, options = {} } = req.body;
+    
+    if (!serviceName) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Missing required field: serviceName' 
+      });
+    }
+
+    console.log(`[Web Scraping] Starting auto-namespace scrape for ${serviceName}`);
+    
+    // Set up streaming response
+    res.writeHead(200, {
+      'Content-Type': 'text/plain',
+      'Transfer-Encoding': 'chunked',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive'
+    });
+
+    // Send initial status
+    res.write(`data: ${JSON.stringify({ 
+      type: 'status', 
+      message: `Starting web scraping for ${serviceName} with automatic namespace management...`,
+      timestamp: new Date().toISOString()
+    })}\n\n`);
+
+    try {
+      // Scrape the service with automatic namespace management
+      const scrapedData = await webScrapingAgent.scrapeService(serviceName, options, docClient);
+      
+      // Handle namespace information
+      let namespaceMessage = '';
+      if (scrapedData.namespaceInfo) {
+        namespaceMessage = `Using namespace: ${scrapedData.namespaceInfo['namespace-id']} (${scrapedData.namespaceInfo['created-via'] === 'web-scraping' ? 'newly created' : 'existing'})`;
+      }
+      
+      res.write(`data: ${JSON.stringify({ 
+        type: 'status', 
+        message: `Scraping completed. Found ${scrapedData.apis.length} APIs, ${scrapedData.schemas.length} schemas, ${scrapedData.documentation.length} docs. ${namespaceMessage}`,
+        timestamp: new Date().toISOString(),
+        results: {
+          apis: scrapedData.apis.length,
+          schemas: scrapedData.schemas.length,
+          documentation: scrapedData.documentation.length,
+          namespaceInfo: scrapedData.namespaceInfo
+        }
+      })}\n\n`);
+
+      // Save to namespace
+      res.write(`data: ${JSON.stringify({ 
+        type: 'status', 
+        message: 'Saving scraped data to namespace...',
+        timestamp: new Date().toISOString()
+      })}\n\n`);
+
+      const saveResult = await webScrapingAgent.saveToNamespace(scrapedData, null, docClient);
+      
+      if (saveResult.success) {
+        res.write(`data: ${JSON.stringify({ 
+          type: 'success', 
+          message: 'Successfully saved scraped data to namespace!',
+          timestamp: new Date().toISOString(),
+          summary: saveResult.summary
+        })}\n\n`);
+      } else {
+        res.write(`data: ${JSON.stringify({ 
+          type: 'error', 
+          message: `Error saving data: ${saveResult.error}`,
+          timestamp: new Date().toISOString()
+        })}\n\n`);
+      }
+
+    } catch (error) {
+      console.error(`[Web Scraping] Error:`, error);
+      res.write(`data: ${JSON.stringify({ 
+        type: 'error', 
+        message: `Scraping failed: ${error.message}`,
+        timestamp: new Date().toISOString()
+      })}\n\n`);
+    }
+
+    res.write('data: [DONE]\n\n');
+    res.end();
+
+  } catch (error) {
+    console.error('Error in web scraping auto-namespace endpoint:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to process web scraping auto-namespace request' 
+    });
+  }
+});
+
+// Scrape service without saving (for preview)
+app.post('/web-scraping/scrape-preview', async (req, res) => {
+  try {
+    const { serviceName, options = {} } = req.body;
+    
+    if (!serviceName) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Missing required field: serviceName' 
+      });
+    }
+
+    console.log(`[Web Scraping] Starting preview scrape for ${serviceName}`);
+    
+    const scrapedData = await webScrapingAgent.scrapeService(serviceName, options, null, null);
+    
+    res.json({ 
+      success: true, 
+      data: scrapedData,
+      summary: {
+        service: scrapedData.service,
+        apis: scrapedData.apis.length,
+        schemas: scrapedData.schemas.length,
+        documentation: scrapedData.documentation.length,
+        errors: scrapedData.errors
+      }
+    });
+
+  } catch (error) {
+    console.error('Error in web scraping preview endpoint:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to process web scraping preview request' 
+    });
+  }
+});
+
+// Endpoint to migrate existing namespaces (create missing methods for scraped APIs)
+app.post('/web-scraping/migrate-existing-namespaces', async (req, res) => {
+  try {
+    console.log('[Web Scraping] Starting migration of existing namespaces...');
+    
+    // Set up streaming response
+    res.writeHead(200, {
+      'Content-Type': 'text/plain',
+      'Transfer-Encoding': 'chunked',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive'
+    });
+
+    // Send initial status
+    res.write(`data: ${JSON.stringify({ 
+      type: 'status', 
+      message: 'Starting migration of existing namespaces...',
+      timestamp: new Date().toISOString()
+    })}\n\n`);
+
+    try {
+      // Run the migration
+      const migrationResult = await webScrapingAgent.migrateExistingNamespaces(docClient);
+      
+      if (migrationResult.success) {
+        res.write(`data: ${JSON.stringify({ 
+          type: 'success', 
+          message: 'Migration completed successfully!',
+          timestamp: new Date().toISOString(),
+          summary: migrationResult.summary
+        })}\n\n`);
+      } else {
+        res.write(`data: ${JSON.stringify({ 
+          type: 'error', 
+          message: `Migration failed: ${migrationResult.error}`,
+          timestamp: new Date().toISOString()
+        })}\n\n`);
+      }
+
+    } catch (error) {
+      console.error(`[Web Scraping] Migration error:`, error);
+      res.write(`data: ${JSON.stringify({ 
+        type: 'error', 
+        message: `Migration failed: ${error.message}`,
+        timestamp: new Date().toISOString()
+      })}\n\n`);
+    }
+
+    res.write('data: [DONE]\n\n');
+    res.end();
+
+  } catch (error) {
+    console.error('Error in migration endpoint:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to process migration request' 
+    });
   }
 });
 
@@ -1056,9 +1540,18 @@ app.all('/dynamodb/*', async (req, res) => {
   }
 });
 
-// Handle Unified API routes
-app.all('/unified/*', async (req, res) => {
+// Handle Unified API routes with file upload support
+app.all('/unified/*', upload.single('icon'), async (req, res) => {
   try {
+    // Parse tags if they're sent as JSON string
+    if (req.body.tags && typeof req.body.tags === 'string') {
+      try {
+        req.body.tags = JSON.parse(req.body.tags);
+      } catch (error) {
+        req.body.tags = [];
+      }
+    }
+
     const response = await unifiedApi.handleRequest(
       {
         method: req.method,
@@ -1333,6 +1826,34 @@ app.get('/mock-data/tables', async (req, res) => {
       error: 'Failed to list available tables', 
       details: error.message 
     });
+  }
+});
+
+// Icon serving endpoint
+app.get('/api/icon/:s3Key(*)', async (req, res) => {
+  try {
+    const { s3Key } = req.params;
+    const decodedS3Key = decodeURIComponent(s3Key);
+    
+    console.log('Serving icon:', decodedS3Key);
+    
+    const { S3Client, GetObjectCommand } = await import('@aws-sdk/client-s3');
+    const s3Client = new S3Client({ region: process.env.AWS_REGION || 'us-east-1' });
+    
+    const response = await s3Client.send(new GetObjectCommand({
+      Bucket: 'brmh',
+      Key: decodedS3Key
+    }));
+
+    // Set appropriate headers
+    res.setHeader('Content-Type', response.ContentType || 'image/png');
+    res.setHeader('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
+    
+    // Pipe the S3 object stream directly to the response
+    response.Body.pipe(res);
+  } catch (error) {
+    console.error('Error serving icon:', error);
+    res.status(404).json({ error: 'Icon not found' });
   }
 });
 
