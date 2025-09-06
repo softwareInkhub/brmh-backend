@@ -56,6 +56,7 @@ import { execute } from './utils/execute.js';
 
 import { mockDataAgent } from './lib/mock-data-agent.js';
 import { fetchOrdersWithShortIdsHandler } from './utils/fetchOrder.js';
+import brmhDrive from './utils/brmh-drive.js';
 
 import { 
   loginHandler,
@@ -600,6 +601,25 @@ app.get('/ai-agent-docs', (req, res) => {
       swaggerUrl: "/ai-agent-docs/swagger.json"
     })
   );
+});
+
+// Serve BRMH Drive API docs
+const driveOpenapiSpec = yaml.load(fs.readFileSync(path.join(__dirname, 'swagger/brmh-drive-api.yaml'), 'utf8'));
+app.use('/drive-api-docs', swaggerUi.serve);
+app.get('/drive-api-docs', (req, res) => {
+  res.send(
+    swaggerUi.generateHTML(driveOpenapiSpec, {
+      customSiteTitle: "BRMH Drive API Documentation",
+      customfavIcon: "/favicon.ico",
+      customCss: '.swagger-ui .topbar { display: none }',
+      swaggerUrl: "/drive-api-docs/swagger.json"
+    })
+  );
+});
+
+// Serve BRMH Drive API specification
+app.get('/drive-api-docs/swagger.json', (req, res) => {
+  res.json(driveOpenapiSpec);
 });
 
 // Serve Unified API docs
@@ -1728,6 +1748,7 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`llm API documentation available at http://localhost:${PORT}/llm-api-docs`);
   console.log(`Unified API documentation available at http://localhost:${PORT}/unified-api-docs`);
   console.log(`AI Agent API documentation available at http://localhost:${PORT}/ai-agent-docs`);
+  console.log(`BRMH Drive API documentation available at http://localhost:${PORT}/drive-api-docs`);
 });
 
 // --- Mock Data Agent API Routes ---
@@ -1859,6 +1880,277 @@ app.get('/api/icon/:s3Key(*)', async (req, res) => {
 
 // Fetch orders with short IDs (3 digits or less)
 app.get('/orders/short-ids', fetchOrdersWithShortIdsHandler);
+
+// --- BRMH Drive System API Routes ---
+app.post('/drive/upload', upload.single('file'), async (req, res) => {
+  try {
+    const { userId, parentId = 'ROOT', tags } = req.body;
+    
+    if (!userId) {
+      return res.status(400).json({ error: 'userId is required' });
+    }
+    
+    let fileData;
+    
+    // Handle multipart/form-data (file upload)
+    if (req.file) {
+      const fileBuffer = req.file.buffer;
+      const base64Content = fileBuffer.toString('base64');
+      const tagsArray = tags ? tags.split(',').map(tag => tag.trim()) : [];
+      
+      fileData = {
+        name: req.file.originalname,
+        mimeType: req.file.mimetype,
+        size: req.file.size,
+        content: base64Content,
+        tags: tagsArray
+      };
+    }
+    // Handle JSON request (base64 content)
+    else if (req.body.fileData) {
+      fileData = req.body.fileData;
+    }
+    else {
+      return res.status(400).json({ error: 'Either file upload or fileData is required' });
+    }
+    
+    const result = await brmhDrive.uploadFile(userId, fileData, parentId);
+    res.json(result);
+  } catch (error) {
+    console.error('Drive upload error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/drive/folder', async (req, res) => {
+  try {
+    const { userId, folderData, parentId = 'ROOT' } = req.body;
+    
+    if (!userId || !folderData) {
+      return res.status(400).json({ error: 'userId and folderData are required' });
+    }
+    
+    const result = await brmhDrive.createFolder(userId, folderData, parentId);
+    res.json(result);
+  } catch (error) {
+    console.error('Drive folder creation error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/drive/files/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { parentId = 'ROOT', limit = 50, nextToken } = req.query;
+    
+    const result = await brmhDrive.listFiles(userId, parentId, parseInt(limit), nextToken);
+    res.json(result);
+  } catch (error) {
+    console.error('Drive list files error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/drive/folders/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { parentId = 'ROOT', limit = 50, nextToken } = req.query;
+    
+    const result = await brmhDrive.listFolders(userId, parentId, parseInt(limit), nextToken);
+    res.json(result);
+  } catch (error) {
+    console.error('Drive list folders error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/drive/contents/:userId/:folderId', async (req, res) => {
+  try {
+    const { userId, folderId } = req.params;
+    const { limit = 50, nextToken } = req.query;
+    
+    const result = await brmhDrive.listFolderContents(userId, folderId, parseInt(limit), nextToken);
+    res.json(result);
+  } catch (error) {
+    console.error('Drive list folder contents error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/drive/file/:userId/:fileId', async (req, res) => {
+  try {
+    const { userId, fileId } = req.params;
+    
+    const result = await brmhDrive.getFileById(userId, fileId);
+    if (!result) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+    res.json(result);
+  } catch (error) {
+    console.error('Drive get file error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/drive/folder/:userId/:folderId', async (req, res) => {
+  try {
+    const { userId, folderId } = req.params;
+    
+    const result = await brmhDrive.getFolderById(userId, folderId);
+    if (!result) {
+      return res.status(404).json({ error: 'Folder not found' });
+    }
+    res.json(result);
+  } catch (error) {
+    console.error('Drive get folder error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.patch('/drive/rename/:userId/:fileId', async (req, res) => {
+  try {
+    const { userId, fileId } = req.params;
+    const { newName } = req.body;
+    
+    if (!newName) {
+      return res.status(400).json({ error: 'newName is required' });
+    }
+    
+    const result = await brmhDrive.renameFile(userId, fileId, newName);
+    res.json(result);
+  } catch (error) {
+    console.error('Drive rename error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/drive/file/:userId/:fileId', async (req, res) => {
+  try {
+    const { userId, fileId } = req.params;
+    
+    const result = await brmhDrive.deleteFile(userId, fileId);
+    res.json(result);
+  } catch (error) {
+    console.error('Drive delete file error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/drive/download/:userId/:fileId', async (req, res) => {
+  try {
+    const { userId, fileId } = req.params;
+    
+    const result = await brmhDrive.generateDownloadUrl(userId, fileId);
+    res.json(result);
+  } catch (error) {
+    console.error('Drive download URL generation error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/drive/initialize', async (req, res) => {
+  try {
+    const result = await brmhDrive.initializeDriveSystem();
+    res.json(result);
+  } catch (error) {
+    console.error('Drive initialization error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// --- BRMH Drive Sharing API Routes ---
+app.post('/drive/share/file/:userId/:fileId', async (req, res) => {
+  try {
+    const { userId, fileId } = req.params;
+    const shareData = req.body;
+    
+    const result = await brmhDrive.shareFile(userId, fileId, shareData);
+    res.json(result);
+  } catch (error) {
+    console.error('Drive share file error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/drive/share/folder/:userId/:folderId', async (req, res) => {
+  try {
+    const { userId, folderId } = req.params;
+    const shareData = req.body;
+    
+    const result = await brmhDrive.shareFolder(userId, folderId, shareData);
+    res.json(result);
+  } catch (error) {
+    console.error('Drive share folder error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/drive/shared/with-me/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { limit = 50, nextToken } = req.query;
+    
+    const result = await brmhDrive.getSharedWithMe(userId, parseInt(limit), nextToken);
+    res.json(result);
+  } catch (error) {
+    console.error('Drive get shared with me error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/drive/shared/by-me/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { limit = 50, nextToken } = req.query;
+    
+    const result = await brmhDrive.getSharedByMe(userId, parseInt(limit), nextToken);
+    res.json(result);
+  } catch (error) {
+    console.error('Drive get shared by me error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.patch('/drive/share/:userId/:shareId/permissions', async (req, res) => {
+  try {
+    const { userId, shareId } = req.params;
+    const { permissions } = req.body;
+    
+    if (!permissions) {
+      return res.status(400).json({ error: 'permissions is required' });
+    }
+    
+    const result = await brmhDrive.updateSharePermissions(userId, shareId, permissions);
+    res.json(result);
+  } catch (error) {
+    console.error('Drive update share permissions error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/drive/share/:userId/:shareId/revoke', async (req, res) => {
+  try {
+    const { userId, shareId } = req.params;
+    
+    const result = await brmhDrive.revokeShare(userId, shareId);
+    res.json(result);
+  } catch (error) {
+    console.error('Drive revoke share error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/drive/shared/:userId/:shareId/download', async (req, res) => {
+  try {
+    const { userId, shareId } = req.params;
+    
+    const result = await brmhDrive.getSharedFileContent(userId, shareId);
+    res.json(result);
+  } catch (error) {
+    console.error('Drive get shared file content error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // Debug endpoint to see raw data structure
 app.get('/orders/debug', async (req, res) => {

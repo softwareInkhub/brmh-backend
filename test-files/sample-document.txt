@@ -1,0 +1,22 @@
+Welcome to BRMH Drive System!
+
+This is a sample document for testing file upload functionality.
+
+Features:
+- File upload to S3
+- Metadata storage in DynamoDB
+- User isolation
+- Folder organization
+- Secure access control
+
+File Details:
+- Created: 2025-01-27
+- Type: Text Document
+- Size: Small test file
+- Purpose: Testing upload functionality
+
+You can use this file to test the file upload API endpoint.
+Just select this file in the OpenAPI documentation and upload it!
+
+Happy testing! 🚀
+

@@ -1,0 +1,1317 @@
+openapi: 3.0.3
+info:
+  title: BRMH Drive System API
+  description: |
+    A comprehensive Google Drive-like storage system built on AWS S3 and DynamoDB.
+    Provides file and folder management, sharing, and secure access control.
+  version: 1.0.0
+  contact:
+    name: BRMH Development Team
+    email: dev@brmh.com
+
+servers:
+  - url: http://localhost:5001
+    description: Development server
+  - url: https://api.brmh.com
+    description: Production server
+
+paths:
+  /drive/upload:
+    post:
+      summary: Upload a new file
+      description: Upload a file to the user's drive with metadata
+      tags:
+        - Files
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - userId
+                - file
+              properties:
+                userId:
+                  type: string
+                  description: Unique identifier for the user
+                  example: "user123"
+                file:
+                  type: string
+                  format: binary
+                  description: The file to upload
+                parentId:
+                  type: string
+                  description: ID of the parent folder (defaults to 'ROOT')
+                  example: "ROOT"
+                tags:
+                  type: string
+                  description: Comma-separated tags for the file
+                  example: "work,important"
+          application/json:
+            schema:
+              type: object
+              required:
+                - userId
+                - fileData
+              properties:
+                userId:
+                  type: string
+                  description: Unique identifier for the user
+                  example: "user123"
+                fileData:
+                  type: object
+                  required:
+                    - name
+                    - mimeType
+                    - size
+                    - content
+                  properties:
+                    name:
+                      type: string
+                      description: Name of the file
+                      example: "document.pdf"
+                    mimeType:
+                      type: string
+                      description: MIME type of the file
+                      example: "application/pdf"
+                    size:
+                      type: integer
+                      description: Size of the file in bytes
+                      example: 24567
+                    content:
+                      type: string
+                      description: Base64 encoded file content
+                      example: "JVBERi0xLjQKMSAwIG9iago8PAovVHlwZSAvQ2F0YWxvZwo..."
+                    tags:
+                      type: array
+                      items:
+                        type: string
+                      description: Optional tags for the file
+                      example: ["work", "important"]
+                parentId:
+                  type: string
+                  description: ID of the parent folder (defaults to 'ROOT')
+                  example: "FOLDER_abc123"
+      responses:
+        '200':
+          description: File uploaded successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  fileId:
+                    type: string
+                    example: "FILE_def456"
+                  name:
+                    type: string
+                    example: "document.pdf"
+                  s3Key:
+                    type: string
+                    example: "brmh-drive/users/user123/document.pdf"
+                  size:
+                    type: integer
+                    example: 24567
+                  mimeType:
+                    type: string
+                    example: "application/pdf"
+                  createdAt:
+                    type: string
+                    format: date-time
+                    example: "2025-01-27T10:30:00.000Z"
+        '400':
+          description: Bad request - missing required fields
+        '500':
+          description: Internal server error
+
+  /drive/folder:
+    post:
+      summary: Create a new folder
+      description: Create a folder in the user's drive
+      tags:
+        - Folders
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - userId
+                - folderData
+              properties:
+                userId:
+                  type: string
+                  description: Unique identifier for the user
+                  example: "user123"
+                folderData:
+                  type: object
+                  required:
+                    - name
+                  properties:
+                    name:
+                      type: string
+                      description: Name of the folder
+                      example: "Work Documents"
+                    description:
+                      type: string
+                      description: Optional description of the folder
+                      example: "All work-related documents"
+                parentId:
+                  type: string
+                  description: ID of the parent folder (defaults to 'ROOT')
+                  example: "FOLDER_abc123"
+      responses:
+        '200':
+          description: Folder created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  folderId:
+                    type: string
+                    example: "FOLDER_def456"
+                  name:
+                    type: string
+                    example: "Work Documents"
+                  path:
+                    type: string
+                    example: "Work Documents"
+                  createdAt:
+                    type: string
+                    format: date-time
+                    example: "2025-01-27T10:30:00.000Z"
+        '400':
+          description: Bad request - missing required fields
+        '500':
+          description: Internal server error
+
+  /drive/files/{userId}:
+    get:
+      summary: List files for a user
+      description: Get a list of files for a specific user, optionally filtered by parent folder
+      tags:
+        - Files
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Unique identifier for the user
+          example: "user123"
+        - name: parentId
+          in: query
+          required: false
+          schema:
+            type: string
+          description: ID of the parent folder (defaults to 'ROOT')
+          example: "FOLDER_abc123"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+          description: Maximum number of files to return
+        - name: nextToken
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Token for pagination
+      responses:
+        '200':
+          description: List of files retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  files:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/File'
+                  nextToken:
+                    type: string
+                    description: Token for next page of results
+                    example: "eyJmaWxlSWQiOiJGSUxFX2RlZjQ1NiJ9"
+        '400':
+          description: Bad request
+        '500':
+          description: Internal server error
+
+  /drive/folders/{userId}:
+    get:
+      summary: List folders for a user
+      description: Get a list of folders for a specific user, optionally filtered by parent folder
+      tags:
+        - Folders
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Unique identifier for the user
+          example: "user123"
+        - name: parentId
+          in: query
+          required: false
+          schema:
+            type: string
+          description: ID of the parent folder (defaults to 'ROOT')
+          example: "FOLDER_abc123"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+          description: Maximum number of folders to return
+        - name: nextToken
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Token for pagination
+      responses:
+        '200':
+          description: List of folders retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  folders:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Folder'
+                  nextToken:
+                    type: string
+                    description: Token for next page of results
+                    example: "eyJmb2xkZXJJZCI6IkZPTERFUl9kZWY0NTYifQ=="
+        '400':
+          description: Bad request
+        '500':
+          description: Internal server error
+
+  /drive/contents/{userId}/{folderId}:
+    get:
+      summary: List folder contents
+      description: Get the contents of a specific folder (files and subfolders)
+      tags:
+        - Folders
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Unique identifier for the user
+          example: "user123"
+        - name: folderId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the folder to list contents for
+          example: "FOLDER_abc123"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+          description: Maximum number of items to return
+        - name: nextToken
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Token for pagination
+      responses:
+        '200':
+          description: Folder contents retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  files:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/File'
+                  folders:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Folder'
+                  nextToken:
+                    type: string
+                    description: Token for next page of results
+        '400':
+          description: Bad request
+        '404':
+          description: Folder not found
+        '500':
+          description: Internal server error
+
+  /drive/file/{userId}/{fileId}:
+    get:
+      summary: Get file details
+      description: Retrieve detailed information about a specific file
+      tags:
+        - Files
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Unique identifier for the user
+          example: "user123"
+        - name: fileId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the file to retrieve
+          example: "FILE_def456"
+      responses:
+        '200':
+          description: File details retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/File'
+        '404':
+          description: File not found
+        '500':
+          description: Internal server error
+    delete:
+      summary: Delete a file
+      description: Permanently delete a file from the user's drive
+      tags:
+        - Files
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Unique identifier for the user
+          example: "user123"
+        - name: fileId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the file to delete
+          example: "FILE_def456"
+      responses:
+        '200':
+          description: File deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  fileId:
+                    type: string
+                    example: "FILE_def456"
+                  deletedAt:
+                    type: string
+                    format: date-time
+                    example: "2025-01-27T10:40:00.000Z"
+        '404':
+          description: File not found
+        '500':
+          description: Internal server error
+
+  /drive/folder/{userId}/{folderId}:
+    get:
+      summary: Get folder details
+      description: Retrieve detailed information about a specific folder
+      tags:
+        - Folders
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Unique identifier for the user
+          example: "user123"
+        - name: folderId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the folder to retrieve
+          example: "FOLDER_abc123"
+      responses:
+        '200':
+          description: Folder details retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Folder'
+        '404':
+          description: Folder not found
+        '500':
+          description: Internal server error
+
+  /drive/rename/{userId}/{fileId}:
+    patch:
+      summary: Rename a file
+      description: Rename an existing file
+      tags:
+        - Files
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Unique identifier for the user
+          example: "user123"
+        - name: fileId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the file to rename
+          example: "FILE_def456"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - newName
+              properties:
+                newName:
+                  type: string
+                  description: New name for the file
+                  example: "updated_document.pdf"
+      responses:
+        '200':
+          description: File renamed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  fileId:
+                    type: string
+                    example: "FILE_def456"
+                  newName:
+                    type: string
+                    example: "updated_document.pdf"
+                  updatedAt:
+                    type: string
+                    format: date-time
+                    example: "2025-01-27T10:35:00.000Z"
+        '400':
+          description: Bad request - missing required fields
+        '404':
+          description: File not found
+        '500':
+          description: Internal server error
+
+  /drive/download/{userId}/{fileId}:
+    get:
+      summary: Generate download URL
+      description: Generate a presigned URL for downloading a file
+      tags:
+        - Files
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Unique identifier for the user
+          example: "user123"
+        - name: fileId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the file to download
+          example: "FILE_def456"
+      responses:
+        '200':
+          description: Download URL generated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  downloadUrl:
+                    type: string
+                    description: Presigned URL for downloading the file
+                    example: "https://brmh.s3.amazonaws.com/brmh-drive/users/user123/document.pdf?X-Amz-Algorithm=..."
+                  expiresIn:
+                    type: integer
+                    description: Time in seconds until the URL expires
+                    example: 3600
+                  fileName:
+                    type: string
+                    example: "document.pdf"
+                  mimeType:
+                    type: string
+                    example: "application/pdf"
+                  size:
+                    type: integer
+                    example: 24567
+        '404':
+          description: File not found
+        '500':
+          description: Internal server error
+
+  /drive/initialize:
+    post:
+      summary: Initialize drive system
+      description: Initialize the BRMH Drive system (create S3 folder structure)
+      tags:
+        - System
+      responses:
+        '200':
+          description: Drive system initialized successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+        '500':
+          description: Internal server error
+
+  /drive/share/file/{userId}/{fileId}:
+    post:
+      summary: Share a file with another user
+      description: Share a file with another user with specific permissions
+      tags:
+        - Sharing
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the user sharing the file
+          example: "user123"
+        - name: fileId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the file to share
+          example: "FILE_def456"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - sharedWithUserId
+              properties:
+                sharedWithUserId:
+                  type: string
+                  description: ID of the user to share with
+                  example: "user456"
+                permissions:
+                  type: array
+                  items:
+                    type: string
+                    enum: [read, write, delete]
+                  description: Permissions to grant
+                  example: ["read", "write"]
+                expiresAt:
+                  type: string
+                  format: date-time
+                  description: Optional expiration date for the share
+                  example: "2025-02-27T10:30:00.000Z"
+                message:
+                  type: string
+                  description: Optional message to include with the share
+                  example: "Here's the document you requested"
+      responses:
+        '200':
+          description: File shared successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  shareId:
+                    type: string
+                    example: "SHARE_abc123"
+                  fileId:
+                    type: string
+                    example: "FILE_def456"
+                  sharedWithUserId:
+                    type: string
+                    example: "user456"
+                  permissions:
+                    type: array
+                    items:
+                      type: string
+                    example: ["read", "write"]
+                  expiresAt:
+                    type: string
+                    format: date-time
+                    example: "2025-02-27T10:30:00.000Z"
+                  createdAt:
+                    type: string
+                    format: date-time
+                    example: "2025-01-27T10:30:00.000Z"
+        '400':
+          description: Bad request - missing required fields
+        '404':
+          description: File not found
+        '500':
+          description: Internal server error
+
+  /drive/share/folder/{userId}/{folderId}:
+    post:
+      summary: Share a folder with another user
+      description: Share a folder with another user with specific permissions
+      tags:
+        - Sharing
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the user sharing the folder
+          example: "user123"
+        - name: folderId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the folder to share
+          example: "FOLDER_abc123"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - sharedWithUserId
+              properties:
+                sharedWithUserId:
+                  type: string
+                  description: ID of the user to share with
+                  example: "user456"
+                permissions:
+                  type: array
+                  items:
+                    type: string
+                    enum: [read, write, delete]
+                  description: Permissions to grant
+                  example: ["read"]
+                expiresAt:
+                  type: string
+                  format: date-time
+                  description: Optional expiration date for the share
+                  example: "2025-02-27T10:30:00.000Z"
+                message:
+                  type: string
+                  description: Optional message to include with the share
+                  example: "Shared project folder"
+                includeSubfolders:
+                  type: boolean
+                  description: Whether to include subfolders in the share
+                  example: true
+      responses:
+        '200':
+          description: Folder shared successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  shareId:
+                    type: string
+                    example: "SHARE_def456"
+                  folderId:
+                    type: string
+                    example: "FOLDER_abc123"
+                  sharedWithUserId:
+                    type: string
+                    example: "user456"
+                  permissions:
+                    type: array
+                    items:
+                      type: string
+                    example: ["read"]
+                  expiresAt:
+                    type: string
+                    format: date-time
+                    example: "2025-02-27T10:30:00.000Z"
+                  includeSubfolders:
+                    type: boolean
+                    example: true
+                  createdAt:
+                    type: string
+                    format: date-time
+                    example: "2025-01-27T10:30:00.000Z"
+        '400':
+          description: Bad request - missing required fields
+        '404':
+          description: Folder not found
+        '500':
+          description: Internal server error
+
+  /drive/shared/with-me/{userId}:
+    get:
+      summary: Get files and folders shared with me
+      description: Retrieve all files and folders that have been shared with the user
+      tags:
+        - Sharing
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the user
+          example: "user456"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+          description: Maximum number of items to return
+        - name: nextToken
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Token for pagination
+      responses:
+        '200':
+          description: Shared items retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sharedItems:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SharedItem'
+                  nextToken:
+                    type: string
+                    description: Token for next page of results
+        '500':
+          description: Internal server error
+
+  /drive/shared/by-me/{userId}:
+    get:
+      summary: Get files and folders shared by me
+      description: Retrieve all files and folders that the user has shared with others
+      tags:
+        - Sharing
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the user
+          example: "user123"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+          description: Maximum number of items to return
+        - name: nextToken
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Token for pagination
+      responses:
+        '200':
+          description: Shared items retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sharedItems:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SharedItem'
+                  nextToken:
+                    type: string
+                    description: Token for next page of results
+        '500':
+          description: Internal server error
+
+  /drive/share/{userId}/{shareId}/permissions:
+    patch:
+      summary: Update share permissions
+      description: Update the permissions for an existing share
+      tags:
+        - Sharing
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the user who owns the share
+          example: "user123"
+        - name: shareId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the share to update
+          example: "SHARE_abc123"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - permissions
+              properties:
+                permissions:
+                  type: array
+                  items:
+                    type: string
+                    enum: [read, write, delete]
+                  description: New permissions for the share
+                  example: ["read"]
+      responses:
+        '200':
+          description: Share permissions updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  shareId:
+                    type: string
+                    example: "SHARE_abc123"
+                  permissions:
+                    type: array
+                    items:
+                      type: string
+                    example: ["read"]
+                  updatedAt:
+                    type: string
+                    format: date-time
+                    example: "2025-01-27T10:35:00.000Z"
+        '400':
+          description: Bad request - missing required fields
+        '404':
+          description: Share not found
+        '500':
+          description: Internal server error
+
+  /drive/share/{userId}/{shareId}/revoke:
+    delete:
+      summary: Revoke a share
+      description: Revoke access to a shared file or folder
+      tags:
+        - Sharing
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the user who owns the share
+          example: "user123"
+        - name: shareId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the share to revoke
+          example: "SHARE_abc123"
+      responses:
+        '200':
+          description: Share revoked successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  shareId:
+                    type: string
+                    example: "SHARE_abc123"
+                  status:
+                    type: string
+                    example: "revoked"
+                  revokedAt:
+                    type: string
+                    format: date-time
+                    example: "2025-01-27T10:40:00.000Z"
+        '404':
+          description: Share not found
+        '500':
+          description: Internal server error
+
+  /drive/shared/{userId}/{shareId}/download:
+    get:
+      summary: Download shared file
+      description: Generate a download URL for a shared file
+      tags:
+        - Sharing
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the user accessing the shared file
+          example: "user456"
+        - name: shareId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the share
+          example: "SHARE_abc123"
+      responses:
+        '200':
+          description: Download URL generated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  shareId:
+                    type: string
+                    example: "SHARE_abc123"
+                  fileName:
+                    type: string
+                    example: "document.pdf"
+                  mimeType:
+                    type: string
+                    example: "application/pdf"
+                  size:
+                    type: integer
+                    example: 24567
+                  downloadUrl:
+                    type: string
+                    description: Presigned URL for downloading the file
+                    example: "https://brmh.s3.amazonaws.com/brmh-drive/users/user123/document.pdf?X-Amz-Algorithm=..."
+                  expiresIn:
+                    type: integer
+                    description: Time in seconds until the URL expires
+                    example: 3600
+                  permissions:
+                    type: array
+                    items:
+                      type: string
+                    example: ["read"]
+                  sharedBy:
+                    type: string
+                    example: "user123"
+                  sharedAt:
+                    type: string
+                    format: date-time
+                    example: "2025-01-27T10:30:00.000Z"
+        '403':
+          description: Access denied or share expired
+        '404':
+          description: Share not found
+        '500':
+          description: Internal server error
+
+components:
+  schemas:
+    File:
+      type: object
+      required:
+        - id
+        - name
+        - type
+        - parentId
+        - s3Key
+        - mimeType
+        - size
+        - createdAt
+        - updatedAt
+        - ownerId
+      properties:
+        id:
+          type: string
+          description: Unique identifier for the file
+          example: "FILE_def456"
+        name:
+          type: string
+          description: Name of the file
+          example: "document.pdf"
+        type:
+          type: string
+          enum: [file]
+          description: Type of item (always 'file')
+          example: "file"
+        parentId:
+          type: string
+          description: ID of the parent folder
+          example: "FOLDER_abc123"
+        path:
+          type: string
+          description: Full path to the file
+          example: "Work Documents/document.pdf"
+        s3Key:
+          type: string
+          description: S3 key for the file
+          example: "brmh-drive/users/user123/Work Documents/document.pdf"
+        mimeType:
+          type: string
+          description: MIME type of the file
+          example: "application/pdf"
+        size:
+          type: integer
+          description: Size of the file in bytes
+          example: 24567
+        tags:
+          type: array
+          items:
+            type: string
+          description: Tags associated with the file
+          example: ["work", "important"]
+        createdAt:
+          type: string
+          format: date-time
+          description: When the file was created
+          example: "2025-01-27T10:30:00.000Z"
+        updatedAt:
+          type: string
+          format: date-time
+          description: When the file was last updated
+          example: "2025-01-27T10:30:00.000Z"
+        ownerId:
+          type: string
+          description: ID of the file owner
+          example: "user123"
+
+    Folder:
+      type: object
+      required:
+        - id
+        - name
+        - type
+        - parentId
+        - path
+        - s3Key
+        - createdAt
+        - updatedAt
+        - ownerId
+      properties:
+        id:
+          type: string
+          description: Unique identifier for the folder
+          example: "FOLDER_abc123"
+        name:
+          type: string
+          description: Name of the folder
+          example: "Work Documents"
+        type:
+          type: string
+          enum: [folder]
+          description: Type of item (always 'folder')
+          example: "folder"
+        parentId:
+          type: string
+          description: ID of the parent folder
+          example: "ROOT"
+        path:
+          type: string
+          description: Full path to the folder
+          example: "Work Documents"
+        s3Key:
+          type: string
+          description: S3 key for the folder
+          example: "brmh-drive/users/user123/Work Documents"
+        description:
+          type: string
+          description: Optional description of the folder
+          example: "All work-related documents"
+        createdAt:
+          type: string
+          format: date-time
+          description: When the folder was created
+          example: "2025-01-27T10:30:00.000Z"
+        updatedAt:
+          type: string
+          format: date-time
+          description: When the folder was last updated
+          example: "2025-01-27T10:30:00.000Z"
+        ownerId:
+          type: string
+          description: ID of the folder owner
+          example: "user123"
+
+    SharedItem:
+      type: object
+      required:
+        - id
+        - type
+        - originalId
+        - originalOwnerId
+        - sharedWithUserId
+        - permissions
+        - status
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          description: Unique identifier for the share
+          example: "SHARE_abc123"
+        type:
+          type: string
+          enum: [file, folder]
+          description: Type of shared item
+          example: "file"
+        originalId:
+          type: string
+          description: ID of the original file or folder
+          example: "FILE_def456"
+        originalOwnerId:
+          type: string
+          description: ID of the user who owns the original item
+          example: "user123"
+        sharedWithUserId:
+          type: string
+          description: ID of the user the item is shared with
+          example: "user456"
+        permissions:
+          type: array
+          items:
+            type: string
+            enum: [read, write, delete]
+          description: Permissions granted
+          example: ["read", "write"]
+        expiresAt:
+          type: string
+          format: date-time
+          description: Optional expiration date for the share
+          example: "2025-02-27T10:30:00.000Z"
+        message:
+          type: string
+          description: Optional message included with the share
+          example: "Here's the document you requested"
+        includeSubfolders:
+          type: boolean
+          description: Whether subfolders are included (for folder shares)
+          example: true
+        originalName:
+          type: string
+          description: Name of the original file or folder
+          example: "document.pdf"
+        originalMimeType:
+          type: string
+          description: MIME type of the original file (for file shares)
+          example: "application/pdf"
+        originalSize:
+          type: integer
+          description: Size of the original file in bytes (for file shares)
+          example: 24567
+        originalS3Key:
+          type: string
+          description: S3 key of the original file or folder
+          example: "brmh-drive/users/user123/document.pdf"
+        originalPath:
+          type: string
+          description: Path of the original file or folder
+          example: "Work Documents/document.pdf"
+        originalTags:
+          type: array
+          items:
+            type: string
+          description: Tags of the original file (for file shares)
+          example: ["work", "important"]
+        originalDescription:
+          type: string
+          description: Description of the original folder (for folder shares)
+          example: "All work-related documents"
+        status:
+          type: string
+          enum: [active, revoked, expired]
+          description: Status of the share
+          example: "active"
+        createdAt:
+          type: string
+          format: date-time
+          description: When the share was created
+          example: "2025-01-27T10:30:00.000Z"
+        updatedAt:
+          type: string
+          format: date-time
+          description: When the share was last updated
+          example: "2025-01-27T10:30:00.000Z"
+
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+security:
+  - BearerAuth: []
+
+tags:
+  - name: Files
+    description: File management operations
+  - name: Folders
+    description: Folder management operations
+  - name: Sharing
+    description: File and folder sharing operations
+  - name: System
+    description: System-level operations
