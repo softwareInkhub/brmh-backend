@@ -1288,3 +1288,48 @@ paths:
                 type: array
                 items:
                   type: object 
+
+  # Table Validation
+  /validate-table:
+    post:
+      operationId: validateTable
+      summary: Validate if a table exists in DynamoDB
+      description: Checks if a table exists in DynamoDB and validates the table name format
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["tableName"]
+              properties:
+                tableName:
+                  type: string
+                  description: The name of the table to validate
+                  example: "my-table-name"
+      responses:
+        '200':
+          description: Table validation result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  exists:
+                    type: boolean
+                    description: Whether the table exists in DynamoDB
+                  tableName:
+                    type: string
+                    description: The validated table name (if exists)
+                  error:
+                    type: string
+                    description: Error message if table doesn't exist or validation fails
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
