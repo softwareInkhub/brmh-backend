@@ -850,6 +850,99 @@ export async function initializeDriveSystem() {
   }
 }
 
+// Namespace-specific folder operations
+export async function createNamespaceFolder(namespaceId, namespaceName) {
+  try {
+    console.log('=== CREATE NAMESPACE FOLDER IN BRMH DRIVE ===');
+    console.log('namespaceId:', namespaceId);
+    console.log('namespaceName:', namespaceName);
+    
+    // Sanitize namespace name for folder path
+    const sanitizedName = namespaceName.replace(/[^a-zA-Z0-9-_]/g, '-').toLowerCase();
+    const folderPath = `namespaces/${sanitizedName}-${namespaceId}`;
+    const s3Key = `${DRIVE_FOLDER}/${folderPath}`;
+    
+    console.log('Folder path:', folderPath);
+    console.log('S3 key:', s3Key);
+    
+    // Create folder marker in S3
+    await s3Client.send(new PutObjectCommand({
+      Bucket: BUCKET_NAME,
+      Key: `${s3Key}/.folder`,
+      Body: JSON.stringify({ 
+        type: 'namespace-folder', 
+        namespaceId: namespaceId,
+        namespaceName: namespaceName,
+        created: new Date().toISOString()
+      }),
+      ContentType: 'application/json',
+      Metadata: {
+        namespaceId: namespaceId,
+        namespaceName: namespaceName,
+        folderType: 'namespace'
+      }
+    }));
+    
+    console.log('✅ Namespace folder created successfully in BRMH Drive');
+    return {
+      folderPath,
+      s3Key,
+      success: true
+    };
+  } catch (error) {
+    console.error('❌ Error creating namespace folder in BRMH Drive:', error);
+    throw new Error(`Failed to create namespace folder: ${error.message}`);
+  }
+}
+
+export async function deleteNamespaceFolder(folderPath) {
+  try {
+    if (!folderPath) {
+      console.log('No folder path provided, skipping folder deletion');
+      return;
+    }
+
+    console.log('=== DELETE NAMESPACE FOLDER FROM BRMH DRIVE ===');
+    console.log('folderPath:', folderPath);
+    
+    const s3Key = `${DRIVE_FOLDER}/${folderPath}`;
+    console.log('S3 key:', s3Key);
+    
+    // List all objects in the folder
+    const { ListObjectsV2Command, DeleteObjectsCommand } = await import('@aws-sdk/client-s3');
+    const listCommand = new ListObjectsV2Command({
+      Bucket: BUCKET_NAME,
+      Prefix: s3Key
+    });
+    
+    const listResponse = await s3Client.send(listCommand);
+    
+    if (listResponse.Contents && listResponse.Contents.length > 0) {
+      // Delete all objects in the folder
+      const deleteObjects = listResponse.Contents.map(obj => ({ Key: obj.Key }));
+      
+      const deleteCommand = new DeleteObjectsCommand({
+        Bucket: BUCKET_NAME,
+        Delete: {
+          Objects: deleteObjects
+        }
+      });
+      
+      await s3Client.send(deleteCommand);
+      console.log(`✅ Deleted ${deleteObjects.length} objects from namespace folder`);
+    } else {
+      console.log('No objects found in namespace folder');
+    }
+    
+    console.log('✅ Namespace folder deleted successfully from BRMH Drive');
+    return { success: true };
+  } catch (error) {
+    console.error('❌ Error deleting namespace folder from BRMH Drive:', error);
+    // Don't throw error as this is cleanup operation
+    return { success: false, error: error.message };
+  }
+}
+
 export default {
   // File operations
   uploadFile,
@@ -863,6 +956,10 @@ export default {
   getFolderById,
   listFolders,
   listFolderContents,
+  
+  // Namespace folder operations
+  createNamespaceFolder,
+  deleteNamespaceFolder,
   
   // Download operations
   generateDownloadUrl,
