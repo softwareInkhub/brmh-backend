@@ -511,8 +511,20 @@ export const getCachedDataHandler = async (req, res) => {
       try {
         parsedData = JSON.parse(value);
         console.log(`✅ Retrieved data for key: ${cacheKey}`);
+        
+        // Validate that the parsed data is not corrupted
+        if (parsedData === null || parsedData === undefined) {
+          console.error(`❌ Parsed data is null/undefined for key: ${cacheKey}`);
+          return res.status(500).json({
+            message: "Cached data is corrupted",
+            key: cacheKey,
+            error: "Parsed data is null or undefined"
+          });
+        }
       } catch (parseError) {
         console.error(`❌ Failed to parse JSON for key: ${cacheKey}`, parseError);
+        console.error(`❌ Raw value length: ${value ? value.length : 'null'}`);
+        console.error(`❌ Raw value preview: ${value ? value.substring(0, 200) + '...' : 'null'}`);
         return res.status(500).json({
           message: "Failed to parse cached data",
           key: cacheKey,
@@ -525,10 +537,21 @@ export const getCachedDataHandler = async (req, res) => {
       const dataSize = Buffer.byteLength(JSON.stringify(parsedData), 'utf8');
       const dataSizeFormatted = `${(dataSize / 1024).toFixed(2)} KB`;
       
-      // Set proper headers to prevent content-length mismatch
-      res.setHeader('Content-Type', 'application/json');
+      console.log(`📊 Cache response metadata:`, {
+        key: cacheKey,
+        dataLength: dataLength,
+        dataSize: dataSize,
+        dataSizeFormatted: dataSizeFormatted,
+        isArray: Array.isArray(parsedData)
+      });
       
-      return res.status(200).json({
+      // Check if response is too large (warn if over 10MB)
+      if (dataSize > 10 * 1024 * 1024) {
+        console.warn(`⚠️ Large response detected: ${dataSizeFormatted} for key: ${cacheKey}`);
+      }
+      
+      // Prepare response object
+      const responseData = {
         message: "Cached data retrieved",
         key: cacheKey,
         data: parsedData,
@@ -539,7 +562,20 @@ export const getCachedDataHandler = async (req, res) => {
           isArray: Array.isArray(parsedData),
           itemType: Array.isArray(parsedData) ? 'array' : 'object'
         }
-      });
+      };
+      
+      // Let Express handle all headers automatically to prevent content-length mismatch
+      // Use res.json() which automatically sets Content-Type and Content-Length
+      try {
+        return res.status(200).json(responseData);
+      } catch (responseError) {
+        console.error(`❌ Error sending response for key: ${cacheKey}`, responseError);
+        return res.status(500).json({
+          message: "Failed to send response",
+          key: cacheKey,
+          error: responseError.message
+        });
+      }
          } else {
        // Get all keys for project:table (keys only, no data)
        const searchPattern = `${project}:${table}:*`;

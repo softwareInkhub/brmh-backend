@@ -100,6 +100,13 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(express.text({ limit: '50mb' })); // Add support for text/plain
 
+// Add specific middleware for cache endpoints to handle large responses
+app.use('/cache/data', (req, res, next) => {
+  // Remove any existing content-length header to let Express handle it
+  res.removeHeader('content-length');
+  next();
+});
+
 // Configure multer for file uploads
 const upload = multer({
   storage: multer.memoryStorage(),
