@@ -608,6 +608,52 @@ paths:
         '500':
           description: Internal server error
 
+  /drive/namespace-folder:
+    post:
+      summary: Create namespace folder
+      description: Create a dedicated folder for a namespace in the BRMH Drive system
+      tags:
+        - System
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - namespaceId
+                - namespaceName
+              properties:
+                namespaceId:
+                  type: string
+                  description: Unique identifier for the namespace
+                  example: "ns_12345678-1234-1234-1234-123456789012"
+                namespaceName:
+                  type: string
+                  description: Name of the namespace
+                  example: "My API Service"
+      responses:
+        '200':
+          description: Namespace folder created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  folderPath:
+                    type: string
+                    example: "namespaces/my-api-service-ns_12345678-1234-1234-1234-123456789012"
+                  s3Key:
+                    type: string
+                    example: "brmh-drive/namespaces/my-api-service-ns_12345678-1234-1234-1234-123456789012"
+        '400':
+          description: Bad request - missing required fields
+        '500':
+          description: Internal server error
+
   /drive/share/file/{userId}/{fileId}:
     post:
       summary: Share a file with another user
