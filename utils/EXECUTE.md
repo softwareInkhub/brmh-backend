@@ -1,666 +1,578 @@
-# Execute API Documentation
-
-The `/execute` endpoint provides a unified interface for various types of operations including HTTP requests, CRUD operations, data synchronization, namespace-based executions, cache operations, and search indexing.
+# BRMH Execute API - Comprehensive Guide
 
 ## Overview
 
-The execute endpoint supports multiple execution types through the `executeType` parameter:
+The BRMH Execute API provides powerful data synchronization and retrieval capabilities with support for pagination, caching, and various execution modes. This guide covers the `get-all` and `sync` operations for fetching data with pagination.
 
-- **single** - Simple HTTP requests
-- **sync/get-all** - Paginated data synchronization
-- **namespace** - Namespace-based API execution
-- **crud** - DynamoDB CRUD operations
-- **cache** - Redis cache operations
-- **indexing** - Algolia search indexing operations
+## Table of Contents
 
-## Base Endpoint
+1. [Quick Start](#quick-start)
+2. [Execution Types](#execution-types)
+3. [Get-All Operation](#get-all-operation)
+4. [Sync Operation](#sync-operation)
+5. [Pagination Configuration](#pagination-configuration)
+6. [Advanced Examples](#advanced-examples)
+7. [Error Handling](#error-handling)
+8. [Best Practices](#best-practices)
 
+## Quick Start
+
+### Basic Get-All Request
+
+```bash
+curl -X POST https://your-api.com/execute \
+  -H "Content-Type: application/json" \
+  -d '{
+    "executeType": "get-all",
+    "tableName": "your-dynamodb-table",
+    "url": "https://api.example.com/orders",
+    "headers": {
+      "Authorization": "Bearer your-token"
+    },
+    "idField": "id",
+    "nextPageIn": "header",
+    "nextPageField": "link",
+    "isAbsoluteUrl": true
+  }'
 ```
-POST /execute
+
+### Basic Sync Request
+
+```bash
+curl -X POST https://your-api.com/execute \
+  -H "Content-Type: application/json" \
+  -d '{
+    "executeType": "sync",
+    "tableName": "your-dynamodb-table",
+    "url": "https://api.example.com/orders",
+    "stopOnExisting": true
+  }'
 ```
 
 ## Execution Types
 
-### 1. Single Execution (`executeType: "single"`)
+### 1. Get-All (`executeType: "get-all"`)
+- **Purpose**: Fetch all data from an API and save to DynamoDB
+- **Behavior**: Saves all items regardless of existing data
+- **Use Case**: Initial data import, full refresh
 
-Simple HTTP requests to external APIs with optional data saving.
+### 2. Sync (`executeType: "sync"`)
+- **Purpose**: Synchronize data, skipping existing items
+- **Behavior**: Checks for existing items before saving
+- **Use Case**: Incremental updates, avoiding duplicates
 
-#### Parameters:
-- `method` (string, default: "GET") - HTTP method
-- `url` (string, required) - Target URL
-- `headers` (object, optional) - Request headers
-- `queryParams` (object, optional) - URL query parameters
-- `body` (object, optional) - Request body
-- `save` (boolean, optional) - Whether to save response to DynamoDB
-- `tableName` (string, optional) - DynamoDB table name for saving
-- `idField` (string, default: "id") - Field to use as item ID
+## Get-All Operation
 
-#### Example:
+### Basic Configuration
+
 ```json
 {
-  "executeType": "single",
-  "method": "GET",
-  "url": "https://api.example.com/users",
+  "executeType": "get-all",
+  "tableName": "shopify-orders",
+  "url": "https://your-store.myshopify.com/admin/api/2023-10/orders.json",
   "headers": {
-    "Authorization": "Bearer token123"
+    "X-Shopify-Access-Token": "your-access-token"
   },
-  "queryParams": {
-    "limit": "10"
-  },
-  "save": true,
-  "tableName": "users-table",
-  "idField": "userId"
+  "idField": "id",
+  "nextPageIn": "header",
+  "nextPageField": "link",
+  "isAbsoluteUrl": true
 }
 ```
 
-### 2. Sync/Get-All Execution (`executeType: "sync"` or `"get-all"`)
+### Advanced Get-All with Pagination
 
-Paginated data synchronization from external APIs to DynamoDB.
+```json
+{
+  "executeType": "get-all",
+  "tableName": "shopify-orders",
+  "url": "https://your-store.myshopify.com/admin/api/2023-10/orders.json",
+  "headers": {
+    "X-Shopify-Access-Token": "your-access-token"
+  },
+  "idField": "id",
+  "nextPageField": "link",
+  "nextPageIn": "header",
+  "isAbsoluteUrl": true,
+  "maxPages": 100
+}
+```
 
-#### Parameters:
-- `tableName` (string, required) - DynamoDB table name
-- `url` (string, required) - Initial API URL
-- `headers` (object, optional) - Request headers
-- `idField` (string, default: "id") - Field to use as item ID
-- `executeType` (string) - "sync" or "get-all"
-- `stopOnExisting` (boolean, default: true) - Stop on first existing item (sync mode)
-- `nextPageField` (string, default: "nextPageToken") - Field containing next page token
-- `nextPageIn` (string, default: "body") - Where to find next page token ("body" or "header")
-- `tokenParam` (string, default: "pageToken") - Query parameter name for page token
-- `isAbsoluteUrl` (boolean, default: false) - Whether next page URL is absolute
-- `maxPages` (number, default: 50) - Maximum pages to fetch
+### Response Format
 
-#### Example:
+```json
+{
+  "success": true,
+  "message": "Sync completed",
+  "pagesScanned": 5,
+  "savedCount": 250,
+  "skippedCount": 0,
+  "saved": ["order1", "order2", "order3"],
+  "skipped": []
+}
+```
+
+## Pagination Limits
+
+### Infinite Pagination (Default)
+
+**When `maxPages` is not specified**, the system will fetch **ALL pages** until there are no more pages available:
+
+```json
+{
+  "executeType": "get-all",
+  "tableName": "shopify-products",
+  "url": "https://store.myshopify.com/admin/api/2024-01/products.json"
+  // No maxPages = fetch ALL pages
+}
+```
+
+**Benefits:**
+- ✅ Fetches complete dataset
+- ✅ No data loss
+- ✅ Automatic stop when no more pages
+
+**Considerations:**
+- ⚠️ May take longer for large datasets
+- ⚠️ Higher API usage
+- ⚠️ More DynamoDB writes
+
+### Limited Pagination
+
+**When `maxPages` is specified**, the system will stop after the specified number of pages:
+
+```json
+{
+  "executeType": "get-all",
+  "tableName": "shopify-products",
+  "url": "https://store.myshopify.com/admin/api/2024-01/products.json",
+  "maxPages": 10
+  // Will stop after 10 pages
+}
+```
+
+**Benefits:**
+- ✅ Faster execution
+- ✅ Controlled API usage
+- ✅ Predictable resource consumption
+
+**Use Cases:**
+- Testing with small datasets
+- Incremental data fetching
+- API rate limit management
+
+## Sync Operation
+
+### Basic Sync Configuration
+
 ```json
 {
   "executeType": "sync",
-  "tableName": "products",
-  "url": "https://api.shopify.com/admin/products.json",
+  "tableName": "shopify-orders",
+  "url": "https://your-store.myshopify.com/admin/api/2023-10/orders.json",
   "headers": {
-    "X-Shopify-Access-Token": "token123"
+    "X-Shopify-Access-Token": "your-access-token"
   },
   "idField": "id",
-  "stopOnExisting": true,
-  "nextPageField": "next_page_info",
-  "maxPages": 10
+  "stopOnExisting": true
 }
 ```
 
-### 3. Namespace Execution (`executeType: "namespace"`)
+### Advanced Sync with Auto-Stop
 
-Execute API requests using pre-configured namespace, account, and method configurations.
-
-#### Parameters:
-- `namespaceId` (string, required) - Namespace ID
-- `accountId` (string, required) - Account ID
-- `methodId` (string, required) - Method ID
-- `save` (boolean, optional) - Whether to save response to DynamoDB
-- `tableName` (string, optional) - DynamoDB table name for saving
-- `idField` (string, default: "id") - Field to use as item ID
-
-#### Example:
 ```json
 {
-  "executeType": "namespace",
-  "namespaceId": "shopify-namespace",
-  "accountId": "shopify-account",
-  "methodId": "get-products",
-  "save": true,
-  "tableName": "shopify-products",
+  "executeType": "sync",
+  "tableName": "shopify-orders",
+  "url": "https://your-store.myshopify.com/admin/api/2023-10/orders.json",
+  "headers": {
+    "X-Shopify-Access-Token": "your-access-token"
+  },
+  "idField": "id",
+  "stopOnExisting": false,
+  "maxPages": 50
+}
+```
+
+### Sync Response Examples
+
+#### Normal Completion
+```json
+{
+  "success": true,
+  "message": "Sync completed",
+  "pagesScanned": 3,
+  "savedCount": 150,
+  "skippedCount": 50,
+  "saved": ["new_order1", "new_order2"],
+  "skipped": ["existing_order1", "existing_order2"]
+}
+```
+
+#### Early Stop (stopOnExisting: true)
+```json
+{
+  "success": true,
+  "message": "Stopped sync: item with id 12345 already exists",
+  "reason": "stopOnExisting",
+  "savedCount": 10,
+  "skippedCount": 1,
+  "saved": ["order1", "order2"],
+  "skipped": ["12345"]
+}
+```
+
+#### Auto-Stop (2000+ existing items)
+```json
+{
+  "success": true,
+  "message": "Stopped sync: 200 existing items matched in DynamoDB",
+  "reason": "auto-stop-after-200",
+  "savedCount": 0,
+  "skippedCount": 2000,
+  "saved": [],
+  "skipped": ["order1", "order2", "..."]
+}
+```
+
+## Pagination Configuration
+
+### Shopify-Style Pagination (Link Headers)
+
+```json
+{
+  "executeType": "get-all",
+  "tableName": "shopify-orders",
+  "url": "https://your-store.myshopify.com/admin/api/2023-10/orders.json",
+  "nextPageField": "link",
+  "nextPageIn": "header",
+  "tokenParam": "page_info"
+}
+```
+
+### JSON Response Pagination
+
+```json
+{
+  "executeType": "get-all",
+  "tableName": "api-orders",
+  "url": "https://api.example.com/orders",
+  "nextPageField": "pagination.nextPage",
+  "nextPageIn": "body",
+  "tokenParam": "page"
+}
+```
+
+### Nested Field Pagination
+
+```json
+{
+  "executeType": "get-all",
+  "tableName": "nested-orders",
+  "url": "https://api.example.com/orders",
+  "nextPageField": "meta.pagination.next_url",
+  "nextPageIn": "body",
+  "isAbsoluteUrl": true
+}
+```
+
+## Advanced Examples
+
+### 1. Shopify Orders with Full Pagination
+
+```json
+{
+  "executeType": "sync",
+  "tableName": "shopify-inkhub-get-orders",
+  "url": "https://inkhub.myshopify.com/admin/api/2023-10/orders.json",
+  "headers": {
+    "X-Shopify-Access-Token": "shpat_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "Content-Type": "application/json"
+  },
+  "idField": "id",
+  "nextPageField": "link",
+  "nextPageIn": "header",
+  "isAbsoluteUrl": true,
+  "stopOnExisting": true,
+  "maxPages": 100
+}
+```
+
+### 2. WooCommerce Products with Query Parameters
+
+```json
+{
+  "executeType": "get-all",
+  "tableName": "woocommerce-products",
+  "url": "https://your-store.com/wp-json/wc/v3/products",
+  "headers": {
+    "Authorization": "Basic " + btoa("consumer_key:consumer_secret")
+  },
+  "idField": "id",
+  "nextPageField": "nextPage",
+  "nextPageIn": "body",
+  "tokenParam": "page",
+  "maxPages": 50
+}
+```
+
+### 3. Custom API with Nested Pagination
+
+```json
+{
+  "executeType": "sync",
+  "tableName": "custom-orders",
+  "url": "https://api.customstore.com/v1/orders",
+  "headers": {
+    "API-Key": "your-api-key",
+    "Accept": "application/json"
+  },
+  "idField": "order_id",
+  "nextPageField": "pagination.next_page_url",
+  "nextPageIn": "body",
+  "isAbsoluteUrl": true,
+  "stopOnExisting": false,
+  "maxPages": 25
+}
+```
+
+## Error Handling
+
+### Common Error Responses
+
+#### Missing Required Fields
+```json
+{
+  "statusCode": 400,
+  "body": "{\"error\": \"tableName and url are required\"}"
+}
+```
+
+#### Invalid Table
+```json
+{
+  "statusCode": 400,
+  "body": "{\"error\": \"Partition key not found in table\"}"
+}
+```
+
+#### API Response Issues
+```json
+{
+  "statusCode": 400,
+  "body": "{\"error\": \"API did not return an array of items\"}"
+}
+```
+
+#### Server Errors
+```json
+{
+  "statusCode": 500,
+  "body": "{\"error\": \"Connection timeout\"}"
+}
+```
+
+## Best Practices
+
+### 1. Pagination Strategy
+
+- **Use `stopOnExisting: true`** for incremental syncs
+- **Set reasonable `maxPages`** limits (50-100)
+- **Monitor response times** for large datasets
+- **Test pagination logic** with small datasets first
+
+### 2. Performance Optimization
+
+```json
+{
+  "executeType": "sync",
+  "tableName": "large-dataset",
+  "url": "https://api.example.com/data",
+  "maxPages": 25,
+  "stopOnExisting": true,
   "idField": "id"
 }
 ```
 
-### 4. CRUD Execution (`executeType: "crud"`)
+### 3. Error Recovery
 
-Direct DynamoDB CRUD operations using HTTP method names.
+- **Implement retry logic** for failed requests
+- **Use smaller `maxPages`** for unstable APIs
+- **Monitor skipped vs saved ratios**
+- **Set up alerts** for high error rates
 
-#### Parameters:
-- `crudOperation` (string, required) - HTTP method: GET, POST, PUT, PATCH, DELETE
-- `tableName` (string, required) - DynamoDB table name
-- Additional parameters depend on the operation
+### 4. Data Validation
 
-#### CRUD Operations:
-
-##### GET - Read Items
 ```json
 {
-  "executeType": "crud",
-  "crudOperation": "GET",
-  "tableName": "users",
-  "pagination": "false",
-  "id": "user123"
-}
-```
-
-**Paginated Read:**
-```json
-{
-  "executeType": "crud",
-  "crudOperation": "GET",
-  "tableName": "users",
-  "pagination": "true",
-  "itemPerPage": 50,
-  "maxPage": 5
-}
-```
-
-##### POST - Create Item
-```json
-{
-  "executeType": "crud",
-  "crudOperation": "POST",
-  "tableName": "users",
-  "item": {
-    "id": "user123",
-    "name": "John Doe",
-    "email": "john@example.com"
+  "executeType": "get-all",
+  "tableName": "validated-data",
+  "url": "https://api.example.com/data",
+  "idField": "unique_id",
+  "headers": {
+    "Accept": "application/json",
+    "User-Agent": "BRMH-Sync/1.0"
   }
 }
 ```
 
-##### PUT - Full Update
+## Configuration Parameters
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `executeType` | string | Yes | "single" | Execution mode: "get-all" or "sync" |
+| `tableName` | string | Yes | - | DynamoDB table name |
+| `url` | string | Yes | - | API endpoint URL |
+| `headers` | object | No | {} | HTTP headers |
+| `idField` | string | No | "id" | Field to use as unique identifier |
+| `stopOnExisting` | boolean | No | true | Stop on first existing item (sync only) |
+| `nextPageField` | string | No | "nextPageToken" | Field containing next page token |
+| `nextPageIn` | string | No | "body" | Location of pagination: "body" or "header" |
+| `tokenParam` | string | No | "pageToken" | Query parameter name for pagination |
+| `isAbsoluteUrl` | boolean | No | false | Whether pagination URLs are absolute |
+| `maxPages` | number | No | 50 | Maximum pages to process |
+
+## Monitoring and Logging
+
+### Execution Logs
+
+The system provides detailed logging for monitoring:
+
+```
+[Namespace Execute] Fetching details for namespace: ns-123, account: acc-456, method: meth-789
+[Namespace Execute] Found namespace: shopify, account: inkhub, method: get-orders
+[Namespace Execute] Executing GET request to: https://inkhub.myshopify.com/admin/api/2023-10/orders.json
+```
+
+### Success Metrics
+
+- **Pages Scanned**: Number of API pages processed
+- **Saved Count**: Items successfully saved to DynamoDB
+- **Skipped Count**: Items that already existed (sync mode)
+- **Execution Time**: Total time for the operation
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Pagination Not Working**
+   - Check `nextPageField` configuration
+   - Verify `nextPageIn` is correct ("body" vs "header")
+   - Test with `isAbsoluteUrl: true` if needed
+
+2. **High Skip Rates**
+   - Use `stopOnExisting: true` for incremental syncs
+   - Check if `idField` is correctly configured
+   - Verify data uniqueness in source API
+
+3. **Timeout Issues**
+   - Reduce `maxPages` limit
+   - Check API response times
+   - Implement retry logic
+
+4. **Memory Issues**
+   - Process smaller batches
+   - Use streaming for large datasets
+   - Monitor DynamoDB write capacity
+
+### Shopify-Specific Issues
+
+**Problem**: Only 1 page scanned despite setting `maxPages: 50`
+
+**Root Cause**: Shopify uses Link headers for pagination, not JSON response fields
+
+**Solution**: Use these exact settings for Shopify APIs:
+
 ```json
 {
-  "executeType": "crud",
-  "crudOperation": "PUT",
-  "tableName": "users",
-  "key": {
-    "id": "user123"
+  "executeType": "get-all",
+  "tableName": "shopify-inkhub-get-products",
+  "url": "https://ink7.myshopify.com/admin/api/2024-01/products.json",
+  "headers": {
+    "X-Shopify-Access-Token": "your-token"
   },
-  "updates": {
-    "name": "John Smith",
-    "email": "johnsmith@example.com",
-    "status": "active"
+  "idField": "id",
+  "nextPageIn": "header",
+  "nextPageField": "link",
+  "isAbsoluteUrl": true
+}
+```
+
+**Note**: No `maxPages` field = infinite pagination (fetches ALL pages)
+
+**Key Settings**:
+- `nextPageIn: "header"` - Look for pagination in response headers
+- `nextPageField: "link"` - Shopify uses "Link" header
+- `isAbsoluteUrl: true` - Shopify provides absolute URLs in Link headers
+
+## Integration Examples
+
+### Node.js Integration
+
+```javascript
+const axios = require('axios');
+
+async function syncShopifyOrders() {
+  try {
+    const response = await axios.post('https://your-api.com/execute', {
+      executeType: 'sync',
+      tableName: 'shopify-orders',
+      url: 'https://your-store.myshopify.com/admin/api/2023-10/orders.json',
+      headers: {
+        'X-Shopify-Access-Token': 'your-token'
+      },
+      idField: 'id',
+      nextPageIn: 'header',
+      nextPageField: 'link',
+      isAbsoluteUrl: true,
+      stopOnExisting: true
+    });
+    
+    console.log('Sync completed:', response.data);
+  } catch (error) {
+    console.error('Sync failed:', error.response.data);
   }
 }
 ```
 
-##### PATCH - Partial Update
-```json
-{
-  "executeType": "crud",
-  "crudOperation": "PATCH",
-  "tableName": "users",
-  "key": {
-    "id": "user123"
-  },
-  "updates": {
-    "status": "inactive"
-  }
-}
-```
+### Python Integration
 
-##### DELETE - Delete Item
-```json
-{
-  "executeType": "crud",
-  "crudOperation": "DELETE",
-  "tableName": "users",
-  "id": "user123"
-}
-```
+```python
+import requests
+import json
 
-### 5. Cache Execution (`executeType: "cache"`)
-
-Redis cache operations for data caching and retrieval using standard HTTP method names.
-
-**⚠️ Important Note:** For large datasets (60,000+ items), use `includeData=false` to avoid timeouts. The system will return only keys by default to prevent 504 Gateway Timeout errors.
-
-**🔄 Race Condition Protection:** The system prevents conflicts between bulk caching operations and Lambda-triggered cache updates. If a bulk cache operation is in progress, cache updates are queued and processed automatically after the bulk operation completes.
-
-#### Parameters:
-- `cacheOperation` (string, required) - HTTP method: GET, POST, PUT, PATCH, DELETE
-- Additional parameters depend on the operation
-
-#### Cache Operations:
-
-##### GET - Retrieve Cached Data
-```json
-{
-  "executeType": "cache",
-  "cacheOperation": "GET",
-  "project": "my-app",
-  "table": "users",
-  "key": "user123"
-}
-```
-
-**Get All Keys (keys only, no data):**
-```json
-{
-  "executeType": "cache",
-  "cacheOperation": "GET",
-  "project": "my-app",
-  "table": "users"
-}
-```
-
-**Get Data in Sequence with Pagination:**
-```json
-{
-  "executeType": "cache",
-  "cacheOperation": "GET",
-  "project": "my-app",
-  "table": "users",
-  "page": 1,
-  "limit": 50,
-  "includeData": "true"
-}
-```
-
-**Get Keys Only (faster, no timeout):**
-```json
-{
-  "executeType": "cache",
-  "cacheOperation": "GET",
-  "project": "my-app",
-  "table": "users",
-  "page": 1,
-  "limit": 50,
-  "includeData": "false"
-}
-```
-
-##### POST - Cache Table Data
-```json
-{
-  "executeType": "cache",
-  "cacheOperation": "POST",
-  "project": "my-app",
-  "table": "users",
-  "recordsPerKey": 10,
-  "ttl": 3600
-}
-```
-
-##### PUT - Update Cache Data
-```json
-{
-  "executeType": "cache",
-  "cacheOperation": "PUT",
-  "project": "my-app",
-  "table": "users",
-  "recordsPerKey": 10,
-  "ttl": 3600
-}
-```
-
-##### PATCH - Partial Cache Update
-```json
-{
-  "executeType": "cache",
-  "cacheOperation": "PATCH",
-  "project": "my-app",
-  "table": "users",
-  "recordsPerKey": 10,
-  "ttl": 3600
-}
-```
-
-##### DELETE - Clear Cache
-```json
-{
-  "executeType": "cache",
-  "cacheOperation": "DELETE",
-  "project": "my-app",
-  "table": "users"
-}
-```
-
-**Clear Specific Pattern:**
-```json
-{
-  "executeType": "cache",
-  "cacheOperation": "DELETE",
-  "project": "my-app",
-  "table": "users",
-  "pattern": "user*"
-}
-```
-
-### Bulk Cache Operation Management
-
-#### Get Active Bulk Cache Operations
-```bash
-GET /cache/bulk-operations
-```
-
-**Response:**
-```json
-{
-  "message": "Active bulk cache operations retrieved",
-  "activeOperations": ["my-app:orders", "my-app:products"],
-  "count": 2,
-  "timestamp": "2024-01-15T10:30:00.000Z"
-}
-```
-
-#### Clear All Active Bulk Cache Operations (Emergency Reset)
-```bash
-DELETE /cache/bulk-operations
-```
-
-**Response:**
-```json
-{
-  "message": "Active bulk cache operations cleared",
-  "clearedCount": 2,
-  "timestamp": "2024-01-15T10:30:00.000Z"
-}
-```
-
-### Pending Cache Updates Management
-
-#### Get Pending Cache Updates
-```bash
-GET /cache/pending-updates
-```
-
-**Response:**
-```json
-{
-  "message": "Pending cache updates retrieved",
-  "pendingUpdates": {
-    "my-app:orders": {
-      "count": 5,
-      "updates": [
-        {
-          "type": "INSERT",
-          "tableName": "orders",
-          "timestamp": "2024-01-15T10:30:00.000Z"
-        }
-      ]
+def sync_shopify_orders():
+    url = "https://your-api.com/execute"
+    payload = {
+        "executeType": "sync",
+        "tableName": "shopify-orders",
+        "url": "https://your-store.myshopify.com/admin/api/2023-10/orders.json",
+        "headers": {
+            "X-Shopify-Access-Token": "your-token"
+        },
+        "idField": "id",
+        "nextPageIn": "header",
+        "nextPageField": "link",
+        "isAbsoluteUrl": True,
+        "stopOnExisting": True
     }
-  },
-  "totalPending": 5,
-  "operationCount": 1
-}
+    
+    response = requests.post(url, json=payload)
+    if response.status_code == 200:
+        print("Sync completed:", response.json())
+    else:
+        print("Sync failed:", response.json())
 ```
 
-#### Clear Pending Cache Updates
-```bash
-# Clear all pending updates
-DELETE /cache/pending-updates
+---
 
-# Clear specific operation
-DELETE /cache/pending-updates?operationKey=my-app:orders
-```
+## Support
 
-**Response:**
-```json
-{
-  "message": "All pending cache updates cleared",
-  "totalCleared": 5,
-  "operationCount": 1,
-  "timestamp": "2024-01-15T10:30:00.000Z"
-}
-```
+For additional help or questions about the BRMH Execute API:
 
-### Race Condition Protection
+- Check the logs for detailed error messages
+- Verify your API credentials and permissions
+- Test with small datasets first
+- Review the pagination configuration for your specific API
 
-The system automatically prevents conflicts between:
-- **Bulk caching operations** (POST/PUT/PATCH cache operations)
-- **Lambda-triggered cache updates** (INSERT/MODIFY/REMOVE operations)
-
-**Behavior:**
-- If a bulk cache operation is running, cache updates are **queued** for later processing
-- Cache updates return `202 Accepted` with queue information
-- Bulk operations complete without interruption
-- Queued updates are **automatically processed** after bulk cache completes
-- **No data loss** - all updates are preserved and processed
-
-**Example Queue Response:**
-```json
-{
-  "message": "Cache update queued for later processing",
-  "reason": "Bulk cache operation in progress",
-  "tableName": "orders",
-  "type": "INSERT",
-  "operationKey": "my-app:orders",
-  "queuedUpdates": 3,
-  "estimatedWaitTime": "Until bulk cache completes"
-}
-```
-
-**Processing Flow:**
-1. **Bulk cache starts** → Acquires lock
-2. **Lambda update arrives** → Queued in memory
-3. **Bulk cache completes** → Releases lock
-4. **Queued updates processed** → All updates applied automatically
-5. **Queue cleared** → Ready for next operation
-
-### 6. Indexing Execution (`executeType: "indexing"`)
-
-Algolia search indexing operations for full-text search capabilities.
-
-#### Parameters:
-- `indexingOperation` (string, required) - Indexing operation type
-- Additional parameters depend on the operation
-
-#### Indexing Operations:
-
-##### Index Table to Algolia
-```json
-{
-  "executeType": "indexing",
-  "indexingOperation": "index-table",
-  "project": "my-app",
-  "table": "products",
-  "customFields": ["name", "description", "category"]
-}
-```
-
-##### Search Indexed Data
-```json
-{
-  "executeType": "indexing",
-  "indexingOperation": "search-index",
-  "project": "my-app",
-  "table": "products",
-  "query": "laptop",
-  "filters": "category:electronics",
-  "hitsPerPage": 20,
-  "page": 0
-}
-```
-
-##### List Available Indices
-```json
-{
-  "executeType": "indexing",
-  "indexingOperation": "list-indices",
-  "project": "my-app",
-  "table": "products"
-}
-```
-
-##### Delete Indices
-```json
-{
-  "executeType": "indexing",
-  "indexingOperation": "delete-indices",
-  "project": "my-app",
-  "table": "products",
-  "keepLatest": 2
-}
-```
-
-##### Search Health Check
-```json
-{
-  "executeType": "indexing",
-  "indexingOperation": "search-health"
-}
-```
-
-## Response Format
-
-All execution types return a consistent response format:
-
-```json
-{
-  "success": true,
-  "status": 200,
-  "data": { /* response data */ },
-  "savedCount": 0,
-  "metadata": {
-    "namespace": "namespace-name",
-    "account": "account-name", 
-    "method": "method-name",
-    "tableName": "table-name"
-  }
-}
-```
-
-## Error Handling
-
-Errors are returned with appropriate HTTP status codes:
-
-```json
-{
-  "error": "Error message",
-  "details": "Additional error details"
-}
-```
-
-## Common Use Cases
-
-### 1. Data Synchronization
-Use sync execution to periodically sync data from external APIs to DynamoDB.
-
-### 2. API Testing
-Use single execution to test external APIs and optionally save responses.
-
-### 3. Namespace Management
-Use namespace execution to leverage pre-configured API integrations.
-
-### 4. Direct Database Operations
-Use CRUD execution for direct DynamoDB operations without external API calls.
-
-### 5. Cache Management
-Use cache execution for Redis-based data caching and retrieval operations.
-
-### 6. Search Indexing
-Use indexing execution for Algolia-based full-text search capabilities.
-
-## Best Practices
-
-1. **Error Handling**: Always check the `success` field in responses
-2. **Pagination**: Use appropriate pagination parameters for large datasets
-3. **Rate Limiting**: Consider API rate limits when using sync operations
-4. **Data Validation**: Validate data before saving to DynamoDB
-5. **Logging**: Monitor execution logs for debugging and monitoring
-6. **Cache TTL**: Set appropriate TTL values for cached data
-7. **Index Management**: Regularly clean up old search indices
-
-## Environment Variables
-
-Ensure these environment variables are set:
-- `AWS_REGION` - AWS region for DynamoDB
-- `AWS_ACCESS_KEY_ID` - AWS access key
-- `AWS_SECRET_ACCESS_KEY`
-  "project": "my-app",
-  "table": "products",
-  "query": "laptop",
-  "filters": "category:electronics",
-  "hitsPerPage": 20,
-  "page": 0
-}
-```
-
-##### List Available Indices
-```json
-{
-  "executeType": "indexing",
-  "indexingOperation": "list-indices",
-  "project": "my-app",
-  "table": "products"
-}
-```
-
-##### Delete Indices
-```json
-{
-  "executeType": "indexing",
-  "indexingOperation": "delete-indices",
-  "project": "my-app",
-  "table": "products",
-  "keepLatest": 2
-}
-```
-
-##### Search Health Check
-```json
-{
-  "executeType": "indexing",
-  "indexingOperation": "search-health"
-}
-```
-
-## Response Format
-
-All execution types return a consistent response format:
-
-```json
-{
-  "success": true,
-  "status": 200,
-  "data": { /* response data */ },
-  "savedCount": 0,
-  "metadata": {
-    "namespace": "namespace-name",
-    "account": "account-name", 
-    "method": "method-name",
-    "tableName": "table-name"
-  }
-}
-```
-
-## Error Handling
-
-Errors are returned with appropriate HTTP status codes:
-
-```json
-{
-  "error": "Error message",
-  "details": "Additional error details"
-}
-```
-
-## Common Use Cases
-
-### 1. Data Synchronization
-Use sync execution to periodically sync data from external APIs to DynamoDB.
-
-### 2. API Testing
-Use single execution to test external APIs and optionally save responses.
-
-### 3. Namespace Management
-Use namespace execution to leverage pre-configured API integrations.
-
-### 4. Direct Database Operations
-Use CRUD execution for direct DynamoDB operations without external API calls.
-
-### 5. Cache Management
-Use cache execution for Redis-based data caching and retrieval operations.
-
-### 6. Search Indexing
-Use indexing execution for Algolia-based full-text search capabilities.
-
-## Best Practices
-
-1. **Error Handling**: Always check the `success` field in responses
-2. **Pagination**: Use appropriate pagination parameters for large datasets
-3. **Rate Limiting**: Consider API rate limits when using sync operations
-4. **Data Validation**: Validate data before saving to DynamoDB
-5. **Logging**: Monitor execution logs for debugging and monitoring
-6. **Cache TTL**: Set appropriate TTL values for cached data
-7. **Index Management**: Regularly clean up old search indices
-
-## Environment Variables
-
-Ensure these environment variables are set:
-- `AWS_REGION` - AWS region for DynamoDB
-- `AWS_ACCESS_KEY_ID` - AWS access key
-- `AWS_SECRET_ACCESS_KEY`
+**Happy Syncing! 🚀**
