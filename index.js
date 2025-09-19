@@ -264,6 +264,9 @@ const unifiedApiHandlers = {
   getWebhooksByMethod: unifiedHandlers.getWebhooksByMethod,
   getActiveWebhooks: unifiedHandlers.getActiveWebhooks,
 
+  // Table Operations
+  validateTable: unifiedHandlers.validateTable,
+
  
 }; 
 
@@ -1341,6 +1344,65 @@ app.post('/cache/clear-unwanted-order-data', clearUnwantedOrderDataHandler);
 app.post('/cache/cleanup-timestamp-chunks', cleanupTimestampChunksHandler);
 app.get('/cache/data-in-sequence', getCachedDataInSequenceHandler);
 
+// Debug endpoint for testing cache responses
+app.get('/cache/debug/:project/:table/:key', async (req, res) => {
+  try {
+    const { project, table, key } = req.params;
+    console.log(`🔍 Debug cache request: ${project}:${table}:${key}`);
+    
+    // Set headers to prevent browser issues
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    
+    const cacheKey = `${project}:${table}:${key}`;
+    const value = await redis.get(cacheKey);
+    
+    if (!value) {
+      return res.status(404).json({
+        message: "Key not found",
+        key: cacheKey,
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    // Try to parse JSON
+    let parsedData;
+    try {
+      parsedData = JSON.parse(value);
+    } catch (error) {
+      return res.status(500).json({
+        message: "Invalid JSON in cache",
+        key: cacheKey,
+        error: error.message,
+        rawValue: value.substring(0, 500) + (value.length > 500 ? '...' : ''),
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    const responseData = {
+      message: "Debug cache data retrieved",
+      key: cacheKey,
+      data: parsedData,
+      size: Buffer.byteLength(JSON.stringify(parsedData), 'utf8'),
+      timestamp: new Date().toISOString()
+    };
+    
+    console.log(`✅ Debug response size: ${responseData.size} bytes`);
+    return res.status(200).json(responseData);
+    
+  } catch (error) {
+    console.error('❌ Debug cache error:', error);
+    return res.status(500).json({
+      message: "Debug cache error",
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 // Add a simple connection test endpoint
 app.get('/test-valkey-connection', async (req, res) => {
   try {
@@ -1889,12 +1951,41 @@ app.get('/api/icon/:s3Key(*)', async (req, res) => {
 app.get('/orders/short-ids', fetchOrdersWithShortIdsHandler);
 
 // --- BRMH Drive System API Routes ---
+
+// Create namespace folder endpoint
+app.post('/drive/namespace-folder', async (req, res) => {
+  try {
+    const { namespaceId, namespaceName } = req.body;
+    
+    if (!namespaceId || !namespaceName) {
+      return res.status(400).json({ 
+        error: 'namespaceId and namespaceName are required' 
+      });
+    }
+    
+    console.log(`[BRMH Drive] Creating namespace folder for: ${namespaceName} (${namespaceId})`);
+    
+    const result = await brmhDrive.createNamespaceFolder(namespaceId, namespaceName);
+    
+    res.json(result);
+  } catch (error) {
+    console.error('[BRMH Drive] Error creating namespace folder:', error);
+    res.status(500).json({ 
+      error: 'Failed to create namespace folder', 
+      details: error.message 
+    });
+  }
+});
+
 app.post('/drive/upload', upload.single('file'), async (req, res) => {
   try {
-    const { userId, parentId = 'ROOT', tags } = req.body;
+    const { userId, parentId = 'ROOT', tags, namespaceId, fieldName } = req.body;
     
-    if (!userId) {
-      return res.status(400).json({ error: 'userId is required' });
+    // For namespace-specific uploads, use namespaceId as userId
+    const effectiveUserId = namespaceId || userId;
+    
+    if (!effectiveUserId) {
+      return res.status(400).json({ error: 'userId or namespaceId is required' });
     }
     
     let fileData;
@@ -1904,6 +1995,11 @@ app.post('/drive/upload', upload.single('file'), async (req, res) => {
       const fileBuffer = req.file.buffer;
       const base64Content = fileBuffer.toString('base64');
       const tagsArray = tags ? tags.split(',').map(tag => tag.trim()) : [];
+      
+      // Add field name to tags for namespace uploads
+      if (fieldName) {
+        tagsArray.push(`field:${fieldName}`);
+      }
       
       fileData = {
         name: req.file.originalname,
@@ -1921,7 +2017,44 @@ app.post('/drive/upload', upload.single('file'), async (req, res) => {
       return res.status(400).json({ error: 'Either file upload or fileData is required' });
     }
     
-    const result = await brmhDrive.uploadFile(userId, fileData, parentId);
+    // For namespace uploads, use the namespace folder as parent
+    let effectiveParentId = parentId;
+    if (namespaceId) {
+      // Get the namespace folder path
+      try {
+        const namespaceRes = await fetch(`${process.env.API_BASE_URL || 'http://localhost:5001'}/unified/namespaces/${namespaceId}`);
+        if (namespaceRes.ok) {
+          const namespaceData = await namespaceRes.json();
+          if (namespaceData['folder-path']) {
+            // Use the namespace folder as the parent
+            effectiveParentId = namespaceData['folder-path'];
+            
+            // If fieldName is provided, create a subfolder for the field
+            if (fieldName) {
+              // Create field-specific folder within namespace folder
+              const fieldFolderPath = `${namespaceData['folder-path']}/${fieldName}`;
+              try {
+                // Create the field folder if it doesn't exist
+                await brmhDrive.createFolder(effectiveUserId, fieldName, effectiveParentId);
+                effectiveParentId = fieldFolderPath;
+              } catch (error) {
+                console.log('Could not create field folder, using namespace folder');
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.log('Could not get namespace folder path, using default parent');
+      }
+    }
+    
+    const result = await brmhDrive.uploadFile(effectiveUserId, fileData, effectiveParentId);
+    
+    // Add file path to response for namespace uploads
+    if (namespaceId && result.fileId) {
+      result.filePath = result.s3Key || result.fileId;
+    }
+    
     res.json(result);
   } catch (error) {
     console.error('Drive upload error:', error);

@@ -447,29 +447,43 @@ async function scanAndCacheWithBoundedBuffer(tableName, project, recordsPerKey, 
  */
 export const getCachedDataHandler = async (req, res) => {
   console.log('🔍 Get cached data request:', req.query);
+  
+  // Set request timeout to prevent hanging
+  const timeout = setTimeout(() => {
+    if (!res.headersSent) {
+      console.error('⏰ Request timeout for cache data retrieval');
+      res.status(408).json({
+        message: "Request timeout",
+        error: "Cache data retrieval took too long"
+      });
+    }
+  }, 30000); // 30 second timeout
+  
   try {
     const { project, table, key } = req.query;
     const { pattern } = req.query;
 
     console.log(`📋 Query params: project=${project}, table=${table}, key=${key}, pattern=${pattern}`);
 
-         if (pattern) {
-       // Get multiple keys matching pattern
-       const searchPattern = `${project}:${table}:${pattern}`;
-       console.log(`🔎 Searching with pattern: ${searchPattern}`);
-       
-       // Use SCAN for Valkey compatibility
-       const keys = [];
-       let cursor = '0';
-       
-       do {
-         const result = await redis.scan(cursor, 'MATCH', searchPattern, 'COUNT', '100');
-          cursor = result[0];
-          keys.push(...result[1]);
-        } while (cursor !== '0');
-       
-       console.log(`📦 Found ${keys.length} keys matching pattern`);
+    // Let Express handle all headers automatically to prevent content-length mismatch
+
+    if (pattern) {
+      // Get multiple keys matching pattern
+      const searchPattern = `${project}:${table}:${pattern}`;
+      console.log(`🔎 Searching with pattern: ${searchPattern}`);
       
+      // Use SCAN for Valkey compatibility
+      const keys = [];
+      let cursor = '0';
+      
+      do {
+        const result = await redis.scan(cursor, 'MATCH', searchPattern, 'COUNT', '100');
+        cursor = result[0];
+        keys.push(...result[1]);
+      } while (cursor !== '0');
+      
+      console.log(`📦 Found ${keys.length} keys matching pattern`);
+     
       if (keys.length === 0) {
         console.log(`❌ No cached keys found matching pattern: ${searchPattern}`);
         return res.status(404).json({
@@ -479,104 +493,133 @@ export const getCachedDataHandler = async (req, res) => {
       }
 
       const cachedData = {};
+      let processedCount = 0;
+      
       for (const k of keys) {
-        const value = await redis.get(k);
-        if (value) {
-          cachedData[k] = JSON.parse(value);
-          console.log(`✅ Retrieved data for key: ${k}`);
+        try {
+          const value = await redis.get(k);
+          if (value) {
+            // Validate JSON before parsing
+            try {
+              const parsedData = JSON.parse(value);
+              cachedData[k] = parsedData;
+              console.log(`✅ Retrieved data for key: ${k}`);
+            } catch (parseError) {
+              console.error(`❌ JSON parse error for key ${k}:`, parseError.message);
+              cachedData[k] = { error: 'Invalid JSON data', rawValue: value.substring(0, 100) + '...' };
+            }
+          }
+          processedCount++;
+          
+          // Log progress for large datasets
+          if (processedCount % 10 === 0) {
+            console.log(`📊 Processed ${processedCount}/${keys.length} keys`);
+          }
+        } catch (error) {
+          console.error(`❌ Error retrieving key ${k}:`, error.message);
+          cachedData[k] = { error: 'Retrieval failed', message: error.message };
         }
       }
 
       console.log(`📊 Returning ${Object.keys(cachedData).length} cached items`);
-      return res.status(200).json({
+      
+      // Check response size to prevent browser issues
+      const responseData = {
         message: "Cached data retrieved",
         keysFound: keys.length,
         data: cachedData
-      });
+      };
+      
+      const responseString = JSON.stringify(responseData);
+      const responseSize = Buffer.byteLength(responseString, 'utf8');
+      
+      // If response is too large, return a warning
+      if (responseSize > 50 * 1024 * 1024) { // 50MB limit
+        console.warn(`⚠️ Response size too large: ${responseSize} bytes`);
+        return res.status(413).json({
+          message: "Response too large",
+          size: responseSize,
+          limit: "50MB",
+          suggestion: "Use pagination or filter to reduce data size"
+        });
+      }
+      
+      console.log(`📊 Response size: ${(responseSize / 1024).toFixed(2)} KB`);
+      
+      // Send response without setting Content-Length manually (let Express handle it)
+      return res.status(200).json(responseData);
     } else if (key) {
       // Get specific key
       const cacheKey = `${project}:${table}:${key}`;
       console.log(`🔎 Looking for specific key: ${cacheKey}`);
-      const value = await redis.get(cacheKey);
       
-      if (!value) {
-        console.log(`❌ Cached key not found: ${cacheKey}`);
-        return res.status(404).json({
-          message: "Cached key not found",
-          key: cacheKey
-        });
-      }
-
-      let parsedData;
       try {
-        parsedData = JSON.parse(value);
-        console.log(`✅ Retrieved data for key: ${cacheKey}`);
+        const value = await redis.get(cacheKey);
         
-        // Validate that the parsed data is not corrupted
-        if (parsedData === null || parsedData === undefined) {
-          console.error(`❌ Parsed data is null/undefined for key: ${cacheKey}`);
-          return res.status(500).json({
-            message: "Cached data is corrupted",
-            key: cacheKey,
-            error: "Parsed data is null or undefined"
+        if (!value) {
+          console.log(`❌ Cached key not found: ${cacheKey}`);
+          return res.status(404).json({
+            message: "Cached key not found",
+            key: cacheKey
           });
         }
-      } catch (parseError) {
-        console.error(`❌ Failed to parse JSON for key: ${cacheKey}`, parseError);
-        console.error(`❌ Raw value length: ${value ? value.length : 'null'}`);
-        console.error(`❌ Raw value preview: ${value ? value.substring(0, 200) + '...' : 'null'}`);
-        return res.status(500).json({
-          message: "Failed to parse cached data",
+
+        // Validate JSON before parsing
+        let parsedData;
+        try {
+          parsedData = JSON.parse(value);
+          console.log(`✅ Retrieved data for key: ${cacheKey}`);
+        } catch (parseError) {
+          console.error(`❌ JSON parse error for key ${cacheKey}:`, parseError.message);
+          return res.status(500).json({
+            message: "Invalid JSON data in cache",
+            key: cacheKey,
+            error: parseError.message,
+            rawValue: value.substring(0, 200) + (value.length > 200 ? '...' : '')
+          });
+        }
+        
+        // Calculate data length and metadata
+        const dataLength = Array.isArray(parsedData) ? parsedData.length : 1;
+        const dataSize = Buffer.byteLength(JSON.stringify(parsedData), 'utf8');
+        const dataSizeFormatted = `${(dataSize / 1024).toFixed(2)} KB`;
+        
+        console.log(`📊 Cache response metadata:`, {
           key: cacheKey,
-          error: parseError.message
-        });
-      }
-      
-      // Calculate data length and metadata
-      const dataLength = Array.isArray(parsedData) ? parsedData.length : 1;
-      const dataSize = Buffer.byteLength(JSON.stringify(parsedData), 'utf8');
-      const dataSizeFormatted = `${(dataSize / 1024).toFixed(2)} KB`;
-      
-      console.log(`📊 Cache response metadata:`, {
-        key: cacheKey,
-        dataLength: dataLength,
-        dataSize: dataSize,
-        dataSizeFormatted: dataSizeFormatted,
-        isArray: Array.isArray(parsedData)
-      });
-      
-      // Check if response is too large (warn if over 10MB)
-      if (dataSize > 10 * 1024 * 1024) {
-        console.warn(`⚠️ Large response detected: ${dataSizeFormatted} for key: ${cacheKey}`);
-      }
-      
-      // Prepare response object
-      const responseData = {
-        message: "Cached data retrieved",
-        key: cacheKey,
-        data: parsedData,
-        metadata: {
           dataLength: dataLength,
           dataSize: dataSize,
           dataSizeFormatted: dataSizeFormatted,
-          isArray: Array.isArray(parsedData),
-          itemType: Array.isArray(parsedData) ? 'array' : 'object'
+          isArray: Array.isArray(parsedData)
+        });
+        
+        // Check if response is too large (warn if over 10MB)
+        if (dataSize > 10 * 1024 * 1024) {
+          console.warn(`⚠️ Large response detected: ${dataSizeFormatted} for key: ${cacheKey}`);
         }
-      };
-      
-      // Let Express handle all headers automatically to prevent content-length mismatch
-      // Use res.json() which automatically sets Content-Type and Content-Length
-      try {
-        return res.status(200).json(responseData);
-      } catch (responseError) {
-        console.error(`❌ Error sending response for key: ${cacheKey}`, responseError);
-        return res.status(500).json({
-          message: "Failed to send response",
+        
+        const responseData = {
+          message: "Cached data retrieved",
           key: cacheKey,
-          error: responseError.message
+          data: parsedData,
+          metadata: {
+            dataLength: dataLength,
+            dataSize: dataSize,
+            dataSizeFormatted: dataSizeFormatted,
+            isArray: Array.isArray(parsedData),
+            itemType: Array.isArray(parsedData) ? 'array' : 'object'
+          }
+        };
+        
+        return res.status(200).json(responseData);
+      } catch (error) {
+        console.error(`❌ Error retrieving key ${cacheKey}:`, error.message);
+        return res.status(500).json({
+          message: "Failed to retrieve cached data",
+          key: cacheKey,
+          error: error.message
         });
       }
-         } else {
+    } else {
        // Get all keys for project:table (keys only, no data)
        const searchPattern = `${project}:${table}:*`;
        console.log(`🔎 Searching for all keys with pattern: ${searchPattern}`);
@@ -637,6 +680,9 @@ export const getCachedDataHandler = async (req, res) => {
       message: "Failed to retrieve cached data",
       error: err.message
     });
+  } finally {
+    // Clear the timeout
+    clearTimeout(timeout);
   }
 };
 
