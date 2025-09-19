@@ -597,6 +597,41 @@ export const getCachedDataHandler = async (req, res) => {
           error: error.message
         });
       }
+
+      let parsedData;
+      try {
+        parsedData = JSON.parse(value);
+        console.log(`✅ Retrieved data for key: ${cacheKey}`);
+      } catch (parseError) {
+        console.error(`❌ Failed to parse JSON for key: ${cacheKey}`, parseError);
+        return res.status(500).json({
+          message: "Failed to parse cached data",
+          key: cacheKey,
+          error: parseError.message
+        });
+      }
+      
+      // Calculate data length and metadata
+      const dataLength = Array.isArray(parsedData) ? parsedData.length : 1;
+      const dataSize = Buffer.byteLength(JSON.stringify(parsedData), 'utf8');
+      const dataSizeFormatted = `${(dataSize / 1024).toFixed(2)} KB`;
+      
+      // Set proper headers to prevent content-length mismatch
+      res.setHeader('Content-Type', 'application/json');
+      
+      return res.status(200).json({
+        message: "Cached data retrieved",
+        key: cacheKey,
+        data: parsedData,
+        metadata: {
+          dataLength: dataLength,
+          dataSize: dataSize,
+          dataSizeFormatted: dataSizeFormatted,
+          isArray: Array.isArray(parsedData),
+          itemType: Array.isArray(parsedData) ? 'array' : 'object'
+        }
+      });
+
          } else {
        // Get all keys for project:table (keys only, no data)
        const searchPattern = `${project}:${table}:*`;

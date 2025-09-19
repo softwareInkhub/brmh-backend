@@ -28,28 +28,72 @@ jobs:
         username: ubuntu
         key: ${{ secrets.EC2_SSH_KEY }}
         script: |
+          # Clean up disk space first
+          echo "🧹 Cleaning up disk space..."
+          sudo apt-get clean
+          sudo apt-get autoremove -y
+          sudo rm -rf /var/cache/apt/archives/*
+          sudo rm -rf /tmp/*
+          sudo rm -rf /var/tmp/*
+          
+          # Check disk space
+          df -h
+          
+          # Navigate to project directory
           cd /home/ubuntu/brmh-backend
+          
+          # Pull latest changes
           git pull origin main
-          npm install
-          # Install PM2 globally with sudo
-          sudo npm install -g pm2
+          
+          # Clean npm cache and node_modules to free space
+          echo "🧹 Cleaning npm cache and node_modules..."
+          npm cache clean --force
+          rm -rf node_modules
+          rm -rf package-lock.json
+          
+          # Install dependencies with clean cache
+          echo "📦 Installing dependencies..."
+          npm install --no-optional --no-audit --no-fund
+          
+          # Install PM2 globally with proper path
+          echo "🚀 Installing PM2..."
+          sudo npm install -g pm2 --unsafe-perm
+          
+          # Verify PM2 installation
+          which pm2
+          pm2 --version
+          
           # Stop any existing instances
+          echo "🛑 Stopping existing instances..."
           pm2 stop brmh-backend-v2 || true
           pm2 delete brmh-backend-v2 || true
-          # Start the application as a system service
+          
+          # Start the application
+          echo "🚀 Starting application..."
           pm2 start npm --name "brmh-backend-v2" -- start
+          
           # Save PM2 process list
           pm2 save
-          # Remove any existing startup script
+          
+          # Setup PM2 startup script
+          echo "⚙️ Setting up PM2 startup..."
           sudo pm2 unstartup systemd || true
-          # Generate new startup script
           sudo env PATH=$PATH:/usr/bin pm2 startup systemd -u ubuntu --hp /home/ubuntu
+          
           # Reload systemd daemon
           sudo systemctl daemon-reload
+          
           # Enable and start the PM2 service
           sudo systemctl enable pm2-ubuntu
           sudo systemctl start pm2-ubuntu
+          
           # Verify the service is running
-          sudo systemctl status pm2-ubuntu
+          echo "✅ Verifying service status..."
+          sudo systemctl status pm2-ubuntu --no-pager
+          
           # Check PM2 status
-          pm2 status 
+          pm2 status
+          
+          # Show final disk space
+          echo "📊 Final disk space:"
+          df -h 

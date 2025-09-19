@@ -63,7 +63,7 @@ export const getAllSync = async (event) => {
       nextPageIn = "body",
       tokenParam = "pageToken",
       isAbsoluteUrl = false,
-      maxPages = 50
+      maxPages = null
     } = body;
 
     if (!tableName || !url) {
@@ -88,9 +88,16 @@ export const getAllSync = async (event) => {
     let page = 0;
     const saved = [], skipped = [];
 
-    while (nextUrl && page < maxPages) {
+    // Initial logging
+    console.log(`\n🚀 [STARTING] ${executeType.toUpperCase()} operation`);
+    console.log(`📋 [Config] Table: ${tableName}, URL: ${url}`);
+    console.log(`⚙️  [Settings] Max Pages: ${maxPages || 'Infinite'}, Stop on Existing: ${stopOnExisting}`);
+    console.log(`🔍 [Pagination] Next Page In: ${nextPageIn}, Field: ${nextPageField}, Absolute URL: ${isAbsoluteUrl}`);
+
+    while (nextUrl && (maxPages === null || page < maxPages)) {
       page++;
 
+      console.log(`\n🔄 [Page ${page}] Fetching data from: ${nextUrl}`);
       const res = await axios.get(nextUrl, { headers });
       const items = Array.isArray(res.data)
         ? res.data
@@ -102,6 +109,10 @@ export const getAllSync = async (event) => {
           body: JSON.stringify({ error: "API did not return an array of items" }),
         };
       }
+
+      console.log(`📊 [Page ${page}] Found ${items.length} items in this page`);
+      let pageSavedCount = 0;
+      let pageSkippedCount = 0;
 
       for (const item of items) {
         const itemId = item[idField]?.toString();
@@ -116,9 +127,12 @@ export const getAllSync = async (event) => {
 
           if (result.Item) {
             skipped.push(itemId);
+            pageSkippedCount++;
 
             // ✅ Auto-stop if 200 existing items matched
             if (skipped.length >= 2000) {
+              console.log(`\n🛑 [Page ${page}] Auto-stopped: 2000 existing items found`);
+              console.log(`📈 [Final Stats] Total Saved: ${saved.length}, Total Skipped: ${skipped.length}`);
               return {
                 statusCode: 200,
                 body: JSON.stringify({
@@ -135,6 +149,8 @@ export const getAllSync = async (event) => {
 
             // ✅ User requested stop on first match
             if (stopOnExisting) {
+              console.log(`\n🛑 [Page ${page}] Stopped: Item ${itemId} already exists`);
+              console.log(`📈 [Final Stats] Total Saved: ${saved.length}, Total Skipped: ${skipped.length}`);
               return {
                 statusCode: 200,
                 body: JSON.stringify({
@@ -163,7 +179,12 @@ export const getAllSync = async (event) => {
         }));
 
         saved.push(itemId);
+        pageSavedCount++;
       }
+
+      // Log page completion stats
+      console.log(`✅ [Page ${page}] Completed: ${pageSavedCount} saved, ${pageSkippedCount} skipped`);
+      console.log(`📈 [Running Total] Total Saved: ${saved.length}, Total Skipped: ${skipped.length}`);
 
       // Pagination logic
       const token = nextPageIn === 'header'
@@ -173,7 +194,17 @@ export const getAllSync = async (event) => {
       nextUrl = token
         ? (isAbsoluteUrl ? token : appendToken(nextUrl, token, tokenParam))
         : null;
+
+      if (nextUrl) {
+        console.log(`🔗 [Page ${page}] Next page URL found: ${nextUrl}`);
+      } else {
+        console.log(`🏁 [Page ${page}] No more pages available - pagination complete`);
+      }
     }
+
+    // Final completion logging
+    console.log(`\n🎉 [COMPLETED] All pages processed successfully!`);
+    console.log(`📊 [Final Stats] Pages Scanned: ${page}, Total Saved: ${saved.length}, Total Skipped: ${skipped.length}`);
 
     return {
       statusCode: 200,
@@ -189,7 +220,8 @@ export const getAllSync = async (event) => {
     };
 
   } catch (err) {
-    console.error("Sync Error:", err);
+    console.error(`\n❌ [ERROR] ${executeType.toUpperCase()} operation failed:`, err.message);
+    console.error(`🔍 [Debug] Error details:`, err);
     return {
       statusCode: 500,
       body: JSON.stringify({ error: err.message }),
