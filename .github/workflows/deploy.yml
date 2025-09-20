@@ -77,6 +77,11 @@ jobs:
           npm cache clean --force
           npm cache verify
           
+          # Remove any corrupted npm cache
+          rm -rf ~/.npm/_cacache
+          rm -rf ~/.npm/_logs
+          rm -rf ~/.npm/_npx
+          
           # Remove node_modules only (keep package-lock.json for npm ci)
           rm -rf node_modules
           
@@ -104,23 +109,36 @@ jobs:
           available_space=$(df / | awk 'NR==2 {print $4}')
           echo "📊 Available space: ${available_space}KB"
           
-          # Check if package-lock.json exists
-          if [ -f "package-lock.json" ]; then
-            echo "✅ package-lock.json found, using npm ci"
-            echo "📊 Package-lock.json size: $(ls -lh package-lock.json | awk '{print $5}')"
-            NODE_ENV=production npm ci --only=production --no-optional --no-audit --no-fund
-          else
-            echo "⚠️ package-lock.json not found, using npm install"
-            echo "📊 Package.json exists: $([ -f "package.json" ] && echo "Yes" || echo "No")"
-            NODE_ENV=production npm install --only=production --no-optional --no-audit --no-fund
-          fi
+          # Always use npm install to ensure lock file is in sync
+          echo "📦 Using npm install to ensure package-lock.json is in sync"
+          echo "📊 Package.json exists: $([ -f "package.json" ] && echo "Yes" || echo "No")"
+          echo "📊 Package-lock.json exists: $([ -f "package-lock.json" ] && echo "Yes" || echo "No")"
+          
+          # Install dependencies with production flag
+          echo "🔄 Attempting npm install..."
+          NODE_ENV=production npm install --omit=dev --omit=optional --no-audit --no-fund
           
           # Verify installation
           if [ $? -eq 0 ]; then
             echo "✅ Dependencies installed successfully"
           else
-            echo "❌ Dependency installation failed"
-            exit 1
+            echo "❌ First npm install failed, trying fallback..."
+            
+            # Fallback: Remove lock file and try again
+            echo "🔄 Removing package-lock.json and retrying..."
+            rm -f package-lock.json
+            NODE_ENV=production npm install --omit=dev --omit=optional --no-audit --no-fund
+            
+            if [ $? -eq 0 ]; then
+              echo "✅ Dependencies installed successfully on retry"
+            else
+              echo "❌ Dependency installation failed completely"
+              echo "📊 Final disk space:"
+              df -h
+              echo "📊 npm debug log:"
+              cat ~/.npm/_logs/*.log | tail -20 || echo "No npm logs found"
+              exit 1
+            fi
           fi
           
           # === PM2 SETUP WITH LOG ROTATION ===
