@@ -77,9 +77,8 @@ jobs:
           npm cache clean --force
           npm cache verify
           
-          # Remove node_modules and lock files
+          # Remove node_modules only (keep package-lock.json for npm ci)
           rm -rf node_modules
-          rm -rf package-lock.json
           
           # Clean global npm cache
           sudo npm cache clean --force
@@ -97,8 +96,32 @@ jobs:
           # === DEPENDENCY INSTALLATION ===
           echo "📦 Installing dependencies with optimizations..."
           
-          # Install with minimal logging and no optional dependencies
-          NODE_ENV=production npm ci --only=production --no-optional --no-audit --no-fund --silent
+          # Check disk space before installation
+          echo "📊 Disk space before npm install:"
+          df -h
+          
+          # Check available space
+          available_space=$(df / | awk 'NR==2 {print $4}')
+          echo "📊 Available space: ${available_space}KB"
+          
+          # Check if package-lock.json exists
+          if [ -f "package-lock.json" ]; then
+            echo "✅ package-lock.json found, using npm ci"
+            echo "📊 Package-lock.json size: $(ls -lh package-lock.json | awk '{print $5}')"
+            NODE_ENV=production npm ci --only=production --no-optional --no-audit --no-fund
+          else
+            echo "⚠️ package-lock.json not found, using npm install"
+            echo "📊 Package.json exists: $([ -f "package.json" ] && echo "Yes" || echo "No")"
+            NODE_ENV=production npm install --only=production --no-optional --no-audit --no-fund
+          fi
+          
+          # Verify installation
+          if [ $? -eq 0 ]; then
+            echo "✅ Dependencies installed successfully"
+          else
+            echo "❌ Dependency installation failed"
+            exit 1
+          fi
           
           # === PM2 SETUP WITH LOG ROTATION ===
           echo "🚀 Setting up PM2 with log rotation..."
