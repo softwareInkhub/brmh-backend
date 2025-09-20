@@ -312,7 +312,10 @@ async function scanAndCacheWithBoundedBuffer(tableName, project, recordsPerKey, 
         // Check for duplicates in chunk
         const duplicates = await getDuplicateItems(project, tableName, chunk);
         if (duplicates.length > 0) {
-          console.log(`⚠️ Found ${duplicates.length} duplicate items in chunk ${chunkIndex}:`, duplicates);
+          // Only log duplicates if there are many or it's first chunk
+          if (duplicates.length > 10 || chunkIndex === 0) {
+            console.log(`⚠️ Found ${duplicates.length} duplicate items in chunk ${chunkIndex}`);
+          }
           // Filter out duplicates from chunk
           const uniqueItems = chunk.filter(item => {
             const itemId = item.id || item.pk || item.PK || item.Id || item.ID;
@@ -341,7 +344,10 @@ async function scanAndCacheWithBoundedBuffer(tableName, project, recordsPerKey, 
             await redis.set(key, value); // No expiration when ttl is 0
           }
           successfulWrites++;
-          console.log(`✅ Redis write succeeded for key ${key} (chunk ${chunkIndex})${ttl > 0 ? ` with TTL ${ttl}s` : ' with no expiration'}`);
+          // Log only every 10th chunk to reduce verbosity
+          if (chunkIndex % 10 === 0 || chunkIndex < 3) {
+            console.log(`✅ Redis write succeeded for key ${key} (chunk ${chunkIndex})${ttl > 0 ? ` with TTL ${ttl}s` : ' with no expiration'}`);
+          }
         } catch (err) { 
         failedWrites++;
         console.error(`❌ Redis write failed for key ${key} (chunk ${chunkIndex}):`, err);
@@ -1701,7 +1707,10 @@ async function handleModify(project, tableName, newItem, oldItem, itemsPerKey, t
       const value = await redis.get(key);
       if (value) {
         const items = JSON.parse(value);
-        console.log(`🔍 Searching in chunk ${key} with ${items.length} items`);
+        // Reduce verbosity - only log for first few chunks or large chunks
+        if (items.length > 1000 || keys.indexOf(key) < 3) {
+          console.log(`🔍 Searching in chunk ${key} with ${items.length} items`);
+        }
         
         // Helper function to compare items considering DynamoDB format
         const findItemIndex = (items, targetId) => {
