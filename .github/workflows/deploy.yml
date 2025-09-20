@@ -108,17 +108,15 @@ jobs:
             sudo npm install -g pm2 --unsafe-perm
           fi
           
-          # Install PM2 log rotate module
-          pm2 install pm2-logrotate || echo "pm2-logrotate already installed"
+          # Remove PM2 logrotate completely to prevent infinite loops
+          pm2 delete pm2-logrotate || true
+          pm2 uninstall pm2-logrotate || true
           
-          # Configure PM2 log rotation
-          pm2 set pm2-logrotate:max_size 50MB
-          pm2 set pm2-logrotate:retain 5
-          pm2 set pm2-logrotate:compress true
-          pm2 set pm2-logrotate:dateFormat 'YYYY-MM-DD_HH-mm-ss'
-          pm2 set pm2-logrotate:workerInterval 30
-          pm2 set pm2-logrotate:rotateInterval '0 0 * * *'
-          pm2 set pm2-logrotate:rotateModule true
+          # Clean up any existing logrotate configuration
+          rm -rf ~/.pm2/module_conf.json || true
+          
+          # We'll rely on system logrotate instead of PM2 logrotate
+          echo "PM2 logrotate disabled - using system logrotate only"
           
           # Create PM2 ecosystem file with log limits
           cat > ecosystem.config.js << 'EOF'
@@ -171,13 +169,15 @@ jobs:
           /home/ubuntu/.pm2/logs/*.log {
               daily
               missingok
-              rotate 7
+              rotate 3
               compress
               notifempty
               create 0640 ubuntu ubuntu
               size 50M
+              delaycompress
+              copytruncate
               postrotate
-                  pm2 reloadLogs
+                  pm2 reloadLogs || true
               endscript
           }
           EOF
