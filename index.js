@@ -310,7 +310,7 @@ app.post('/lambda/deploy', async (req, res) => {
     console.log(`[Lambda Deployment] Deploying function: ${functionName}`);
     console.log(`[Lambda Deployment] Request body:`, { functionName, runtime, handler, memorySize, timeout, dependencies, environment, createApiGateway });
     
-    // Set timeout for the entire deployment process (10 minutes)
+    // Set timeout for the entire deployment process (15 minutes)
     const deploymentPromise = lambdaDeploymentManager.deployLambdaFunction(
       functionName, 
       code, 
@@ -324,7 +324,7 @@ app.post('/lambda/deploy', async (req, res) => {
     );
     
     const timeoutPromise = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error('Deployment timed out after 10 minutes')), 10 * 60 * 1000);
+      setTimeout(() => reject(new Error('Deployment timed out after 15 minutes')), 15 * 60 * 1000);
     });
     
     const result = await Promise.race([deploymentPromise, timeoutPromise]);
