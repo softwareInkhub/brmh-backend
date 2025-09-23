@@ -471,6 +471,130 @@ paths:
           description: Folder not found
         '500':
           description: Internal server error
+    delete:
+      summary: Delete a folder
+      description: Permanently delete a folder and all its contents (files and subfolders)
+      tags:
+        - Folders
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Unique identifier for the user
+          example: "user123"
+        - name: folderId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the folder to delete
+          example: "FOLDER_abc123"
+      responses:
+        '200':
+          description: Folder deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  folderId:
+                    type: string
+                    example: "FOLDER_abc123"
+                  folderName:
+                    type: string
+                    example: "Work Documents"
+                  deletedAt:
+                    type: string
+                    format: date-time
+                    example: "2025-01-27T10:40:00.000Z"
+                  deletedItems:
+                    type: object
+                    properties:
+                      files:
+                        type: integer
+                        description: Number of files deleted
+                        example: 5
+                      folders:
+                        type: integer
+                        description: Number of subfolders deleted
+                        example: 2
+        '404':
+          description: Folder not found
+        '500':
+          description: Internal server error
+
+  /drive/rename/{userId}/{folderId}:
+    patch:
+      summary: Rename a folder
+      description: Rename an existing folder
+      tags:
+        - Folders
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Unique identifier for the user
+          example: "user123"
+        - name: folderId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the folder to rename
+          example: "FOLDER_abc123"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - newName
+              properties:
+                newName:
+                  type: string
+                  description: New name for the folder
+                  example: "Updated Work Documents"
+      responses:
+        '200':
+          description: Folder renamed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  folderId:
+                    type: string
+                    example: "FOLDER_abc123"
+                  oldName:
+                    type: string
+                    example: "Work Documents"
+                  newName:
+                    type: string
+                    example: "Updated Work Documents"
+                  newPath:
+                    type: string
+                    example: "Updated Work Documents"
+                  updatedAt:
+                    type: string
+                    format: date-time
+                    example: "2025-01-27T10:35:00.000Z"
+        '400':
+          description: Bad request - missing required fields
+        '404':
+          description: Folder not found
+        '500':
+          description: Internal server error
 
   /drive/rename/{userId}/{fileId}:
     patch:
@@ -531,6 +655,148 @@ paths:
           description: Bad request - missing required fields
         '404':
           description: File not found
+        '500':
+          description: Internal server error
+
+  /drive/move/file/{userId}/{fileId}:
+    patch:
+      summary: Move a file to a different folder
+      description: Move a file from its current folder to a new parent folder
+      tags:
+        - Files
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Unique identifier for the user
+          example: "user123"
+        - name: fileId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the file to move
+          example: "FILE_def456"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - newParentId
+              properties:
+                newParentId:
+                  type: string
+                  description: ID of the destination folder (use 'ROOT' for root level)
+                  example: "FOLDER_abc123"
+      responses:
+        '200':
+          description: File moved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  fileId:
+                    type: string
+                    example: "FILE_def456"
+                  oldPath:
+                    type: string
+                    example: "Personal/document.pdf"
+                  newPath:
+                    type: string
+                    example: "Work Documents/document.pdf"
+                  oldParentId:
+                    type: string
+                    example: "FOLDER_xyz789"
+                  newParentId:
+                    type: string
+                    example: "FOLDER_abc123"
+                  updatedAt:
+                    type: string
+                    format: date-time
+                    example: "2025-01-27T10:35:00.000Z"
+        '400':
+          description: Bad request - missing required fields
+        '404':
+          description: File or destination folder not found
+        '500':
+          description: Internal server error
+
+  /drive/move/folder/{userId}/{folderId}:
+    patch:
+      summary: Move a folder to a different parent
+      description: Move a folder and all its contents to a new parent folder
+      tags:
+        - Folders
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Unique identifier for the user
+          example: "user123"
+        - name: folderId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the folder to move
+          example: "FOLDER_abc123"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - newParentId
+              properties:
+                newParentId:
+                  type: string
+                  description: ID of the destination parent folder (use 'ROOT' for root level)
+                  example: "FOLDER_xyz789"
+      responses:
+        '200':
+          description: Folder moved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  folderId:
+                    type: string
+                    example: "FOLDER_abc123"
+                  oldPath:
+                    type: string
+                    example: "Personal/My Projects"
+                  newPath:
+                    type: string
+                    example: "Work Documents/My Projects"
+                  oldParentId:
+                    type: string
+                    example: "FOLDER_personal123"
+                  newParentId:
+                    type: string
+                    example: "FOLDER_work456"
+                  updatedAt:
+                    type: string
+                    format: date-time
+                    example: "2025-01-27T10:35:00.000Z"
+        '400':
+          description: Bad request - missing required fields
+        '404':
+          description: Folder or destination parent not found
         '500':
           description: Internal server error
 
