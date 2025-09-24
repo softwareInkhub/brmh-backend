@@ -247,6 +247,6 @@ jobs:
           
           # Final disk space check
           echo "📊 Final disk space:"
-          df -h
-          
+          df -h      
+
           echo "🎉 Deployment completed with log management!"

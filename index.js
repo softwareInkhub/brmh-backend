@@ -77,9 +77,12 @@ import {
 
 // Load environment variables
 dotenv.config();
-console.log("AWS_ACCESS_KEY_ID", process.env.AWS_ACCESS_KEY_ID);
-console.log("AWS_SECRET_ACCESS_KEY", process.env.AWS_SECRET_ACCESS_KEY);
-console.log("AWS_REGION", process.env.AWS_REGION);
+// Only log AWS config in development
+if (process.env.NODE_ENV !== 'production') {
+  console.log("AWS_ACCESS_KEY_ID", process.env.AWS_ACCESS_KEY_ID ? 'SET' : 'NOT SET');
+  console.log("AWS_SECRET_ACCESS_KEY", process.env.AWS_SECRET_ACCESS_KEY ? 'SET' : 'NOT SET');
+  console.log("AWS_REGION", process.env.AWS_REGION);
+}
 
 
 
@@ -2417,6 +2420,73 @@ app.get('/drive/shared/:userId/:shareId/download', async (req, res) => {
     res.json(result);
   } catch (error) {
     console.error('Drive get shared file content error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Delete folder endpoint
+app.delete('/drive/folder/:userId/:folderId', async (req, res) => {
+  try {
+    const { userId, folderId } = req.params;
+    
+    const result = await brmhDrive.deleteFolder(userId, folderId);
+    res.json(result);
+  } catch (error) {
+    console.error('Drive delete folder error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Rename folder endpoint
+app.patch('/drive/rename/folder/:userId/:folderId', async (req, res) => {
+  try {
+    const { userId, folderId } = req.params;
+    const { newName } = req.body;
+    
+    if (!newName) {
+      return res.status(400).json({ error: 'newName is required' });
+    }
+    
+    const result = await brmhDrive.renameFolder(userId, folderId, newName);
+    res.json(result);
+  } catch (error) {
+    console.error('Drive rename folder error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Move file to different folder
+app.patch('/drive/move/file/:userId/:fileId', async (req, res) => {
+  try {
+    const { userId, fileId } = req.params;
+    const { newParentId } = req.body;
+    
+    if (!newParentId) {
+      return res.status(400).json({ error: 'newParentId is required' });
+    }
+    
+    const result = await brmhDrive.moveFile(userId, fileId, newParentId);
+    res.json(result);
+  } catch (error) {
+    console.error('Drive move file error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Move folder to different parent
+app.patch('/drive/move/folder/:userId/:folderId', async (req, res) => {
+  try {
+    const { userId, folderId } = req.params;
+    const { newParentId } = req.body;
+    
+    if (!newParentId) {
+      return res.status(400).json({ error: 'newParentId is required' });
+    }
+    
+    const result = await brmhDrive.moveFolder(userId, folderId, newParentId);
+    res.json(result);
+  } catch (error) {
+    console.error('Drive move folder error:', error);
     res.status(500).json({ error: error.message });
   }
 });

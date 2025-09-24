@@ -22,7 +22,8 @@ const ALLOWED_MIME_TYPES = [
   'application/zip', 'application/x-rar-compressed',
   'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  'application/vnd.ms-powerpoint', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+  'application/vnd.ms-powerpoint', 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'text/csv', 'application/csv'
 ];
 
 // Utility functions
@@ -83,11 +84,14 @@ export async function uploadFile(userId, fileData, parentId = 'ROOT') {
     
     const s3Key = getS3Key(userId, parentPath, name);
     
+    // Convert base64 content back to binary data for S3
+    const binaryContent = Buffer.from(content, 'base64');
+    
     // Upload to S3
     await s3Client.send(new PutObjectCommand({
       Bucket: BUCKET_NAME,
       Key: s3Key,
-      Body: content,
+      Body: binaryContent,
       ContentType: mimeType,
       Metadata: {
         userId,
@@ -350,7 +354,18 @@ export async function renameFile(userId, fileId, newName) {
       throw new Error('Cannot rename folders with this method');
     }
     
+    if (!newName || newName.trim() === '') {
+      throw new Error('New file name is required');
+    }
+    
     const timestamp = new Date().toISOString();
+    
+    // Calculate new path and S3 key
+    const newPath = file.parentId === 'ROOT' 
+      ? newName.trim() 
+      : file.path.replace(file.name, newName.trim());
+    
+    const newS3Key = getS3Key(userId, newPath.replace(`/${newName.trim()}`, ''), newName.trim());
     
     // Update using CRUD API
     const updateData = {
@@ -359,7 +374,9 @@ export async function renameFile(userId, fileId, newName) {
         id: fileId
       },
       updates: {
-        name: newName,
+        name: newName.trim(),
+        path: newPath,
+        s3Key: newS3Key,
         updatedAt: timestamp
       }
     };
@@ -374,10 +391,49 @@ export async function renameFile(userId, fileId, newName) {
       throw new Error('Failed to rename file');
     }
     
+    // Update S3 file (copy to new location and delete old one)
+    console.log(`🔄 Updating S3 file: ${file.s3Key} → ${newS3Key}`);
+    try {
+      // Copy file to new location
+      console.log(`📋 Copying file to new location: ${newS3Key}`);
+      await s3Client.send(new CopyObjectCommand({
+        Bucket: BUCKET_NAME,
+        CopySource: `${BUCKET_NAME}/${file.s3Key}`,
+        Key: newS3Key,
+        Metadata: {
+          userId,
+          fileId,
+          parentId: file.parentId,
+          renamedAt: timestamp
+        }
+      }));
+      console.log(`✅ File copied successfully`);
+      
+      // Delete old file
+      console.log(`🗑️ Deleting old file: ${file.s3Key}`);
+      await s3Client.send(new DeleteObjectCommand({
+        Bucket: BUCKET_NAME,
+        Key: file.s3Key
+      }));
+      console.log(`✅ Old file deleted successfully`);
+      
+      console.log(`✅ File renamed in S3: ${file.s3Key} → ${newS3Key}`);
+      
+    } catch (error) {
+      console.error(`❌ S3 file update failed:`, error.message);
+      console.error(`❌ Full S3 error:`, error);
+      console.error(`❌ Error code:`, error.code);
+      console.error(`❌ Error name:`, error.name);
+      console.log('S3 file update failed, but DynamoDB was updated');
+    }
+    
     return {
       success: true,
       fileId,
-      newName,
+      oldName: file.name,
+      newName: newName.trim(),
+      oldPath: file.path,
+      newPath,
       updatedAt: timestamp
     };
     
@@ -428,6 +484,215 @@ export async function deleteFile(userId, fileId) {
   }
 }
 
+export async function deleteFolder(userId, folderId) {
+  try {
+    const folder = await getFolderById(userId, folderId);
+    if (!folder) {
+      throw new Error('Folder not found');
+    }
+    
+    if (folder.type !== 'folder') {
+      throw new Error('Item is not a folder');
+    }
+    
+    // First, get all contents of the folder (files and subfolders)
+    const contents = await listFolderContents(userId, folderId, 1000); // Get up to 1000 items
+    
+    // Recursively delete all files in the folder
+    let failedFiles = [];
+    for (const file of contents.files || []) {
+      try {
+        await deleteFile(userId, file.id);
+        console.log(`✅ Deleted file: ${file.name}`);
+      } catch (error) {
+        console.error(`❌ Failed to delete file ${file.name}:`, error);
+        failedFiles.push({ file: file.name, error: error.message });
+      }
+    }
+
+    // If any files failed to delete, throw an error
+    if (failedFiles.length > 0) {
+      throw new Error(`Failed to delete ${failedFiles.length} files: ${failedFiles.map(f => f.file).join(', ')}`);
+    }
+    
+    // Recursively delete all subfolders
+    let failedFolders = [];
+    for (const subfolder of contents.folders || []) {
+      try {
+        await deleteFolder(userId, subfolder.id);
+        console.log(`✅ Deleted subfolder: ${subfolder.name}`);
+      } catch (error) {
+        console.error(`❌ Failed to delete subfolder ${subfolder.name}:`, error);
+        failedFolders.push({ folder: subfolder.name, error: error.message });
+      }
+    }
+
+    // If any subfolders failed to delete, throw an error
+    if (failedFolders.length > 0) {
+      throw new Error(`Failed to delete ${failedFolders.length} subfolders: ${failedFolders.map(f => f.folder).join(', ')}`);
+    }
+    
+    // Delete the folder's S3 marker (if it exists)
+    try {
+      await s3Client.send(new DeleteObjectCommand({
+        Bucket: BUCKET_NAME,
+        Key: `${folder.s3Key}/.folder`
+      }));
+      console.log(`✅ Deleted folder marker from S3: ${folder.s3Key}/.folder`);
+    } catch (error) {
+      // S3 key might not exist, which is fine
+      console.log('S3 folder marker not found, continuing...');
+    }
+    
+    // Delete folder metadata from DynamoDB using CRUD API
+    const deleteData = {
+      tableName: 'brmh-drive-files',
+      id: folderId
+    };
+    
+    const response = await fetch(`${CRUD_API_BASE_URL}/crud?tableName=brmh-drive-files`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(deleteData)
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to delete folder metadata');
+    }
+    
+    return {
+      success: true,
+      folderId,
+      folderName: folder.name,
+      deletedAt: new Date().toISOString(),
+      deletedItems: {
+        files: contents.files?.length || 0,
+        folders: contents.folders?.length || 0
+      }
+    };
+    
+  } catch (error) {
+    console.error('Error deleting folder:', error);
+    throw error;
+  }
+}
+
+export async function renameFolder(userId, folderId, newName) {
+  try {
+    const folder = await getFolderById(userId, folderId);
+    if (!folder) {
+      throw new Error('Folder not found');
+    }
+    
+    if (folder.type !== 'folder') {
+      throw new Error('Item is not a folder');
+    }
+    
+    if (!newName || newName.trim() === '') {
+      throw new Error('New folder name is required');
+    }
+    
+    const timestamp = new Date().toISOString();
+    
+    // Update folder name and path
+    const newPath = folder.parentId === 'ROOT' 
+      ? newName.trim() 
+      : folder.path.replace(folder.name, newName.trim());
+    
+    // Calculate new S3 key
+    const newS3Key = getFolderS3Key(userId, newPath);
+    
+    // Update using CRUD API
+    const updateData = {
+      tableName: 'brmh-drive-files',
+      key: {
+        id: folderId
+      },
+      updates: {
+        name: newName.trim(),
+        path: newPath,
+        s3Key: newS3Key,
+        updatedAt: timestamp
+      }
+    };
+    
+    const response = await fetch(`${CRUD_API_BASE_URL}/crud?tableName=brmh-drive-files`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updateData)
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to rename folder');
+    }
+    
+    // Update S3 folder marker (if it exists)
+    console.log(`🔄 Updating S3 folder marker: ${folder.s3Key}/.folder → ${newS3Key}/.folder`);
+    try {
+      // Check if old S3 folder marker exists and copy to new location
+      console.log(`🔍 Checking if old folder marker exists: ${folder.s3Key}/.folder`);
+      await s3Client.send(new HeadObjectCommand({
+        Bucket: BUCKET_NAME,
+        Key: `${folder.s3Key}/.folder`
+      }));
+      console.log(`✅ Old folder marker found`);
+      
+      // Copy folder marker to new location
+      console.log(`📋 Copying folder marker to new location: ${newS3Key}/.folder`);
+      await s3Client.send(new CopyObjectCommand({
+        Bucket: BUCKET_NAME,
+        CopySource: `${BUCKET_NAME}/${folder.s3Key}/.folder`,
+        Key: `${newS3Key}/.folder`,
+        Metadata: {
+          userId,
+          folderId,
+          parentId: folder.parentId,
+          renamedAt: timestamp
+        }
+      }));
+      console.log(`✅ Folder marker copied successfully`);
+      
+      // Delete old S3 folder marker
+      console.log(`🗑️ Deleting old folder marker: ${folder.s3Key}/.folder`);
+      await s3Client.send(new DeleteObjectCommand({
+        Bucket: BUCKET_NAME,
+        Key: `${folder.s3Key}/.folder`
+      }));
+      console.log(`✅ Old folder marker deleted successfully`);
+      
+      console.log(`✅ Folder marker renamed in S3: ${folder.s3Key}/.folder → ${newS3Key}/.folder`);
+      
+    } catch (error) {
+      // Handle NotFound error specifically (folder marker doesn't exist)
+      if (error.name === 'NotFound') {
+        console.log(`ℹ️ Old folder marker doesn't exist, skipping S3 folder marker update`);
+        console.log(`ℹ️ This is normal for folders without explicit folder markers`);
+        
+      } else {
+        // Other S3 errors
+        console.error(`❌ S3 folder marker update failed:`, error.message);
+        console.error(`❌ Full S3 error:`, error);
+        console.error(`❌ Error code:`, error.code);
+        console.error(`❌ Error name:`, error.name);
+        console.log('S3 folder marker not found or already updated, continuing...');
+      }
+    }
+    
+    return {
+      success: true,
+      folderId,
+      oldName: folder.name,
+      newName: newName.trim(),
+      newPath,
+      updatedAt: timestamp
+    };
+    
+  } catch (error) {
+    console.error('Error renaming folder:', error);
+    throw error;
+  }
+}
+
 export async function generateDownloadUrl(userId, fileId) {
   try {
     const file = await getFileById(userId, fileId);
@@ -438,9 +703,11 @@ export async function generateDownloadUrl(userId, fileId) {
     // Generate presigned URL (expires in 1 hour)
     const { getSignedUrl } = await import('@aws-sdk/s3-request-presigner');
     const command = new GetObjectCommand({
-      Bucket: BUCKET_NAME,
-      Key: file.s3Key
-    });
+  Bucket: BUCKET_NAME,
+  Key: file.s3Key,
+  // Add this to force download instead of view
+  ResponseContentDisposition: `attachment; filename="${file.name}"`
+});
     
     const presignedUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
     
@@ -943,6 +1210,326 @@ export async function deleteNamespaceFolder(folderPath) {
   }
 }
 
+// Move file to different folder
+export async function moveFile(userId, fileId, newParentId) {
+  try {
+    console.log('=== MOVE FILE OPERATION ===');
+    console.log('userId:', userId);
+    console.log('fileId:', fileId);
+    console.log('newParentId:', newParentId);
+    
+    // Get the file to move
+    const file = await getFileById(userId, fileId);
+    if (!file) {
+      throw new Error('File not found');
+    }
+    
+    if (file.type !== 'file') {
+      throw new Error('Item is not a file');
+    }
+    
+    // Validate new parent folder exists
+    if (newParentId !== 'ROOT') {
+      const parentFolder = await getFolderById(userId, newParentId);
+      if (!parentFolder) {
+        throw new Error('Destination folder not found');
+      }
+    }
+    
+    const timestamp = new Date().toISOString();
+    
+    // Calculate new path
+    let newPath = '';
+    if (newParentId === 'ROOT') {
+      newPath = file.name;
+    } else {
+      const parentFolder = await getFolderById(userId, newParentId);
+      newPath = parentFolder.path ? `${parentFolder.path}/${file.name}` : file.name;
+    }
+    
+    // Calculate new S3 key
+    const newS3Key = getS3Key(userId, newPath.replace(`/${file.name}`, ''), file.name);
+    
+    // Update file metadata in DynamoDB
+    const updateData = {
+      tableName: 'brmh-drive-files',
+      key: {
+        id: fileId
+      },
+      updates: {
+        parentId: newParentId,
+        path: newPath,
+        s3Key: newS3Key,
+        updatedAt: timestamp
+      }
+    };
+    
+    const response = await fetch(`${CRUD_API_BASE_URL}/crud?tableName=brmh-drive-files`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updateData)
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to update file metadata');
+    }
+    
+    // Move file in S3
+    try {
+      // Copy file to new location
+      await s3Client.send(new CopyObjectCommand({
+        Bucket: BUCKET_NAME,
+        CopySource: `${BUCKET_NAME}/${file.s3Key}`,
+        Key: newS3Key,
+        Metadata: {
+          userId,
+          fileId,
+          parentId: newParentId,
+          movedAt: timestamp
+        }
+      }));
+      
+      // Delete old file
+      await s3Client.send(new DeleteObjectCommand({
+        Bucket: BUCKET_NAME,
+        Key: file.s3Key
+      }));
+      
+      console.log('✅ File moved successfully in S3');
+    } catch (error) {
+      console.error('❌ Error moving file in S3:', error);
+      throw new Error('Failed to move file in storage');
+    }
+    
+    return {
+      success: true,
+      fileId,
+      oldPath: file.path,
+      newPath,
+      oldParentId: file.parentId,
+      newParentId,
+      updatedAt: timestamp
+    };
+    
+  } catch (error) {
+    console.error('Error moving file:', error);
+    throw error;
+  }
+}
+
+// Move folder to different parent
+export async function moveFolder(userId, folderId, newParentId) {
+  try {
+    console.log('=== MOVE FOLDER OPERATION ===');
+    console.log('userId:', userId);
+    console.log('folderId:', folderId);
+    console.log('newParentId:', newParentId);
+    
+    // Get the folder to move
+    const folder = await getFolderById(userId, folderId);
+    if (!folder) {
+      throw new Error('Folder not found');
+    }
+    
+    if (folder.type !== 'folder') {
+      throw new Error('Item is not a folder');
+    }
+    
+    // Validate new parent folder exists
+    if (newParentId !== 'ROOT') {
+      const parentFolder = await getFolderById(userId, newParentId);
+      if (!parentFolder) {
+        throw new Error('Destination folder not found');
+      }
+    }
+    
+    // Prevent moving folder into itself or its subfolders
+    if (newParentId === folderId) {
+      throw new Error('Cannot move folder into itself');
+    }
+    
+    // Check if newParentId is a subfolder of folderId
+    const isSubfolder = await checkIfSubfolder(userId, newParentId, folderId);
+    if (isSubfolder) {
+      throw new Error('Cannot move folder into its own subfolder');
+    }
+    
+    const timestamp = new Date().toISOString();
+    
+    // Calculate new path
+    let newPath = '';
+    if (newParentId === 'ROOT') {
+      newPath = folder.name;
+    } else {
+      const parentFolder = await getFolderById(userId, newParentId);
+      newPath = parentFolder.path ? `${parentFolder.path}/${folder.name}` : folder.name;
+    }
+    
+    // Calculate new S3 key
+    const newS3Key = getFolderS3Key(userId, newPath);
+    
+    // Update folder metadata in DynamoDB
+    const updateData = {
+      tableName: 'brmh-drive-files',
+      key: {
+        id: folderId
+      },
+      updates: {
+        parentId: newParentId,
+        path: newPath,
+        s3Key: newS3Key,
+        updatedAt: timestamp
+      }
+    };
+    
+    const response = await fetch(`${CRUD_API_BASE_URL}/crud?tableName=brmh-drive-files`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updateData)
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to update folder metadata');
+    }
+    
+    // Update all child items' paths
+    await updateChildItemsPaths(userId, folderId, folder.path, newPath);
+    
+    // Move folder marker in S3
+    try {
+      // Copy folder marker to new location
+      await s3Client.send(new CopyObjectCommand({
+        Bucket: BUCKET_NAME,
+        CopySource: `${BUCKET_NAME}/${folder.s3Key}/.folder`,
+        Key: `${newS3Key}/.folder`,
+        Metadata: {
+          userId,
+          folderId,
+          parentId: newParentId,
+          movedAt: timestamp
+        }
+      }));
+      
+      // Delete old folder marker
+      await s3Client.send(new DeleteObjectCommand({
+        Bucket: BUCKET_NAME,
+        Key: `${folder.s3Key}/.folder`
+      }));
+      
+      console.log('✅ Folder moved successfully in S3');
+    } catch (error) {
+      console.log('S3 folder marker not found or already updated, continuing...');
+    }
+    
+    return {
+      success: true,
+      folderId,
+      oldPath: folder.path,
+      newPath,
+      oldParentId: folder.parentId,
+      newParentId,
+      updatedAt: timestamp
+    };
+    
+  } catch (error) {
+    console.error('Error moving folder:', error);
+    throw error;
+  }
+}
+
+// Helper function to check if a folder is a subfolder of another
+async function checkIfSubfolder(userId, folderId, parentFolderId) {
+  try {
+    const folder = await getFolderById(userId, folderId);
+    if (!folder || folder.parentId === 'ROOT') {
+      return false;
+    }
+    
+    if (folder.parentId === parentFolderId) {
+      return true;
+    }
+    
+    return await checkIfSubfolder(userId, folder.parentId, parentFolderId);
+  } catch (error) {
+    return false;
+  }
+}
+
+// Helper function to update all child items' paths
+async function updateChildItemsPaths(userId, folderId, oldPath, newPath) {
+  try {
+    // Get all child items
+    const contents = await listFolderContents(userId, folderId, 1000);
+    
+    // Update files
+    for (const file of contents.files || []) {
+      const newFilePath = file.path.replace(oldPath, newPath);
+      const newFileS3Key = getS3Key(userId, newFilePath.replace(`/${file.name}`, ''), file.name);
+      
+      const updateData = {
+        tableName: 'brmh-drive-files',
+        key: { id: file.id },
+        updates: {
+          path: newFilePath,
+          s3Key: newFileS3Key,
+          updatedAt: new Date().toISOString()
+        }
+      };
+      
+      await fetch(`${CRUD_API_BASE_URL}/crud?tableName=brmh-drive-files`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updateData)
+      });
+      
+      // Move file in S3
+      try {
+        await s3Client.send(new CopyObjectCommand({
+          Bucket: BUCKET_NAME,
+          CopySource: `${BUCKET_NAME}/${file.s3Key}`,
+          Key: newFileS3Key
+        }));
+        
+        await s3Client.send(new DeleteObjectCommand({
+          Bucket: BUCKET_NAME,
+          Key: file.s3Key
+        }));
+      } catch (error) {
+        console.log(`S3 file ${file.name} not found or already updated, continuing...`);
+      }
+    }
+    
+    // Update subfolders recursively
+    for (const subfolder of contents.folders || []) {
+      const newSubfolderPath = subfolder.path.replace(oldPath, newPath);
+      const newSubfolderS3Key = getFolderS3Key(userId, newSubfolderPath);
+      
+      const updateData = {
+        tableName: 'brmh-drive-files',
+        key: { id: subfolder.id },
+        updates: {
+          path: newSubfolderPath,
+          s3Key: newSubfolderS3Key,
+          updatedAt: new Date().toISOString()
+        }
+      };
+      
+      await fetch(`${CRUD_API_BASE_URL}/crud?tableName=brmh-drive-files`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updateData)
+      });
+      
+      // Recursively update child items
+      await updateChildItemsPaths(userId, subfolder.id, subfolder.path, newSubfolderPath);
+    }
+    
+  } catch (error) {
+    console.error('Error updating child items paths:', error);
+    throw error;
+  }
+}
+
 export default {
   // File operations
   uploadFile,
@@ -950,12 +1537,16 @@ export default {
   listFiles,
   renameFile,
   deleteFile,
+  moveFile,
   
   // Folder operations
   createFolder,
   getFolderById,
   listFolders,
   listFolderContents,
+  deleteFolder,
+  renameFolder,
+  moveFolder,
   
   // Namespace folder operations
   createNamespaceFolder,
@@ -976,3 +1567,4 @@ export default {
   // System
   initializeDriveSystem
 };
+
