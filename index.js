@@ -57,6 +57,7 @@ import { execute } from './utils/execute.js';
 import { mockDataAgent } from './lib/mock-data-agent.js';
 import { fetchOrdersWithShortIdsHandler } from './utils/fetchOrder.js';
 import brmhDrive from './utils/brmh-drive.js';
+import { registerNotificationRoutes, notifyEvent, buildCrudEvent, buildUnifiedNamespaceEvent } from './utils/notifications.js';
 
 import { 
   loginHandler,
@@ -175,6 +176,9 @@ app.post('/api/mock-server/stop', (req, res) => {
 
 app.get("/test",(req,res)=>{res.send("hello! world");
 })
+// Register Notifications routes
+registerNotificationRoutes(app, docClient);
+
 
 
 // Initialize AWS DynamoDB OpenAPI backend
@@ -1668,6 +1672,15 @@ app.all('/crud', async (req, res) => {
       body = JSON.parse(result.body);
     } catch {}
     res.json(body);
+
+    // Emit notification event (non-blocking)
+    try {
+      const crudNotifyEvent = buildCrudEvent({ method: req.method, tableName: req.query?.tableName, body: req.body, result: body });
+      console.log('[Index] Emitting CRUD event:', crudNotifyEvent);
+      notifyEvent(crudNotifyEvent).catch(err => console.error('[Index] CRUD notifyEvent error:', err));
+    } catch (e) {
+      console.warn('[Notify] Failed to emit CRUD event:', e.message);
+    }
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1764,6 +1777,17 @@ app.all('/unified/*', upload.single('icon'), async (req, res) => {
     }
 
     res.status(response.statusCode).json(response.body);
+
+    // Attempt to emit namespace-related events
+    try {
+      const evt = buildUnifiedNamespaceEvent({ method: req.method, path: req.path, response: response?.body });
+      if (evt) {
+        console.log('[Index] Emitting unified namespace event:', evt);
+        notifyEvent(evt).catch(err => console.error('[Index] Unified notifyEvent error:', err));
+      }
+    } catch (e) {
+      console.warn('[Notify] Failed to emit unified namespace event:', e.message);
+    }
   } catch (error) {
     console.error('[Unified API] Error:', error.message);
     res.status(500).json({
