@@ -2295,6 +2295,73 @@ app.get('/drive/shared/:userId/:shareId/download', async (req, res) => {
   }
 });
 
+// Delete folder endpoint
+app.delete('/drive/folder/:userId/:folderId', async (req, res) => {
+  try {
+    const { userId, folderId } = req.params;
+    
+    const result = await brmhDrive.deleteFolder(userId, folderId);
+    res.json(result);
+  } catch (error) {
+    console.error('Drive delete folder error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Rename folder endpoint
+app.patch('/drive/rename/folder/:userId/:folderId', async (req, res) => {
+  try {
+    const { userId, folderId } = req.params;
+    const { newName } = req.body;
+    
+    if (!newName) {
+      return res.status(400).json({ error: 'newName is required' });
+    }
+    
+    const result = await brmhDrive.renameFolder(userId, folderId, newName);
+    res.json(result);
+  } catch (error) {
+    console.error('Drive rename folder error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Move file to different folder
+app.patch('/drive/move/file/:userId/:fileId', async (req, res) => {
+  try {
+    const { userId, fileId } = req.params;
+    const { newParentId } = req.body;
+    
+    if (!newParentId) {
+      return res.status(400).json({ error: 'newParentId is required' });
+    }
+    
+    const result = await brmhDrive.moveFile(userId, fileId, newParentId);
+    res.json(result);
+  } catch (error) {
+    console.error('Drive move file error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Move folder to different parent
+app.patch('/drive/move/folder/:userId/:folderId', async (req, res) => {
+  try {
+    const { userId, folderId } = req.params;
+    const { newParentId } = req.body;
+    
+    if (!newParentId) {
+      return res.status(400).json({ error: 'newParentId is required' });
+    }
+    
+    const result = await brmhDrive.moveFolder(userId, folderId, newParentId);
+    res.json(result);
+  } catch (error) {
+    console.error('Drive move folder error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Debug endpoint to see raw data structure
 app.get('/orders/debug', async (req, res) => {
   try {
