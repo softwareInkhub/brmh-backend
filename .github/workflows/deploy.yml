@@ -159,8 +159,8 @@ jobs:
           # We'll rely on system logrotate instead of PM2 logrotate
           echo "PM2 logrotate disabled - using system logrotate only"
           
-          # Create PM2 ecosystem file with log limits
-          cat > ecosystem.config.js << 'EOF'
+          # Create PM2 ecosystem file with log limits (CommonJS for PM2)
+          cat > ecosystem.config.cjs << 'EOF'
           module.exports = {
             apps: [{
               name: 'brmh-backend-v2',
@@ -187,10 +187,10 @@ jobs:
           
           # === APPLICATION STARTUP ===
           echo "🚀 Starting application with ecosystem config..."
-          pm2 start ecosystem.config.js
+          pm2 start ecosystem.config.cjs
           
-          # Save PM2 configuration
-          pm2 save
+          # Save PM2 configuration after successful start
+          pm2 save --force
           
           # === SYSTEM SERVICE SETUP ===
           echo "⚙️ Setting up PM2 startup script..."
