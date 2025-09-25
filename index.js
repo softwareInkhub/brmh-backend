@@ -96,9 +96,9 @@ console.log('AWS Configuration Check:', {
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ limit: '50mb', extended: true }));
-app.use(express.text({ limit: '50mb' })); // Add support for text/plain
+app.use(express.json({ limit: '200mb' }));
+app.use(express.urlencoded({ limit: '200mb', extended: true }));
+app.use(express.text({ limit: '200mb' })); // Add support for text/plain
 
 // Add specific middleware for cache endpoints to handle large responses
 app.use('/cache/data', (req, res, next) => {
@@ -107,20 +107,10 @@ app.use('/cache/data', (req, res, next) => {
   next();
 });
 
-// Configure multer for file uploads
+// Configure multer for file uploads (allow all types, up to 100MB)
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: {
-    fileSize: 5 * 1024 * 1024, // 5MB limit
-  },
-  fileFilter: (req, file, cb) => {
-    // Only allow image files
-    if (file.mimetype.startsWith('image/')) {
-      cb(null, true);
-    } else {
-      cb(new Error('Only image files are allowed'), false);
-    }
-  }
+  limits: { fileSize: 100 * 1024 * 1024 }
 });
 // File storage configuration
 const __filename = fileURLToPath(import.meta.url);
@@ -1994,7 +1984,9 @@ app.post('/drive/upload', upload.single('file'), async (req, res) => {
     if (req.file) {
       const fileBuffer = req.file.buffer;
       const base64Content = fileBuffer.toString('base64');
-      const tagsArray = tags ? tags.split(',').map(tag => tag.trim()) : [];
+      const tagsArray = tags
+        ? (Array.isArray(tags) ? tags : String(tags).split(',').map(tag => tag.trim()))
+        : [];
       
       // Add field name to tags for namespace uploads
       if (fieldName) {
@@ -2010,8 +2002,8 @@ app.post('/drive/upload', upload.single('file'), async (req, res) => {
       };
     }
     // Handle JSON request (base64 content)
-    else if (req.body.fileData) {
-      fileData = req.body.fileData;
+    else if (req.body.fileData || req.body.file) {
+      fileData = req.body.fileData || req.body.file;
     }
     else {
       return res.status(400).json({ error: 'Either file upload or fileData is required' });
@@ -2184,6 +2176,17 @@ app.get('/drive/download/:userId/:fileId', async (req, res) => {
     res.json(result);
   } catch (error) {
     console.error('Drive download URL generation error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/drive/preview/:userId/:fileId', async (req, res) => {
+  try {
+    const { userId, fileId } = req.params;
+    const result = await brmhDrive.generatePreviewUrl(userId, fileId);
+    res.json(result);
+  } catch (error) {
+    console.error('Drive preview URL generation error:', error);
     res.status(500).json({ error: error.message });
   }
 });
