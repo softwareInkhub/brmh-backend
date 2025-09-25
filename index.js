@@ -57,6 +57,7 @@ import { execute } from './utils/execute.js';
 import { mockDataAgent } from './lib/mock-data-agent.js';
 import { fetchOrdersWithShortIdsHandler } from './utils/fetchOrder.js';
 import brmhDrive from './utils/brmh-drive.js';
+import { registerNotificationRoutes, notifyEvent, buildCrudEvent, buildUnifiedNamespaceEvent } from './utils/notifications.js';
 
 import { 
   loginHandler,
@@ -76,9 +77,12 @@ import {
 
 // Load environment variables
 dotenv.config();
-console.log("AWS_ACCESS_KEY_ID", process.env.AWS_ACCESS_KEY_ID);
-console.log("AWS_SECRET_ACCESS_KEY", process.env.AWS_SECRET_ACCESS_KEY);
-console.log("AWS_REGION", process.env.AWS_REGION);
+// Only log AWS config in development
+if (process.env.NODE_ENV !== 'production') {
+  console.log("AWS_ACCESS_KEY_ID", process.env.AWS_ACCESS_KEY_ID ? 'SET' : 'NOT SET');
+  console.log("AWS_SECRET_ACCESS_KEY", process.env.AWS_SECRET_ACCESS_KEY ? 'SET' : 'NOT SET');
+  console.log("AWS_REGION", process.env.AWS_REGION);
+}
 
 
 
@@ -165,6 +169,9 @@ app.post('/api/mock-server/stop', (req, res) => {
 
 app.get("/test",(req,res)=>{res.send("hello! world");
 })
+// Register Notifications routes
+registerNotificationRoutes(app, docClient);
+
 
 
 // Initialize AWS DynamoDB OpenAPI backend
@@ -300,7 +307,7 @@ app.post('/lambda/deploy', async (req, res) => {
     console.log(`[Lambda Deployment] Deploying function: ${functionName}`);
     console.log(`[Lambda Deployment] Request body:`, { functionName, runtime, handler, memorySize, timeout, dependencies, environment, createApiGateway });
     
-    // Set timeout for the entire deployment process (10 minutes)
+    // Set timeout for the entire deployment process (15 minutes)
     const deploymentPromise = lambdaDeploymentManager.deployLambdaFunction(
       functionName, 
       code, 
@@ -314,7 +321,7 @@ app.post('/lambda/deploy', async (req, res) => {
     );
     
     const timeoutPromise = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error('Deployment timed out after 10 minutes')), 10 * 60 * 1000);
+      setTimeout(() => reject(new Error('Deployment timed out after 15 minutes')), 15 * 60 * 1000);
     });
     
     const result = await Promise.race([deploymentPromise, timeoutPromise]);
@@ -728,6 +735,111 @@ app.post('/ai-agent/lambda-codegen', async (req, res) => {
 
 
 
+// Schema upload and Lambda generation endpoint
+app.post('/ai-agent/schema-lambda-generation', async (req, res) => {
+  try {
+    const { message, schemas, namespaceId, functionName, runtime, handler, memory, timeout, environment } = req.body;
+    console.log('[Schema Lambda Generation] Request received:', { 
+      message, 
+      schemaCount: schemas?.length || 0, 
+      namespaceId, 
+      functionName 
+    });
+
+    // Import the Lambda generation functions
+    const { handleLambdaCodegen, analyzeSchemas } = await import('./lib/llm-agent-system.js');
+    
+    // Set up streaming response
+    res.writeHead(200, {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Transfer-Encoding': 'chunked',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    });
+
+    // Analyze uploaded schemas
+    let schemaAnalysis = null;
+    if (schemas && schemas.length > 0) {
+      console.log('[Schema Lambda Generation] Analyzing uploaded schemas...');
+      schemaAnalysis = await analyzeSchemas(schemas, message);
+      
+      // Send schema analysis to frontend
+      const analysisResponse = {
+        type: 'schema_analysis',
+        analysis: schemaAnalysis,
+        route: 'chat'
+      };
+      
+      res.write(`data: ${JSON.stringify(analysisResponse)}\n\n`);
+    }
+
+    // Generate Lambda function
+    const lambdaCodegenParams = {
+      message: message,
+      selectedSchema: null,
+      functionName: functionName || 'SchemaHandler',
+      runtime: runtime || 'nodejs18.x',
+      handler: handler || 'index.handler',
+      memory: memory || 256,
+      timeout: timeout || 30,
+      environment: environment || null,
+      namespace: namespaceId,
+      res: null,
+      uploadedSchemas: schemas || []
+    };
+
+    const result = await handleLambdaCodegen(lambdaCodegenParams);
+
+    if (result.generatedCode) {
+      // Send Lambda code generation response
+      const lambdaResponse = {
+        type: 'lambda_code',
+        schemaName: schemaAnalysis ? `MultiSchema_${schemaAnalysis.totalSchemas}` : 'SchemaHandler',
+        schema: schemaAnalysis ? { 
+          name: 'MultiSchema', 
+          schemas: schemas,
+          analysis: schemaAnalysis 
+        } : null,
+        code: result.generatedCode,
+        route: 'lambda'
+      };
+      
+      res.write(`data: ${JSON.stringify(lambdaResponse)}\n\n`);
+      
+      // Send success message
+      const chatMessage = {
+        type: 'chat',
+        content: `✅ Generated Lambda function using ${schemas?.length || 0} uploaded schemas!\n\nCheck the Lambda tab to see the generated code!`,
+        route: 'chat'
+      };
+      
+      res.write(`data: ${JSON.stringify(chatMessage)}\n\n`);
+    } else {
+      // Send error message
+      const errorMessage = {
+        type: 'chat',
+        content: `❌ Failed to generate Lambda function: ${result.error || 'Unknown error'}`,
+        route: 'chat'
+      };
+      
+      res.write(`data: ${JSON.stringify(errorMessage)}\n\n`);
+    }
+
+    res.write('data: [DONE]\n\n');
+    res.end();
+
+  } catch (error) {
+    console.error('[Schema Lambda Generation] Error:', error);
+    res.write(`data: ${JSON.stringify({ 
+      type: 'chat',
+      content: `❌ Error generating Lambda function: ${error.message}`,
+      route: 'chat'
+    })}\n\n`);
+    res.write('data: [DONE]\n\n');
+    res.end();
+  }
+});
+
 // Workspace Guidance and Navigation endpoint
 app.post('/ai-agent/workspace-guidance', async (req, res) => {
   try {
@@ -979,7 +1091,7 @@ app.post('/web-scraping/scrape-and-save', async (req, res) => {
 
     try {
       // Scrape the service with namespace management
-      const scrapedData = await webScrapingAgent.scrapeService(serviceName, options, docClient);
+      const scrapedData = await webScrapingAgent.scrapeService(serviceName, options, docClient, namespaceId);
       
       // Handle namespace information
       let namespaceMessage = '';
@@ -1083,7 +1195,7 @@ app.post('/web-scraping/scrape-auto-namespace', async (req, res) => {
 
     try {
       // Scrape the service with automatic namespace management
-      const scrapedData = await webScrapingAgent.scrapeService(serviceName, options, docClient);
+      const scrapedData = await webScrapingAgent.scrapeService(serviceName, options, docClient, null);
       
       // Handle namespace information
       let namespaceMessage = '';
@@ -1553,6 +1665,15 @@ app.all('/crud', async (req, res) => {
       body = JSON.parse(result.body);
     } catch {}
     res.json(body);
+
+    // Emit notification event (non-blocking)
+    try {
+      const crudNotifyEvent = buildCrudEvent({ method: req.method, tableName: req.query?.tableName, body: req.body, result: body });
+      console.log('[Index] Emitting CRUD event:', crudNotifyEvent);
+      notifyEvent(crudNotifyEvent).catch(err => console.error('[Index] CRUD notifyEvent error:', err));
+    } catch (e) {
+      console.warn('[Notify] Failed to emit CRUD event:', e.message);
+    }
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1649,6 +1770,17 @@ app.all('/unified/*', upload.single('icon'), async (req, res) => {
     }
 
     res.status(response.statusCode).json(response.body);
+
+    // Attempt to emit namespace-related events
+    try {
+      const evt = buildUnifiedNamespaceEvent({ method: req.method, path: req.path, response: response?.body });
+      if (evt) {
+        console.log('[Index] Emitting unified namespace event:', evt);
+        notifyEvent(evt).catch(err => console.error('[Index] Unified notifyEvent error:', err));
+      }
+    } catch (e) {
+      console.warn('[Notify] Failed to emit unified namespace event:', e.message);
+    }
   } catch (error) {
     console.error('[Unified API] Error:', error.message);
     res.status(500).json({

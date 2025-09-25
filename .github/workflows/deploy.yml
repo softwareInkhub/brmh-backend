@@ -28,55 +28,172 @@ jobs:
         username: ubuntu
         key: ${{ secrets.EC2_SSH_KEY }}
         script: |
-          # Clean up disk space first
-          echo "🧹 Cleaning up disk space..."
+          # === COMPREHENSIVE CLEANUP AND DISK SPACE MANAGEMENT ===
+          echo "🧹 Starting comprehensive cleanup..."
+          
+          # System cleanup
           sudo apt-get clean
           sudo apt-get autoremove -y
           sudo rm -rf /var/cache/apt/archives/*
           sudo rm -rf /tmp/*
           sudo rm -rf /var/tmp/*
           
-          # Check disk space
+          # Clean Docker if installed
+          if command -v docker &> /dev/null; then
+            echo "🐳 Cleaning Docker..."
+            sudo docker system prune -f || true
+          fi
+          
+          # Clean journal logs
+          echo "📋 Cleaning system logs..."
+          sudo journalctl --vacuum-size=50M || true
+          sudo journalctl --vacuum-time=7d || true
+          
+          # Check initial disk space
+          echo "📊 Initial disk space:"
           df -h
           
           # Navigate to project directory
           cd /home/ubuntu/brmh-backend
           
-          # Pull latest changes
+          # === PM2 LOGS CLEANUP ===
+          echo "🗂️ Cleaning PM2 logs..."
+          pm2 flush || true
+          
+          # Clean PM2 log directory
+          if [ -d "$HOME/.pm2/logs" ]; then
+            echo "🗂️ Removing old PM2 logs..."
+            sudo rm -rf $HOME/.pm2/logs/*
+          fi
+          
+          # === NPM AND NODE CLEANUP ===
+          echo "🧹 Deep cleaning npm and node..."
+          
+          # Stop existing PM2 processes first
+          pm2 stop all || true
+          pm2 delete all || true
+          
+          # Clean npm cache aggressively
+          npm cache clean --force
+          npm cache verify
+          
+          # Remove any corrupted npm cache
+          rm -rf ~/.npm/_cacache
+          rm -rf ~/.npm/_logs
+          rm -rf ~/.npm/_npx
+          
+          # Remove node_modules only (keep package-lock.json for npm ci)
+          rm -rf node_modules
+          
+          # Clean global npm cache
+          sudo npm cache clean --force
+          
+          # Clear any npm temporary files
+          rm -rf ~/.npm/_cacache
+          rm -rf ~/.npm/_logs
+          
+          # === GIT OPERATIONS ===
+          echo "📦 Updating code..."
+          git clean -fd
+          git reset --hard HEAD
           git pull origin main
           
-          # Clean npm cache and node_modules to free space
-          echo "🧹 Cleaning npm cache and node_modules..."
-          npm cache clean --force
-          rm -rf node_modules
-          rm -rf package-lock.json
+          # === DEPENDENCY INSTALLATION ===
+          echo "📦 Installing dependencies with optimizations..."
           
-          # Install dependencies with clean cache
-          echo "📦 Installing dependencies..."
-          npm install --no-optional --no-audit --no-fund
+          # Check disk space before installation
+          echo "📊 Disk space before npm install:"
+          df -h
           
-          # Install PM2 globally with proper path
-          echo "🚀 Installing PM2..."
-          sudo npm install -g pm2 --unsafe-perm
+          # Check available space
+          available_space=$(df / | awk 'NR==2 {print $4}')
+          echo "📊 Available space: ${available_space}KB"
           
-          # Verify PM2 installation
-          which pm2
-          pm2 --version
+          # Always use npm install to ensure lock file is in sync
+          echo "📦 Using npm install to ensure package-lock.json is in sync"
+          echo "📊 Package.json exists: $([ -f "package.json" ] && echo "Yes" || echo "No")"
+          echo "📊 Package-lock.json exists: $([ -f "package-lock.json" ] && echo "Yes" || echo "No")"
           
-          # Stop any existing instances
-          echo "🛑 Stopping existing instances..."
-          pm2 stop brmh-backend-v2 || true
-          pm2 delete brmh-backend-v2 || true
+          # Install dependencies with production flag
+          echo "🔄 Attempting npm install..."
+          NODE_ENV=production npm install --omit=dev --omit=optional --no-audit --no-fund
           
-          # Start the application
-          echo "🚀 Starting application..."
-          pm2 start npm --name "brmh-backend-v2" -- start
+          # Verify installation
+          if [ $? -eq 0 ]; then
+            echo "✅ Dependencies installed successfully"
+          else
+            echo "❌ First npm install failed, trying fallback..."
+            
+            # Fallback: Remove lock file and try again
+            echo "🔄 Removing package-lock.json and retrying..."
+            rm -f package-lock.json
+            NODE_ENV=production npm install --omit=dev --omit=optional --no-audit --no-fund
+            
+            if [ $? -eq 0 ]; then
+              echo "✅ Dependencies installed successfully on retry"
+            else
+              echo "❌ Dependency installation failed completely"
+              echo "📊 Final disk space:"
+              df -h
+              echo "📊 npm debug log:"
+              cat ~/.npm/_logs/*.log | tail -20 || echo "No npm logs found"
+              exit 1
+            fi
+          fi
           
-          # Save PM2 process list
-          pm2 save
+          # === PM2 SETUP WITH LOG ROTATION ===
+          echo "🚀 Setting up PM2 with log rotation..."
           
-          # Setup PM2 startup script
-          echo "⚙️ Setting up PM2 startup..."
+          # Install PM2 globally if not exists
+          if ! command -v pm2 &> /dev/null; then
+            sudo npm install -g pm2 --unsafe-perm
+          fi
+          
+          # Remove PM2 logrotate completely to prevent infinite loops
+          pm2 delete pm2-logrotate || true
+          pm2 uninstall pm2-logrotate || true
+          
+          # Clean up any existing logrotate configuration
+          rm -rf ~/.pm2/module_conf.json || true
+          
+          # We'll rely on system logrotate instead of PM2 logrotate
+          echo "PM2 logrotate disabled - using system logrotate only"
+          
+          # Create PM2 ecosystem file with log limits (CommonJS for PM2)
+          cat > ecosystem.config.cjs << 'EOF'
+          module.exports = {
+            apps: [{
+              name: 'brmh-backend-v2',
+              script: 'npm',
+              args: 'start',
+              instances: 1,
+              autorestart: true,
+              watch: false,
+              max_memory_restart: '2G',
+              env: {
+                NODE_ENV: 'production',
+                PORT: 5001
+              },
+              log_file: '/home/ubuntu/.pm2/logs/brmh-backend-v2.log',
+              out_file: '/home/ubuntu/.pm2/logs/brmh-backend-v2-out.log',
+              error_file: '/home/ubuntu/.pm2/logs/brmh-backend-v2-error.log',
+              log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
+              merge_logs: true,
+              max_restarts: 10,
+              min_uptime: '10s'
+            }]
+          };
+          EOF
+          
+          # === APPLICATION STARTUP ===
+          echo "🚀 Starting application with ecosystem config..."
+          pm2 start ecosystem.config.cjs
+          
+          # Save PM2 configuration after successful start
+          pm2 save --force
+          
+          # === SYSTEM SERVICE SETUP ===
+          echo "⚙️ Setting up PM2 startup script..."
           sudo pm2 unstartup systemd || true
           sudo env PATH=$PATH:/usr/bin pm2 startup systemd -u ubuntu --hp /home/ubuntu
           
@@ -87,13 +204,49 @@ jobs:
           sudo systemctl enable pm2-ubuntu
           sudo systemctl start pm2-ubuntu
           
-          # Verify the service is running
-          echo "✅ Verifying service status..."
-          sudo systemctl status pm2-ubuntu --no-pager
+          # === SETUP SYSTEM LOG ROTATION ===
+          echo "⚙️ Setting up system log rotation..."
+          sudo tee /etc/logrotate.d/pm2-ubuntu << 'EOF'
+          /home/ubuntu/.pm2/logs/*.log {
+              daily
+              missingok
+              rotate 3
+              compress
+              notifempty
+              create 0640 ubuntu ubuntu
+              size 50M
+              delaycompress
+              copytruncate
+              postrotate
+                  pm2 reloadLogs || true
+              endscript
+          }
+          EOF
+          
+          # === SETUP CLEANUP CRON JOB ===
+          echo "⏰ Setting up automated cleanup..."
+          (crontab -l 2>/dev/null || true; echo "0 2 * * * /usr/bin/find /home/ubuntu/.pm2/logs -name '*.log' -size +50M -delete") | crontab -
+          (crontab -l 2>/dev/null || true; echo "0 3 * * * /usr/bin/pm2 flush") | crontab -
+          (crontab -l 2>/dev/null || true; echo "0 4 * * 0 /usr/bin/npm cache clean --force") | crontab -
+          
+          # === VERIFICATION ===
+          echo "✅ Verifying deployment..."
           
           # Check PM2 status
           pm2 status
           
-          # Show final disk space
+          # Check log rotation configuration
+          pm2 conf pm2-logrotate
+          
+          # Verify service status
+          sudo systemctl status pm2-ubuntu --no-pager
+          
+          # Check log file sizes
+          echo "📊 Current log file sizes:"
+          find /home/ubuntu/.pm2/logs -name "*.log" -exec ls -lh {} \; 2>/dev/null || echo "No log files found yet"
+          
+          # Final disk space check
           echo "📊 Final disk space:"
-          df -h 
+          df -h
+          
+          echo "🎉 Deployment completed with log management!"
