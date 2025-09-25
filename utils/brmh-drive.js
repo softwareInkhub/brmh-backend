@@ -726,6 +726,38 @@ export async function generateDownloadUrl(userId, fileId) {
   }
 }
 
+export async function generatePreviewUrl(userId, fileId) {
+  try {
+    const file = await getFileById(userId, fileId);
+    if (!file) {
+      throw new Error('File not found');
+    }
+
+    const { getSignedUrl } = await import('@aws-sdk/s3-request-presigner');
+    const command = new GetObjectCommand({
+      Bucket: BUCKET_NAME,
+      Key: file.s3Key,
+      ResponseContentDisposition: `inline; filename="${file.name}"`,
+      ResponseContentType: file.mimeType || 'application/octet-stream'
+    });
+
+    const presignedUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
+
+    return {
+      success: true,
+      previewUrl: presignedUrl,
+      expiresIn: 3600,
+      fileName: file.name,
+      mimeType: file.mimeType,
+      size: file.size
+    };
+
+  } catch (error) {
+    console.error('Error generating preview URL:', error);
+    throw error;
+  }
+}
+
 // Sharing Operations
 export async function shareFile(userId, fileId, shareData) {
   try {
@@ -1554,6 +1586,7 @@ export default {
   
   // Download operations
   generateDownloadUrl,
+  generatePreviewUrl,
   
   // Sharing operations
   shareFile,
