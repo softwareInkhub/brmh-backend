@@ -88,7 +88,11 @@ if (process.env.NODE_ENV !== 'production') {
 
 // Initialize DynamoDB client
 const client = new DynamoDBClient({});
-const docClient = DynamoDBDocumentClient.from(client);
+const docClient = DynamoDBDocumentClient.from(client, {
+  marshallOptions: {
+    removeUndefinedValues: true,
+  },
+});
 
 // Log AWS configuration status
 console.log('AWS Configuration Check:', {
@@ -2503,7 +2507,11 @@ app.get('/orders/debug', async (req, res) => {
     const { DynamoDBDocumentClient, ScanCommand } = await import('@aws-sdk/lib-dynamodb');
     
     const client = new DynamoDBClient({});
-    const docClient = DynamoDBDocumentClient.from(client);
+    const docClient = DynamoDBDocumentClient.from(client, {
+      marshallOptions: {
+        removeUndefinedValues: true,
+      },
+    });
     
     const scanParams = {
       TableName: 'shopify-inkhub-get-products',
