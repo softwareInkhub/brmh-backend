@@ -447,12 +447,53 @@ async function signupHandler(req, res) {
   }
   const displayName = (username || '').toString().trim();
   const sanitized = displayName ? displayName.replace(/\s+/g, '_') : '';
-  const cognitoUsername = email || sanitized;
+  // Do NOT use email as the Cognito username when pool uses email alias. Derive a non-email username.
+  let cognitoUsername = sanitized;
+  if (!cognitoUsername) {
+    const local = String(email).split('@')[0].replace(/[^\p{L}\p{M}\p{S}\p{N}\p{P}]/gu, '_');
+    cognitoUsername = `${local}_${Date.now()}`;
+  }
 
   userPool.signUp(cognitoUsername, password, [{ Name: 'email', Value: email }], null, async (err, result) => {
     if (err) {
       console.error('[Auth] Signup error:', err);
-      return res.status(400).json({ success: false, error: err.message });
+      // If the derived username still conflicts, generate a new one and retry once
+      const msg = (err && err.message) ? String(err.message) : '';
+      const needsRetry = /alias|username.*exists|invalid.*username|email format/i.test(msg);
+      if (!needsRetry) {
+        return res.status(400).json({ success: false, error: err.message });
+      }
+      const fallbackUsername = `${cognitoUsername}_u${Math.floor(Math.random()*1e6)}`;
+      try {
+        userPool.signUp(fallbackUsername, password, [{ Name: 'email', Value: email }], null, async (fallbackErr, fallbackResult) => {
+          if (fallbackErr) {
+            console.error('[Auth] Signup fallback error:', fallbackErr);
+            return res.status(400).json({ success: false, error: fallbackErr.message });
+          }
+          try {
+            const userData = {
+              sub: fallbackResult.userSub,
+              username: displayName || fallbackUsername,
+              email: email,
+              cognitoUsername: fallbackUsername,
+              signupMethod: 'email',
+              verified: false
+            };
+            await createUserRecord(userData);
+          } catch (dbError) {
+            console.error('[Auth] Error creating user record in DynamoDB:', dbError);
+          }
+          return res.status(200).json({
+            success: true,
+            result: fallbackResult,
+            message: 'Account created successfully! Please check your email for verification.'
+          });
+        });
+        return; // prevent double response
+      } catch (retryErr) {
+        console.error('[Auth] Signup retry exception:', retryErr);
+        return res.status(400).json({ success: false, error: msg || 'Signup failed' });
+      }
     }
     
     try {
