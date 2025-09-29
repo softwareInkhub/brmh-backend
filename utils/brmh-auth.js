@@ -1,4 +1,4 @@
-// AWS Amplify Auth setup
+﻿// AWS Amplify Auth setup
 import { CognitoUserPool, CognitoUser, AuthenticationDetails, CognitoUserAttribute } from 'amazon-cognito-identity-js';
 import { CognitoIdentityProviderClient, InitiateAuthCommand, AdminInitiateAuthCommand } from '@aws-sdk/client-cognito-identity-provider';
 import crypto from 'crypto';
@@ -564,7 +564,10 @@ async function loginHandler(req, res) {
   try {
     const client = new CognitoIdentityProviderClient({ region: process.env.AWS_COGNITO_REGION || process.env.AWS_REGION || 'us-east-1' });
 
-    // 1) Try ADMIN_USER_PASSWORD_AUTH (admin-side) – works even if user-password auth is disabled on client
+    let tokens = null;
+    let lastError = null;
+
+    // 1) Try ADMIN_USER_PASSWORD_AUTH first
     try {
       const adminCmd = new AdminInitiateAuthCommand({
         AuthFlow: 'ADMIN_USER_PASSWORD_AUTH',
@@ -573,85 +576,62 @@ async function loginHandler(req, res) {
         AuthParameters: { USERNAME: identifier, PASSWORD: password }
       });
       const adminResp = await client.send(adminCmd);
-      const adminTokens = adminResp.AuthenticationResult;
-      if (adminTokens) {
-        // Set cookies and return
-        try {
-          const cookieDomain = process.env.COOKIE_DOMAIN || '.brmh.in';
-          const isProd = process.env.NODE_ENV === 'production';
-          const secure = isProd;
-          const sameSite = isProd ? 'none' : 'lax';
-          const setOpts = (seconds) => ({
-            httpOnly: true,
-            secure,
-            sameSite,
-            domain: cookieDomain,
-            path: '/',
-            maxAge: seconds * 1000
-          });
-          const ttl = 3600;
-          if (adminTokens.IdToken) res.cookie('id_token', adminTokens.IdToken, setOpts(ttl));
-          if (adminTokens.AccessToken) res.cookie('access_token', adminTokens.AccessToken, setOpts(ttl));
-          if (adminTokens.RefreshToken) res.cookie('refresh_token', adminTokens.RefreshToken, setOpts(60 * 60 * 24 * 30));
-        } catch {}
-        return res.status(200).json({
-          success: true,
-          result: {
-            idToken: adminTokens.IdToken ? { jwtToken: adminTokens.IdToken } : undefined,
-            accessToken: adminTokens.AccessToken ? { jwtToken: adminTokens.AccessToken } : undefined,
-            refreshToken: adminTokens.RefreshToken ? { token: adminTokens.RefreshToken } : undefined,
-          }
-        });
+      if (adminResp?.AuthenticationResult) {
+        tokens = {
+          IdToken: adminResp.AuthenticationResult.IdToken,
+          AccessToken: adminResp.AuthenticationResult.AccessToken,
+          RefreshToken: adminResp.AuthenticationResult.RefreshToken,
+        };
+      } else if (adminResp?.ChallengeName) {
+        const challengeError = new Error(`Cognito challenge required: ${adminResp.ChallengeName}`);
+        challengeError.name = adminResp.ChallengeName;
+        lastError = challengeError;
       }
     } catch (adminErr) {
-      // Continue to next flow
+      lastError = adminErr;
     }
 
-    // 2) Try USER_PASSWORD_AUTH (client-side)
-    try {
-      const cmd = new InitiateAuthCommand({
-        AuthFlow: 'USER_PASSWORD_AUTH',
-        ClientId: process.env.AWS_COGNITO_CLIENT_ID,
-        AuthParameters: { USERNAME: identifier, PASSWORD: password }
-      });
-      const resp = await client.send(cmd);
-      const tokens = resp.AuthenticationResult;
-      if (tokens) {
-        try {
-          const cookieDomain = process.env.COOKIE_DOMAIN || '.brmh.in';
-          const isProd = process.env.NODE_ENV === 'production';
-          const secure = isProd;
-          const sameSite = isProd ? 'none' : 'lax';
-          const setOpts = (seconds) => ({
-            httpOnly: true,
-            secure,
-            sameSite,
-            domain: cookieDomain,
-            path: '/',
-            maxAge: seconds * 1000
-          });
-          const ttl = 3600;
-          if (tokens.IdToken) res.cookie('id_token', tokens.IdToken, setOpts(ttl));
-          if (tokens.AccessToken) res.cookie('access_token', tokens.AccessToken, setOpts(ttl));
-          if (tokens.RefreshToken) res.cookie('refresh_token', tokens.RefreshToken, setOpts(60 * 60 * 24 * 30));
-        } catch {}
-        return res.status(200).json({
-          success: true,
-          result: {
-            idToken: tokens.IdToken ? { jwtToken: tokens.IdToken } : undefined,
-            accessToken: tokens.AccessToken ? { jwtToken: tokens.AccessToken } : undefined,
-            refreshToken: tokens.RefreshToken ? { token: tokens.RefreshToken } : undefined,
-          }
+    // 2) Try USER_PASSWORD_AUTH if admin flow did not yield tokens
+    if (!tokens) {
+      try {
+        const cmd = new InitiateAuthCommand({
+          AuthFlow: 'USER_PASSWORD_AUTH',
+          ClientId: process.env.AWS_COGNITO_CLIENT_ID,
+          AuthParameters: { USERNAME: identifier, PASSWORD: password }
         });
+        const resp = await client.send(cmd);
+        if (resp?.AuthenticationResult) {
+          tokens = {
+            IdToken: resp.AuthenticationResult.IdToken,
+            AccessToken: resp.AuthenticationResult.AccessToken,
+            RefreshToken: resp.AuthenticationResult.RefreshToken,
+          };
+        } else if (resp?.ChallengeName) {
+          const challengeError = new Error(`Cognito challenge required: ${resp.ChallengeName}`);
+          challengeError.name = resp.ChallengeName;
+          lastError = challengeError;
+        }
+      } catch (clientErr) {
+        lastError = clientErr;
       }
-    } catch (clientErr) {
-      // Continue to SRP fallback below
     }
+
+    if (!tokens) {
+      const fallbackError = lastError || new Error('Login failed');
+      if (!lastError) {
+        fallbackError.name = 'NoTokensError';
+      }
+      throw fallbackError;
+    }
+
+    const idToken = tokens.IdToken || tokens.idToken;
+    const accessToken = tokens.AccessToken || tokens.access_token;
+    const refreshToken = tokens.RefreshToken || tokens.refresh_token;
 
     // Optionally update login activity if we can decode id token
     try {
-      if (tokens.IdToken) {
-        const decoded = await validateJwtToken(tokens.IdToken);
+      if (idToken) {
+        const decoded = await validateJwtToken(idToken);
         const userId = decoded.sub;
         const userRecord = await getUserRecord(userId);
         if (userRecord) {
@@ -663,7 +643,7 @@ async function loginHandler(req, res) {
       }
     } catch {}
 
-    // Set cookies
+    // Set cookies with consistent options
     try {
       const cookieDomain = process.env.COOKIE_DOMAIN || '.brmh.in';
       const isProd = process.env.NODE_ENV === 'production';
@@ -678,12 +658,19 @@ async function loginHandler(req, res) {
         maxAge: seconds * 1000
       });
       const ttl = 3600;
-      if (tokens.IdToken) res.cookie('id_token', tokens.IdToken, setOpts(ttl));
-      if (tokens.AccessToken) res.cookie('access_token', tokens.AccessToken, setOpts(ttl));
-      if (tokens.RefreshToken) res.cookie('refresh_token', tokens.RefreshToken, setOpts(60 * 60 * 24 * 30));
+      if (idToken) res.cookie('id_token', idToken, setOpts(ttl));
+      if (accessToken) res.cookie('access_token', accessToken, setOpts(ttl));
+      if (refreshToken) res.cookie('refresh_token', refreshToken, setOpts(60 * 60 * 24 * 30));
     } catch {}
 
-    return res.status(200).json({ success: true });
+    return res.status(200).json({
+      success: true,
+      result: {
+        idToken: idToken ? { jwtToken: idToken } : undefined,
+        accessToken: accessToken ? { jwtToken: accessToken } : undefined,
+        refreshToken: refreshToken ? { token: refreshToken } : undefined,
+      }
+    });
   } catch (err) {
     const msg = (err && err.message) ? String(err.message) : 'Login failed';
     const code = err?.name || err?.Code || 'UnknownError';
@@ -751,7 +738,6 @@ async function loginHandler(req, res) {
     return res.status(401).json({ success: false, error: 'Incorrect username or password' });
   }
 }
-
 // Phone number signup handler
 async function phoneSignupHandler(req, res) {
   if (!userPool) {
@@ -1129,3 +1115,4 @@ export {
   updateUserRecord,
   deleteUserRecord
 };
+
