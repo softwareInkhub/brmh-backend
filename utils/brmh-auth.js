@@ -1,5 +1,6 @@
 // AWS Amplify Auth setup
 import { CognitoUserPool, CognitoUser, AuthenticationDetails, CognitoUserAttribute } from 'amazon-cognito-identity-js';
+import { CognitoIdentityProviderClient, InitiateAuthCommand } from '@aws-sdk/client-cognito-identity-provider';
 import crypto from 'crypto';
 import jwksClient from 'jwks-rsa';
 import jwt from 'jsonwebtoken';
@@ -534,13 +535,6 @@ async function signupHandler(req, res) {
 
 // Login handler
 async function loginHandler(req, res) {
-  if (!userPool) {
-    return res.status(500).json({ 
-      success: false, 
-      error: 'Authentication service not configured. Please set AWS_COGNITO_USER_POOL_ID and AWS_COGNITO_CLIENT_ID environment variables.' 
-    });
-  }
-  
   const { username, password } = req.body;
   // Allow login with email, phone, or username
   let identifier = (username || '').toString().trim();
@@ -548,68 +542,63 @@ async function loginHandler(req, res) {
     return res.status(400).json({ success: false, error: 'Missing username/email/phone or password' });
   }
   // If it looks like a phone, format to E.164
-  if (/^\+?\d[\d\s-]*$/.test(identifier)) {
+  if (/^\+?[\d\s-]*$/.test(identifier)) {
     const digits = identifier.replace(/\D/g, '');
     identifier = `+${digits}`;
   }
-  const user = new CognitoUser({ Username: identifier, Pool: userPool });
-  const authDetails = new AuthenticationDetails({ Username: identifier, Password: password });
-  
-  user.authenticateUser(authDetails, {
-    onSuccess: async (result) => {
-      try {
-        // Update user record with login activity
-        const userRecord = await getUserRecord(result.accessToken.payload.sub);
+
+  try {
+    const client = new CognitoIdentityProviderClient({ region: process.env.AWS_COGNITO_REGION || process.env.AWS_REGION || 'us-east-1' });
+    const cmd = new InitiateAuthCommand({
+      AuthFlow: 'USER_PASSWORD_AUTH',
+      ClientId: process.env.AWS_COGNITO_CLIENT_ID,
+      AuthParameters: { USERNAME: identifier, PASSWORD: password }
+    });
+    const resp = await client.send(cmd);
+    const tokens = resp.AuthenticationResult;
+    if (!tokens) return res.status(401).json({ success: false, error: 'Authentication failed' });
+
+    // Optionally update login activity if we can decode id token
+    try {
+      if (tokens.IdToken) {
+        const decoded = await validateJwtToken(tokens.IdToken);
+        const userId = decoded.sub;
+        const userRecord = await getUserRecord(userId);
         if (userRecord) {
-          await updateUserRecord(result.accessToken.payload.sub, {
+          await updateUserRecord(userId, {
             'metadata.lastLogin': new Date().toISOString(),
             'metadata.loginCount': (userRecord.metadata?.loginCount || 0) + 1
           });
         }
-      } catch (dbError) {
-        console.error('[Auth] Error updating user login activity:', dbError);
-        // Don't fail the login if DynamoDB update fails
       }
+    } catch {}
 
-      // Set SSO cookies for custom UI login flow
-      try {
-        const cookieDomain = process.env.COOKIE_DOMAIN || '.brmh.in';
-        const isProd = process.env.NODE_ENV === 'production';
-        const secure = isProd;
-        const sameSite = isProd ? 'none' : 'lax';
-        const setOpts = (seconds) => ({
-          httpOnly: true,
-          secure,
-          sameSite,
-          domain: cookieDomain,
-          path: '/',
-          maxAge: seconds * 1000
-        });
-        const ttl = 3600;
-        const idToken = result?.idToken?.jwtToken;
-        const accessToken = result?.accessToken?.jwtToken;
-        const refreshToken = result?.refreshToken?.token;
-        if (idToken) res.cookie('id_token', idToken, setOpts(ttl));
-        if (accessToken) res.cookie('access_token', accessToken, setOpts(ttl));
-        if (refreshToken) res.cookie('refresh_token', refreshToken, setOpts(60 * 60 * 24 * 30));
-      } catch (cookieErr) {
-        console.warn('[Auth] Failed setting login cookies:', cookieErr);
-      }
+    // Set cookies
+    try {
+      const cookieDomain = process.env.COOKIE_DOMAIN || '.brmh.in';
+      const isProd = process.env.NODE_ENV === 'production';
+      const secure = isProd;
+      const sameSite = isProd ? 'none' : 'lax';
+      const setOpts = (seconds) => ({
+        httpOnly: true,
+        secure,
+        sameSite,
+        domain: cookieDomain,
+        path: '/',
+        maxAge: seconds * 1000
+      });
+      const ttl = 3600;
+      if (tokens.IdToken) res.cookie('id_token', tokens.IdToken, setOpts(ttl));
+      if (tokens.AccessToken) res.cookie('access_token', tokens.AccessToken, setOpts(ttl));
+      if (tokens.RefreshToken) res.cookie('refresh_token', tokens.RefreshToken, setOpts(60 * 60 * 24 * 30));
+    } catch {}
 
-      res.status(200).json({ success: true });
-    },
-    onFailure: (err) => {
-      const msg = (err && err.message) ? String(err.message) : 'Login failed';
-      // Provide better hints for common cases
-      if (/User is not confirmed/i.test(msg)) {
-        return res.status(403).json({ success: false, error: 'Account not confirmed. Please verify your email.', requiresConfirmation: true });
-      }
-      if (/Incorrect username or password/i.test(msg)) {
-        return res.status(401).json({ success: false, error: 'Incorrect username or password' });
-      }
-      return res.status(401).json({ success: false, error: msg });
-    },
-  });
+    return res.status(200).json({ success: true });
+  } catch (err) {
+    const msg = (err && err.message) ? String(err.message) : 'Login failed';
+    if (/not confirmed/i.test(msg)) return res.status(403).json({ success: false, error: 'Account not confirmed. Please verify your email.', requiresConfirmation: true });
+    return res.status(401).json({ success: false, error: 'Incorrect username or password' });
+  }
 }
 
 // Phone number signup handler
