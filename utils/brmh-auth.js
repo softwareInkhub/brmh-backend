@@ -511,8 +511,33 @@ async function loginHandler(req, res) {
         console.error('[Auth] Error updating user login activity:', dbError);
         // Don't fail the login if DynamoDB update fails
       }
-      
-      res.status(200).json({ success: true, result });
+
+      // Set SSO cookies for custom UI login flow
+      try {
+        const cookieDomain = process.env.COOKIE_DOMAIN || '.brmh.in';
+        const isProd = process.env.NODE_ENV === 'production';
+        const secure = isProd;
+        const sameSite = isProd ? 'none' : 'lax';
+        const setOpts = (seconds) => ({
+          httpOnly: true,
+          secure,
+          sameSite,
+          domain: cookieDomain,
+          path: '/',
+          maxAge: seconds * 1000
+        });
+        const ttl = 3600;
+        const idToken = result?.idToken?.jwtToken;
+        const accessToken = result?.accessToken?.jwtToken;
+        const refreshToken = result?.refreshToken?.token;
+        if (idToken) res.cookie('id_token', idToken, setOpts(ttl));
+        if (accessToken) res.cookie('access_token', accessToken, setOpts(ttl));
+        if (refreshToken) res.cookie('refresh_token', refreshToken, setOpts(60 * 60 * 24 * 30));
+      } catch (cookieErr) {
+        console.warn('[Auth] Failed setting login cookies:', cookieErr);
+      }
+
+      res.status(200).json({ success: true });
     },
     onFailure: (err) => res.status(401).json({ success: false, error: err.message }),
   });
@@ -669,8 +694,33 @@ async function phoneLoginHandler(req, res) {
         console.error('[Auth] Error updating user login activity:', dbError);
         // Don't fail the login if DynamoDB update fails
       }
-      
-      res.status(200).json({ success: true, result });
+
+      // Set SSO cookies for custom UI login flow
+      try {
+        const cookieDomain = process.env.COOKIE_DOMAIN || '.brmh.in';
+        const isProd = process.env.NODE_ENV === 'production';
+        const secure = isProd;
+        const sameSite = isProd ? 'none' : 'lax';
+        const setOpts = (seconds) => ({
+          httpOnly: true,
+          secure,
+          sameSite,
+          domain: cookieDomain,
+          path: '/',
+          maxAge: seconds * 1000
+        });
+        const ttl = 3600;
+        const idToken = result?.idToken?.jwtToken;
+        const accessToken = result?.accessToken?.jwtToken;
+        const refreshToken = result?.refreshToken?.token;
+        if (idToken) res.cookie('id_token', idToken, setOpts(ttl));
+        if (accessToken) res.cookie('access_token', accessToken, setOpts(ttl));
+        if (refreshToken) res.cookie('refresh_token', refreshToken, setOpts(60 * 60 * 24 * 30));
+      } catch (cookieErr) {
+        console.warn('[Auth] Failed setting phone login cookies:', cookieErr);
+      }
+
+      res.status(200).json({ success: true });
     },
     onFailure: (err) => {
       res.status(401).json({ success: false, error: err.message });
