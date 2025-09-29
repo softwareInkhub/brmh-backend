@@ -580,7 +580,14 @@ async function loginHandler(req, res) {
           if (adminTokens.AccessToken) res.cookie('access_token', adminTokens.AccessToken, setOpts(ttl));
           if (adminTokens.RefreshToken) res.cookie('refresh_token', adminTokens.RefreshToken, setOpts(60 * 60 * 24 * 30));
         } catch {}
-        return res.status(200).json({ success: true });
+        return res.status(200).json({
+          success: true,
+          result: {
+            idToken: adminTokens.IdToken ? { jwtToken: adminTokens.IdToken } : undefined,
+            accessToken: adminTokens.AccessToken ? { jwtToken: adminTokens.AccessToken } : undefined,
+            refreshToken: adminTokens.RefreshToken ? { token: adminTokens.RefreshToken } : undefined,
+          }
+        });
       }
     } catch (adminErr) {
       // Continue to next flow
@@ -614,7 +621,14 @@ async function loginHandler(req, res) {
           if (tokens.AccessToken) res.cookie('access_token', tokens.AccessToken, setOpts(ttl));
           if (tokens.RefreshToken) res.cookie('refresh_token', tokens.RefreshToken, setOpts(60 * 60 * 24 * 30));
         } catch {}
-        return res.status(200).json({ success: true });
+        return res.status(200).json({
+          success: true,
+          result: {
+            idToken: tokens.IdToken ? { jwtToken: tokens.IdToken } : undefined,
+            accessToken: tokens.AccessToken ? { jwtToken: tokens.AccessToken } : undefined,
+            refreshToken: tokens.RefreshToken ? { token: tokens.RefreshToken } : undefined,
+          }
+        });
       }
     } catch (clientErr) {
       // Continue to SRP fallback below
@@ -698,7 +712,14 @@ async function loginHandler(req, res) {
               if (refreshToken) res.cookie('refresh_token', refreshToken, setOpts(60 * 60 * 24 * 30));
             } catch {}
 
-            return res.status(200).json({ success: true });
+            return res.status(200).json({
+              success: true,
+              result: {
+                idToken: result?.idToken?.jwtToken ? { jwtToken: result.idToken.jwtToken } : undefined,
+                accessToken: result?.accessToken?.jwtToken ? { jwtToken: result.accessToken.jwtToken } : undefined,
+                refreshToken: result?.refreshToken?.token ? { token: result.refreshToken.token } : undefined,
+              }
+            });
           },
           onFailure: (srpErr) => {
             const sMsg = (srpErr && srpErr.message) ? String(srpErr.message) : 'Login failed';
