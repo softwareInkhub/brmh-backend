@@ -1,6 +1,6 @@
 ﻿// AWS Amplify Auth setup
 import { CognitoUserPool, CognitoUser, AuthenticationDetails, CognitoUserAttribute } from 'amazon-cognito-identity-js';
-import { CognitoIdentityProviderClient, InitiateAuthCommand, AdminInitiateAuthCommand } from '@aws-sdk/client-cognito-identity-provider';
+import { CognitoIdentityProviderClient, InitiateAuthCommand, AdminInitiateAuthCommand, ListUsersCommand } from '@aws-sdk/client-cognito-identity-provider';
 import crypto from 'crypto';
 import jwksClient from 'jwks-rsa';
 import jwt from 'jsonwebtoken';
@@ -30,7 +30,7 @@ setInterval(() => {
     }
   }
   if (cleanedCount > 0) {
-    console.log(`🧹 Cleaned up ${cleanedCount} expired PKCE entries`);
+    console.log(`?? Cleaned up ${cleanedCount} expired PKCE entries`);
   }
 }, 5 * 60 * 1000); // Clean every 5 minutes
 
@@ -46,7 +46,7 @@ async function generateOAuthUrlHandler(req, res) {
     const { challenge, verifier } = createPkce();
     const state = crypto.randomBytes(16).toString('hex');
     
-    console.log('🔐 Generating OAuth URL with PKCE:');
+    console.log('?? Generating OAuth URL with PKCE:');
     console.log('  - Challenge:', challenge);
     console.log('  - Verifier:', verifier);
     console.log('  - State:', state);
@@ -65,8 +65,8 @@ async function generateOAuthUrlHandler(req, res) {
     // Store verifier with state
     pkceStore.set(state, { verifier, timestamp: Date.now() });
     
-    console.log('🔗 Generated OAuth URL:', authUrl.toString());
-    console.log('📦 Stored PKCE data for state:', state);
+    console.log('?? Generated OAuth URL:', authUrl.toString());
+    console.log('?? Stored PKCE data for state:', state);
     
     res.json({ 
       authUrl: authUrl.toString(),
@@ -83,7 +83,7 @@ async function exchangeTokenHandler(req, res) {
   try {
     const { code, state } = req.body;
     
-    console.log('🔄 Token exchange request:');
+    console.log('?? Token exchange request:');
     console.log('  - Code:', code ? `${code.substring(0, 10)}...` : 'missing');
     console.log('  - State:', state);
     console.log('  - Available PKCE states:', Array.from(pkceStore.keys()));
@@ -110,14 +110,14 @@ async function exchangeTokenHandler(req, res) {
           return res.status(400).json({ error: 'No valid PKCE session found for password change flow' });
         }
       } else {
-        console.error('❌ PKCE data not found for state:', state);
+        console.error('? PKCE data not found for state:', state);
         console.error('Available states:', Array.from(pkceStore.keys()));
         return res.status(400).json({ error: 'Invalid or expired state parameter' });
       }
     }
     
     const { verifier } = pkceData;
-    console.log('🔑 Using PKCE verifier:', verifier ? `${verifier.substring(0, 10)}...` : 'missing');
+    console.log('?? Using PKCE verifier:', verifier ? `${verifier.substring(0, 10)}...` : 'missing');
     
     // Exchange code for tokens
     const body = new URLSearchParams({
@@ -128,8 +128,8 @@ async function exchangeTokenHandler(req, res) {
       code_verifier: verifier
     });
     
-    console.log('📤 Token exchange request body:', body.toString());
-    console.log('🌐 Token exchange URL:', `${process.env.AWS_COGNITO_DOMAIN}/oauth2/token`);
+    console.log('?? Token exchange request body:', body.toString());
+    console.log('?? Token exchange URL:', `${process.env.AWS_COGNITO_DOMAIN}/oauth2/token`);
     
     const tokenRes = await fetch(`${process.env.AWS_COGNITO_DOMAIN}/oauth2/token`, {
       method: 'POST',
@@ -547,6 +547,55 @@ async function signupHandler(req, res) {
   });
 }
 
+
+async function resolveIdentifierForLogin(identifier, client) {
+  if (!identifier || !client) {
+    return identifier;
+  }
+  const trimmed = identifier.trim();
+  if (!trimmed) {
+    return identifier;
+  }
+  const userPoolId = process.env.AWS_COGNITO_USER_POOL_ID;
+  if (!userPoolId) {
+    return identifier;
+  }
+
+  const sanitize = (value) => value.replace(/["\\]/g, (char) => `\\${char}`);
+  const attemptLookup = async (filter) => {
+    const command = new ListUsersCommand({
+      UserPoolId: userPoolId,
+      Filter: filter,
+      Limit: 1
+    });
+    const response = await client.send(command);
+    return response?.Users?.[0]?.Username;
+  };
+
+  try {
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+      const username = await attemptLookup(`email = \"${sanitize(trimmed)}\"`);
+      if (username) {
+        return username;
+      }
+    }
+
+    const digitsOnly = trimmed.replace(/[^\d+]/g, '');
+    if (/^\+?[1-9]\d{6,}$/.test(digitsOnly)) {
+      const normalized = digitsOnly.startsWith('+') ? digitsOnly : `+${digitsOnly.replace(/^\+/, '')}`;
+      const username = await attemptLookup(`phone_number = \"${sanitize(normalized)}\"`);
+      if (username) {
+        return username;
+      }
+    }
+  } catch (err) {
+    try {
+      console.warn('[Auth] Unable to resolve identifier via Cognito listUsers:', err?.message || err);
+    } catch {}
+  }
+
+  return identifier;
+}
 // Login handler
 async function loginHandler(req, res) {
   const { username, password } = req.body;
@@ -563,6 +612,14 @@ async function loginHandler(req, res) {
 
   try {
     const client = new CognitoIdentityProviderClient({ region: process.env.AWS_COGNITO_REGION || process.env.AWS_REGION || 'us-east-1' });
+
+    const resolvedIdentifier = await resolveIdentifierForLogin(identifier, client);
+    if (resolvedIdentifier && resolvedIdentifier !== identifier) {
+      try {
+        console.log('[Auth] Resolved login identifier', { input: identifier, resolved: resolvedIdentifier });
+      } catch {}
+      identifier = resolvedIdentifier;
+    }
 
     let tokens = null;
     let lastError = null;
@@ -1115,4 +1172,9 @@ export {
   updateUserRecord,
   deleteUserRecord
 };
+
+
+
+
+
 
