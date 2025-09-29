@@ -542,8 +542,18 @@ async function loginHandler(req, res) {
   }
   
   const { username, password } = req.body;
-  const user = new CognitoUser({ Username: username, Pool: userPool });
-  const authDetails = new AuthenticationDetails({ Username: username, Password: password });
+  // Allow login with email, phone, or username
+  let identifier = (username || '').toString().trim();
+  if (!identifier || !password) {
+    return res.status(400).json({ success: false, error: 'Missing username/email/phone or password' });
+  }
+  // If it looks like a phone, format to E.164
+  if (/^\+?\d[\d\s-]*$/.test(identifier)) {
+    const digits = identifier.replace(/\D/g, '');
+    identifier = `+${digits}`;
+  }
+  const user = new CognitoUser({ Username: identifier, Pool: userPool });
+  const authDetails = new AuthenticationDetails({ Username: identifier, Password: password });
   
   user.authenticateUser(authDetails, {
     onSuccess: async (result) => {
@@ -588,7 +598,17 @@ async function loginHandler(req, res) {
 
       res.status(200).json({ success: true });
     },
-    onFailure: (err) => res.status(401).json({ success: false, error: err.message }),
+    onFailure: (err) => {
+      const msg = (err && err.message) ? String(err.message) : 'Login failed';
+      // Provide better hints for common cases
+      if (/User is not confirmed/i.test(msg)) {
+        return res.status(403).json({ success: false, error: 'Account not confirmed. Please verify your email.', requiresConfirmation: true });
+      }
+      if (/Incorrect username or password/i.test(msg)) {
+        return res.status(401).json({ success: false, error: 'Incorrect username or password' });
+      }
+      return res.status(401).json({ success: false, error: msg });
+    },
   });
 }
 
