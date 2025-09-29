@@ -9,6 +9,7 @@ import { dirname } from 'path';
 import yaml from 'js-yaml';
 import { v4 as uuidv4 } from 'uuid';
 import cors from 'cors'
+import cookieParser from 'cookie-parser';
 import axios from 'axios';
 import multer from 'multer';
 import { handlers as dynamodbHandlers } from './lib/dynamodb-handlers.js';
@@ -70,6 +71,7 @@ import {
   exchangeTokenHandler,
   refreshTokenHandler,
   validateTokenHandler,
+  validateJwtToken,
   debugPkceStoreHandler,
   logoutHandler,
   getLogoutUrlHandler
@@ -103,7 +105,32 @@ console.log('AWS Configuration Check:', {
 });
 
 const app = express();
-app.use(cors());
+
+// Flexible CORS allowing *.brmh.in, *.vercel.app and localhost for dev, with credentials
+const allowedOrigins = [
+  'https://brmh.in',
+  'https://auth.brmh.in',
+];
+const originRegexes = [
+  /^https:\/\/([a-z0-9-]+\.)*brmh\.in$/i,
+  /^https:\/\/([a-z0-9-]+\.)*vercel\.app$/i,
+  /^http:\/\/localhost(?::\d+)?$/i,
+];
+
+app.use(cors({
+  origin: (origin, cb) => {
+    if (!origin) return cb(null, true);
+    if (allowedOrigins.includes(origin)) return cb(null, true);
+    if (originRegexes.some(rx => rx.test(origin))) return cb(null, true);
+    return cb(null, false);
+  },
+  credentials: true,
+  methods: ['GET','HEAD','PUT','PATCH','POST','DELETE','OPTIONS'],
+  allowedHeaders: ['Content-Type','Authorization','X-Requested-With'],
+  exposedHeaders: ['Set-Cookie']
+}));
+
+app.use(cookieParser());
 app.use(express.json({ limit: '200mb' }));
 app.use(express.urlencoded({ limit: '200mb', extended: true }));
 app.use(express.text({ limit: '200mb' })); // Add support for text/plain
@@ -1910,6 +1937,19 @@ app.post('/auth/validate', validateTokenHandler);
 app.post('/auth/logout', logoutHandler);
 app.get('/auth/logout-url', getLogoutUrlHandler);
 app.get('/auth/debug-pkce', debugPkceStoreHandler);
+
+// Cookie-friendly user info endpoint
+app.get('/auth/me', async (req, res) => {
+  try {
+    const bearer = req.headers.authorization?.replace(/^Bearer /, '');
+    const idToken = bearer || req.cookies?.id_token;
+    if (!idToken) return res.status(401).json({ error: 'No token' });
+    const decoded = await validateJwtToken(idToken);
+    return res.json({ user: decoded });
+  } catch (e) {
+    return res.status(401).json({ error: 'Invalid token' });
+  }
+});
 
 // Simple redirect to Cognito Hosted UI logout (useful for frontend buttons)
 app.get('/auth/logout-redirect', (req, res) => {

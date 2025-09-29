@@ -143,11 +143,33 @@ async function exchangeTokenHandler(req, res) {
     }
     
     const tokens = await tokenRes.json();
-    
+
     // Clean up PKCE data
     pkceStore.delete(state);
-    
-    res.json(tokens); // { id_token, access_token, refresh_token, expires_in, token_type }
+
+    // Set cross-subdomain cookies for SSO
+    try {
+      const cookieDomain = process.env.COOKIE_DOMAIN || '.brmh.in';
+      const isProd = process.env.NODE_ENV === 'production';
+      const secure = isProd;
+      const sameSite = isProd ? 'none' : 'lax';
+      const setOpts = (seconds) => ({
+        httpOnly: true,
+        secure,
+        sameSite,
+        domain: cookieDomain,
+        path: '/',
+        maxAge: seconds * 1000
+      });
+      const ttl = tokens.expires_in || 3600;
+      if (tokens.id_token) res.cookie('id_token', tokens.id_token, setOpts(ttl));
+      if (tokens.access_token) res.cookie('access_token', tokens.access_token, setOpts(ttl));
+      if (tokens.refresh_token) res.cookie('refresh_token', tokens.refresh_token, setOpts(60 * 60 * 24 * 30));
+    } catch (cookieErr) {
+      console.warn('Failed setting auth cookies:', cookieErr);
+    }
+
+    return res.status(200).json({ success: true });
   } catch (error) {
     console.error('Error exchanging token:', error);
     res.status(500).json({ error: 'Failed to exchange token' });
@@ -182,7 +204,30 @@ async function refreshTokenHandler(req, res) {
     }
     
     const tokens = await tokenRes.json();
-    res.json(tokens);
+
+    // Also update cookies when refreshing
+    try {
+      const cookieDomain = process.env.COOKIE_DOMAIN || '.brmh.in';
+      const isProd = process.env.NODE_ENV === 'production';
+      const secure = isProd;
+      const sameSite = isProd ? 'none' : 'lax';
+      const setOpts = (seconds) => ({
+        httpOnly: true,
+        secure,
+        sameSite,
+        domain: cookieDomain,
+        path: '/',
+        maxAge: seconds * 1000
+      });
+      const ttl = tokens.expires_in || 3600;
+      if (tokens.id_token) res.cookie('id_token', tokens.id_token, setOpts(ttl));
+      if (tokens.access_token) res.cookie('access_token', tokens.access_token, setOpts(ttl));
+      if (tokens.refresh_token) res.cookie('refresh_token', tokens.refresh_token, setOpts(60 * 60 * 24 * 30));
+    } catch (cookieErr) {
+      console.warn('Failed setting refresh cookies:', cookieErr);
+    }
+
+    return res.status(200).json({ success: true });
   } catch (error) {
     console.error('Error refreshing token:', error);
     res.status(500).json({ error: 'Failed to refresh token' });
@@ -777,6 +822,12 @@ async function logoutHandler(req, res) {
       }
     }
     
+    try {
+      const opts = { domain: process.env.COOKIE_DOMAIN || '.brmh.in', path: '/' };
+      res.clearCookie('id_token', opts);
+      res.clearCookie('access_token', opts);
+      res.clearCookie('refresh_token', opts);
+    } catch {}
     res.json({ success: true, message: 'Logged out successfully' });
   } catch (error) {
     console.error('Error during logout:', error);
@@ -787,15 +838,15 @@ async function logoutHandler(req, res) {
 // Return Hosted UI logout URL (to clear Cognito cookies)
 async function getLogoutUrlHandler(req, res) {
   try {
-    if (!process.env.AWS_COGNITO_DOMAIN || !process.env.AWS_COGNITO_CLIENT_ID || !process.env.AUTH_REDIRECT_URI) {
+    if (!process.env.AWS_COGNITO_DOMAIN || !process.env.AWS_COGNITO_CLIENT_ID || (!process.env.AUTH_LOGOUT_REDIRECT_URI && !process.env.AUTH_REDIRECT_URI)) {
       return res.status(500).json({ 
-        error: 'OAuth configuration missing. Please set AWS_COGNITO_DOMAIN, AWS_COGNITO_CLIENT_ID, and AUTH_REDIRECT_URI environment variables.' 
+        error: 'OAuth configuration missing. Please set AWS_COGNITO_DOMAIN, AWS_COGNITO_CLIENT_ID, and AUTH_LOGOUT_REDIRECT_URI/AUTH_REDIRECT_URI environment variables.' 
       });
     }
 
     const logoutUrl = new URL('/logout', process.env.AWS_COGNITO_DOMAIN);
     logoutUrl.searchParams.set('client_id', process.env.AWS_COGNITO_CLIENT_ID);
-    logoutUrl.searchParams.set('logout_uri', process.env.AUTH_REDIRECT_URI);
+    logoutUrl.searchParams.set('logout_uri', process.env.AUTH_LOGOUT_REDIRECT_URI || process.env.AUTH_REDIRECT_URI);
 
     res.json({ logoutUrl: logoutUrl.toString() });
   } catch (error) {
