@@ -1,6 +1,6 @@
 // AWS Amplify Auth setup
 import { CognitoUserPool, CognitoUser, AuthenticationDetails, CognitoUserAttribute } from 'amazon-cognito-identity-js';
-import { CognitoIdentityProviderClient, InitiateAuthCommand } from '@aws-sdk/client-cognito-identity-provider';
+import { CognitoIdentityProviderClient, InitiateAuthCommand, AdminInitiateAuthCommand } from '@aws-sdk/client-cognito-identity-provider';
 import crypto from 'crypto';
 import jwksClient from 'jwks-rsa';
 import jwt from 'jsonwebtoken';
@@ -549,14 +549,76 @@ async function loginHandler(req, res) {
 
   try {
     const client = new CognitoIdentityProviderClient({ region: process.env.AWS_COGNITO_REGION || process.env.AWS_REGION || 'us-east-1' });
-    const cmd = new InitiateAuthCommand({
-      AuthFlow: 'USER_PASSWORD_AUTH',
-      ClientId: process.env.AWS_COGNITO_CLIENT_ID,
-      AuthParameters: { USERNAME: identifier, PASSWORD: password }
-    });
-    const resp = await client.send(cmd);
-    const tokens = resp.AuthenticationResult;
-    if (!tokens) return res.status(401).json({ success: false, error: 'Authentication failed' });
+
+    // 1) Try ADMIN_USER_PASSWORD_AUTH (admin-side) – works even if user-password auth is disabled on client
+    try {
+      const adminCmd = new AdminInitiateAuthCommand({
+        AuthFlow: 'ADMIN_USER_PASSWORD_AUTH',
+        UserPoolId: process.env.AWS_COGNITO_USER_POOL_ID,
+        ClientId: process.env.AWS_COGNITO_CLIENT_ID,
+        AuthParameters: { USERNAME: identifier, PASSWORD: password }
+      });
+      const adminResp = await client.send(adminCmd);
+      const adminTokens = adminResp.AuthenticationResult;
+      if (adminTokens) {
+        // Set cookies and return
+        try {
+          const cookieDomain = process.env.COOKIE_DOMAIN || '.brmh.in';
+          const isProd = process.env.NODE_ENV === 'production';
+          const secure = isProd;
+          const sameSite = isProd ? 'none' : 'lax';
+          const setOpts = (seconds) => ({
+            httpOnly: true,
+            secure,
+            sameSite,
+            domain: cookieDomain,
+            path: '/',
+            maxAge: seconds * 1000
+          });
+          const ttl = 3600;
+          if (adminTokens.IdToken) res.cookie('id_token', adminTokens.IdToken, setOpts(ttl));
+          if (adminTokens.AccessToken) res.cookie('access_token', adminTokens.AccessToken, setOpts(ttl));
+          if (adminTokens.RefreshToken) res.cookie('refresh_token', adminTokens.RefreshToken, setOpts(60 * 60 * 24 * 30));
+        } catch {}
+        return res.status(200).json({ success: true });
+      }
+    } catch (adminErr) {
+      // Continue to next flow
+    }
+
+    // 2) Try USER_PASSWORD_AUTH (client-side)
+    try {
+      const cmd = new InitiateAuthCommand({
+        AuthFlow: 'USER_PASSWORD_AUTH',
+        ClientId: process.env.AWS_COGNITO_CLIENT_ID,
+        AuthParameters: { USERNAME: identifier, PASSWORD: password }
+      });
+      const resp = await client.send(cmd);
+      const tokens = resp.AuthenticationResult;
+      if (tokens) {
+        try {
+          const cookieDomain = process.env.COOKIE_DOMAIN || '.brmh.in';
+          const isProd = process.env.NODE_ENV === 'production';
+          const secure = isProd;
+          const sameSite = isProd ? 'none' : 'lax';
+          const setOpts = (seconds) => ({
+            httpOnly: true,
+            secure,
+            sameSite,
+            domain: cookieDomain,
+            path: '/',
+            maxAge: seconds * 1000
+          });
+          const ttl = 3600;
+          if (tokens.IdToken) res.cookie('id_token', tokens.IdToken, setOpts(ttl));
+          if (tokens.AccessToken) res.cookie('access_token', tokens.AccessToken, setOpts(ttl));
+          if (tokens.RefreshToken) res.cookie('refresh_token', tokens.RefreshToken, setOpts(60 * 60 * 24 * 30));
+        } catch {}
+        return res.status(200).json({ success: true });
+      }
+    } catch (clientErr) {
+      // Continue to SRP fallback below
+    }
 
     // Optionally update login activity if we can decode id token
     try {
