@@ -596,6 +596,60 @@ async function loginHandler(req, res) {
     return res.status(200).json({ success: true });
   } catch (err) {
     const msg = (err && err.message) ? String(err.message) : 'Login failed';
+    const code = err?.name || err?.Code || 'UnknownError';
+    // Fallback to SRP if USER_PASSWORD_AUTH is not allowed for client or returns NotAuthorized
+    if (/InvalidParameterException|UserPasswordAuth.*not.*enabled|NotAuthorizedException/i.test(code + ' ' + msg)) {
+      try {
+        const user = new CognitoUser({ Username: identifier, Pool: userPool });
+        const authDetails = new AuthenticationDetails({ Username: identifier, Password: password });
+        return user.authenticateUser(authDetails, {
+          onSuccess: async (result) => {
+            try {
+              const userRecord = await getUserRecord(result.accessToken.payload.sub);
+              if (userRecord) {
+                await updateUserRecord(result.accessToken.payload.sub, {
+                  'metadata.lastLogin': new Date().toISOString(),
+                  'metadata.loginCount': (userRecord.metadata?.loginCount || 0) + 1
+                });
+              }
+            } catch {}
+
+            try {
+              const cookieDomain = process.env.COOKIE_DOMAIN || '.brmh.in';
+              const isProd = process.env.NODE_ENV === 'production';
+              const secure = isProd;
+              const sameSite = isProd ? 'none' : 'lax';
+              const setOpts = (seconds) => ({
+                httpOnly: true,
+                secure,
+                sameSite,
+                domain: cookieDomain,
+                path: '/',
+                maxAge: seconds * 1000
+              });
+              const ttl = 3600;
+              const idToken = result?.idToken?.jwtToken;
+              const accessToken = result?.accessToken?.jwtToken;
+              const refreshToken = result?.refreshToken?.token;
+              if (idToken) res.cookie('id_token', idToken, setOpts(ttl));
+              if (accessToken) res.cookie('access_token', accessToken, setOpts(ttl));
+              if (refreshToken) res.cookie('refresh_token', refreshToken, setOpts(60 * 60 * 24 * 30));
+            } catch {}
+
+            return res.status(200).json({ success: true });
+          },
+          onFailure: (srpErr) => {
+            const sMsg = (srpErr && srpErr.message) ? String(srpErr.message) : 'Login failed';
+            if (/User is not confirmed/i.test(sMsg)) {
+              return res.status(403).json({ success: false, error: 'Account not confirmed. Please verify your email.', requiresConfirmation: true });
+            }
+            return res.status(401).json({ success: false, error: 'Incorrect username or password' });
+          },
+        });
+      } catch (fallbackEx) {
+        return res.status(401).json({ success: false, error: 'Incorrect username or password' });
+      }
+    }
     if (/not confirmed/i.test(msg)) return res.status(403).json({ success: false, error: 'Account not confirmed. Please verify your email.', requiresConfirmation: true });
     return res.status(401).json({ success: false, error: 'Incorrect username or password' });
   }
