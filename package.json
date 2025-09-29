@@ -26,6 +26,7 @@
     "@aws-sdk/client-sts": "^3.857.0",
     "@aws-sdk/lib-dynamodb": "^3.540.0",
     "@aws-sdk/s3-request-presigner": "^3.896.0",
+    "@aws-sdk/client-cognito-identity-provider": "^3.896.0",
     "@langchain/anthropic": "^0.3.24",
     "@langchain/community": "^0.3.47",
     "@langchain/core": "^0.3.62",
