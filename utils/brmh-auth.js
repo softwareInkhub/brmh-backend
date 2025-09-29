@@ -170,7 +170,14 @@ async function exchangeTokenHandler(req, res) {
       console.warn('Failed setting auth cookies:', cookieErr);
     }
 
-    return res.status(200).json({ success: true });
+    return res.status(200).json({
+      success: true,
+      result: {
+        idToken: tokens.id_token ? { jwtToken: tokens.id_token } : undefined,
+        accessToken: tokens.access_token ? { jwtToken: tokens.access_token } : undefined,
+        refreshToken: tokens.refresh_token ? { token: tokens.refresh_token } : undefined,
+      }
+    });
   } catch (error) {
     console.error('Error exchanging token:', error);
     res.status(500).json({ error: 'Failed to exchange token' });
@@ -228,7 +235,14 @@ async function refreshTokenHandler(req, res) {
       console.warn('Failed setting refresh cookies:', cookieErr);
     }
 
-    return res.status(200).json({ success: true });
+    return res.status(200).json({
+      success: true,
+      result: {
+        idToken: tokens.id_token ? { jwtToken: tokens.id_token } : undefined,
+        accessToken: tokens.access_token ? { jwtToken: tokens.access_token } : undefined,
+        refreshToken: tokens.refresh_token ? { token: tokens.refresh_token } : undefined,
+      }
+    });
   } catch (error) {
     console.error('Error refreshing token:', error);
     res.status(500).json({ error: 'Failed to refresh token' });
