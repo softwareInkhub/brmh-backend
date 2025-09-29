@@ -440,8 +440,16 @@ async function signupHandler(req, res) {
   }
   
   const { username, password, email } = req.body;
-  
-  userPool.signUp(username, password, [{ Name: 'email', Value: email }], null, async (err, result) => {
+
+  // Enforce required fields and Cognito-safe username
+  if (!email || !password) {
+    return res.status(400).json({ success: false, error: 'Missing required fields: email, password' });
+  }
+  const displayName = (username || '').toString().trim();
+  const sanitized = displayName ? displayName.replace(/\s+/g, '_') : '';
+  const cognitoUsername = email || sanitized;
+
+  userPool.signUp(cognitoUsername, password, [{ Name: 'email', Value: email }], null, async (err, result) => {
     if (err) {
       console.error('[Auth] Signup error:', err);
       return res.status(400).json({ success: false, error: err.message });
@@ -451,9 +459,9 @@ async function signupHandler(req, res) {
       // Create user record in DynamoDB
       const userData = {
         sub: result.userSub,
-        username: username,
+        username: displayName || cognitoUsername,
         email: email,
-        cognitoUsername: username,
+        cognitoUsername: cognitoUsername,
         signupMethod: 'email',
         verified: false
       };
