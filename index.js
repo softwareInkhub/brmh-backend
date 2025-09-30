@@ -110,6 +110,7 @@ const app = express();
 const allowedOrigins = [
   'https://brmh.in',
   'https://auth.brmh.in',
+  'https://app.brmh.in',
 ];
 const originRegexes = [
   /^https:\/\/([a-z0-9-]+\.)*brmh\.in$/i,
@@ -119,15 +120,17 @@ const originRegexes = [
 
 app.use(cors({
   origin: (origin, cb) => {
+    // Allow requests with no origin (mobile apps, curl, etc.)
     if (!origin) return cb(null, true);
     if (allowedOrigins.includes(origin)) return cb(null, true);
     if (originRegexes.some(rx => rx.test(origin))) return cb(null, true);
-    return cb(null, false);
+    console.log('CORS: Rejected origin:', origin);
+    return cb(new Error('Not allowed by CORS'));
   },
   credentials: true,
   methods: ['GET','HEAD','PUT','PATCH','POST','DELETE','OPTIONS'],
-  allowedHeaders: ['Content-Type','Authorization','X-Requested-With'],
-  exposedHeaders: ['Set-Cookie']
+  allowedHeaders: ['Content-Type','Authorization','X-Requested-With','Cookie'],
+  exposedHeaders: ['Set-Cookie', 'Authorization']
 }));
 
 app.use(cookieParser());

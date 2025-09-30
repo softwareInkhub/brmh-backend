@@ -152,8 +152,11 @@ async function exchangeTokenHandler(req, res) {
     try {
       const cookieDomain = process.env.COOKIE_DOMAIN || '.brmh.in';
       const isProd = process.env.NODE_ENV === 'production';
-      const secure = isProd;
+      
+      // For cross-subdomain cookies in production, we need secure: true and sameSite: 'none'
+      const secure = true; // Always true for HTTPS domains
       const sameSite = isProd ? 'none' : 'lax';
+      
       const setOpts = (seconds) => ({
         httpOnly: true,
         secure,
@@ -162,12 +165,15 @@ async function exchangeTokenHandler(req, res) {
         path: '/',
         maxAge: seconds * 1000
       });
+      
       const ttl = tokens.expires_in || 3600;
+      console.log('[Auth] Token exchange - setting cookies with options:', { domain: cookieDomain, secure, sameSite });
+      
       if (tokens.id_token) res.cookie('id_token', tokens.id_token, setOpts(ttl));
       if (tokens.access_token) res.cookie('access_token', tokens.access_token, setOpts(ttl));
       if (tokens.refresh_token) res.cookie('refresh_token', tokens.refresh_token, setOpts(60 * 60 * 24 * 30));
     } catch (cookieErr) {
-      console.warn('Failed setting auth cookies:', cookieErr);
+      console.error('[Auth] Failed setting token exchange cookies:', cookieErr);
     }
 
     return res.status(200).json({
@@ -217,8 +223,11 @@ async function refreshTokenHandler(req, res) {
     try {
       const cookieDomain = process.env.COOKIE_DOMAIN || '.brmh.in';
       const isProd = process.env.NODE_ENV === 'production';
-      const secure = isProd;
+      
+      // For cross-subdomain cookies in production, we need secure: true and sameSite: 'none'
+      const secure = true; // Always true for HTTPS domains
       const sameSite = isProd ? 'none' : 'lax';
+      
       const setOpts = (seconds) => ({
         httpOnly: true,
         secure,
@@ -227,12 +236,13 @@ async function refreshTokenHandler(req, res) {
         path: '/',
         maxAge: seconds * 1000
       });
+      
       const ttl = tokens.expires_in || 3600;
       if (tokens.id_token) res.cookie('id_token', tokens.id_token, setOpts(ttl));
       if (tokens.access_token) res.cookie('access_token', tokens.access_token, setOpts(ttl));
       if (tokens.refresh_token) res.cookie('refresh_token', tokens.refresh_token, setOpts(60 * 60 * 24 * 30));
     } catch (cookieErr) {
-      console.warn('Failed setting refresh cookies:', cookieErr);
+      console.error('[Auth] Failed setting refresh cookies:', cookieErr);
     }
 
     return res.status(200).json({
@@ -598,27 +608,36 @@ async function resolveIdentifierForLogin(identifier, client) {
 }
 // Login handler
 async function loginHandler(req, res) {
-  const { username, password } = req.body;
-  // Allow login with email, phone, or username
-  let identifier = (username || '').toString().trim();
-  if (!identifier || !password) {
-    return res.status(400).json({ success: false, error: 'Missing username/email/phone or password' });
-  }
-  // If it looks like a phone, format to E.164
-  if (/^\+?[\d\s-]*$/.test(identifier)) {
-    const digits = identifier.replace(/\D/g, '');
-    identifier = `+${digits}`;
-  }
-
   try {
-    const client = new CognitoIdentityProviderClient({ region: process.env.AWS_COGNITO_REGION || process.env.AWS_REGION || 'us-east-1' });
+    const { username, password } = req.body;
+    // Allow login with email, phone, or username
+    let identifier = (username || '').toString().trim();
+    
+    console.log('[Auth] Login attempt:', { username: identifier, hasPassword: !!password });
+    
+    if (!identifier || !password) {
+      return res.status(400).json({ success: false, error: 'Missing username/email/phone or password' });
+    }
+    
+    // If it looks like a phone, format to E.164
+    if (/^\+?[\d\s-]*$/.test(identifier)) {
+      const digits = identifier.replace(/\D/g, '');
+      identifier = `+${digits}`;
+    }
 
-    const resolvedIdentifier = await resolveIdentifierForLogin(identifier, client);
-    if (resolvedIdentifier && resolvedIdentifier !== identifier) {
-      try {
+    const client = new CognitoIdentityProviderClient({ 
+      region: process.env.AWS_COGNITO_REGION || process.env.AWS_REGION || 'us-east-1' 
+    });
+
+    // Try to resolve email/phone to cognito username
+    try {
+      const resolvedIdentifier = await resolveIdentifierForLogin(identifier, client);
+      if (resolvedIdentifier && resolvedIdentifier !== identifier) {
         console.log('[Auth] Resolved login identifier', { input: identifier, resolved: resolvedIdentifier });
-      } catch {}
-      identifier = resolvedIdentifier;
+        identifier = resolvedIdentifier;
+      }
+    } catch (resolveError) {
+      console.warn('[Auth] Could not resolve identifier, using original:', resolveError.message);
     }
 
     let tokens = null;
@@ -704,8 +723,11 @@ async function loginHandler(req, res) {
     try {
       const cookieDomain = process.env.COOKIE_DOMAIN || '.brmh.in';
       const isProd = process.env.NODE_ENV === 'production';
-      const secure = isProd;
+      
+      // For cross-subdomain cookies in production, we need secure: true and sameSite: 'none'
+      const secure = true; // Always true for HTTPS domains
       const sameSite = isProd ? 'none' : 'lax';
+      
       const setOpts = (seconds) => ({
         httpOnly: true,
         secure,
@@ -714,11 +736,16 @@ async function loginHandler(req, res) {
         path: '/',
         maxAge: seconds * 1000
       });
+      
       const ttl = 3600;
+      console.log('[Auth] Setting cookies with options:', { domain: cookieDomain, secure, sameSite });
+      
       if (idToken) res.cookie('id_token', idToken, setOpts(ttl));
       if (accessToken) res.cookie('access_token', accessToken, setOpts(ttl));
       if (refreshToken) res.cookie('refresh_token', refreshToken, setOpts(60 * 60 * 24 * 30));
-    } catch {}
+    } catch (cookieError) {
+      console.error('[Auth] Error setting cookies:', cookieError);
+    }
 
     return res.status(200).json({
       success: true,
@@ -729,11 +756,20 @@ async function loginHandler(req, res) {
       }
     });
   } catch (err) {
+    console.error('[Auth] Login error:', { 
+      message: err?.message, 
+      name: err?.name, 
+      code: err?.Code,
+      stack: err?.stack?.split('\n')[0]
+    });
+    
     const msg = (err && err.message) ? String(err.message) : 'Login failed';
     const code = err?.name || err?.Code || 'UnknownError';
+    
     // Fallback to SRP if USER_PASSWORD_AUTH is not allowed for client or returns NotAuthorized
     if (/InvalidParameterException|UserPasswordAuth.*not.*enabled|NotAuthorizedException/i.test(code + ' ' + msg)) {
       try {
+        console.log('[Auth] Attempting SRP fallback authentication');
         const user = new CognitoUser({ Username: identifier, Pool: userPool });
         const authDetails = new AuthenticationDetails({ Username: identifier, Password: password });
         return user.authenticateUser(authDetails, {
@@ -791,8 +827,27 @@ async function loginHandler(req, res) {
         return res.status(401).json({ success: false, error: 'Incorrect username or password' });
       }
     }
-    if (/not confirmed/i.test(msg)) return res.status(403).json({ success: false, error: 'Account not confirmed. Please verify your email.', requiresConfirmation: true });
-    return res.status(401).json({ success: false, error: 'Incorrect username or password' });
+    if (/not confirmed/i.test(msg)) {
+      return res.status(403).json({ 
+        success: false, 
+        error: 'Account not confirmed. Please verify your email.', 
+        requiresConfirmation: true 
+      });
+    }
+    
+    return res.status(401).json({ 
+      success: false, 
+      error: 'Incorrect username or password',
+      details: process.env.NODE_ENV !== 'production' ? msg : undefined
+    });
+  } catch (outerError) {
+    // Catch-all to prevent 502 errors
+    console.error('[Auth] Unexpected login error:', outerError);
+    return res.status(500).json({ 
+      success: false, 
+      error: 'An unexpected error occurred during login. Please try again.',
+      details: process.env.NODE_ENV !== 'production' ? outerError.message : undefined
+    });
   }
 }
 // Phone number signup handler
@@ -1172,9 +1227,3 @@ export {
   updateUserRecord,
   deleteUserRecord
 };
-
-
-
-
-
-
