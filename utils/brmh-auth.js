@@ -824,9 +824,12 @@ async function loginHandler(req, res) {
           },
         });
       } catch (fallbackEx) {
+        console.error('[Auth] SRP fallback error:', fallbackEx);
         return res.status(401).json({ success: false, error: 'Incorrect username or password' });
       }
     }
+    
+    // Check for specific error cases
     if (/not confirmed/i.test(msg)) {
       return res.status(403).json({ 
         success: false, 
@@ -835,18 +838,11 @@ async function loginHandler(req, res) {
       });
     }
     
+    // Generic error response
     return res.status(401).json({ 
       success: false, 
       error: 'Incorrect username or password',
       details: process.env.NODE_ENV !== 'production' ? msg : undefined
-    });
-  } catch (outerError) {
-    // Catch-all to prevent 502 errors
-    console.error('[Auth] Unexpected login error:', outerError);
-    return res.status(500).json({ 
-      success: false, 
-      error: 'An unexpected error occurred during login. Please try again.',
-      details: process.env.NODE_ENV !== 'production' ? outerError.message : undefined
     });
   }
 }
