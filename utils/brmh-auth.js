@@ -704,7 +704,7 @@ async function loginHandler(req, res) {
     const accessToken = tokens.AccessToken || tokens.access_token;
     const refreshToken = tokens.RefreshToken || tokens.refresh_token;
 
-    // Optionally update login activity if we can decode id token
+    // Optionally update login activity if we can decode id token (non-blocking)
     try {
       if (idToken) {
         const decoded = await validateJwtToken(idToken);
@@ -717,7 +717,10 @@ async function loginHandler(req, res) {
           });
         }
       }
-    } catch {}
+    } catch (dbErr) {
+      // Silently fail - don't block login if DynamoDB is unavailable
+      console.warn('[Auth] Could not update user login metadata:', dbErr.message);
+    }
 
     // Set cookies with consistent options
     try {
@@ -782,7 +785,10 @@ async function loginHandler(req, res) {
                   'metadata.loginCount': (userRecord.metadata?.loginCount || 0) + 1
                 });
               }
-            } catch {}
+            } catch (dbErr) {
+              // Silently fail - don't block login if DynamoDB is unavailable
+              console.warn('[Auth] Could not update user login metadata (SRP):', dbErr.message);
+            }
 
             try {
               const cookieDomain = process.env.COOKIE_DOMAIN || '.brmh.in';
