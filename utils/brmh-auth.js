@@ -46,10 +46,18 @@ async function generateOAuthUrlHandler(req, res) {
     const { challenge, verifier } = createPkce();
     const state = crypto.randomBytes(16).toString('hex');
     
+    // Get provider from query parameter (e.g., 'Google', 'Facebook', etc.)
+    // Normalize provider name to match Cognito's expected format (capitalize first letter)
+    let provider = req.query.provider;
+    if (provider) {
+      provider = provider.charAt(0).toUpperCase() + provider.slice(1).toLowerCase();
+    }
+    
     console.log('?? Generating OAuth URL with PKCE:');
     console.log('  - Challenge:', challenge);
     console.log('  - Verifier:', verifier);
     console.log('  - State:', state);
+    console.log('  - Provider:', provider || 'default');
     
     const authUrl = new URL('/oauth2/authorize', process.env.AWS_COGNITO_DOMAIN);
     authUrl.searchParams.set('client_id', process.env.AWS_COGNITO_CLIENT_ID);
@@ -59,8 +67,15 @@ async function generateOAuthUrlHandler(req, res) {
     authUrl.searchParams.set('code_challenge_method', 'S256');
     authUrl.searchParams.set('code_challenge', challenge);
     authUrl.searchParams.set('state', state);
-    // Force showing the login screen to avoid the "continue as" page
-    authUrl.searchParams.set('prompt', 'login');
+    
+    // If provider is specified, add identity_provider parameter
+    // This tells Cognito to use the specified social identity provider
+    if (provider) {
+      authUrl.searchParams.set('identity_provider', provider);
+    } else {
+      // Force showing the login screen to avoid the "continue as" page
+      authUrl.searchParams.set('prompt', 'login');
+    }
     
     // Store verifier with state
     pkceStore.set(state, { verifier, timestamp: Date.now() });
@@ -147,6 +162,45 @@ async function exchangeTokenHandler(req, res) {
 
     // Clean up PKCE data
     pkceStore.delete(state);
+
+    // Decode the ID token to get user info and create/update user record
+    try {
+      if (tokens.id_token) {
+        const decoded = jwt.decode(tokens.id_token);
+        
+        if (decoded && decoded.sub) {
+          // Check if user exists
+          let userRecord = await getUserRecord(decoded.sub);
+          
+          if (!userRecord) {
+            // Create new user record for OAuth sign-in
+            console.log('[Auth] Creating user record for OAuth sign-in:', decoded.email);
+            
+            const userData = {
+              sub: decoded.sub,
+              username: decoded.name || decoded.email || decoded['cognito:username'],
+              email: decoded.email,
+              cognitoUsername: decoded['cognito:username'],
+              signupMethod: 'oauth',
+              verified: decoded.email_verified || true,
+              // Add OAuth provider info if available
+              oauthProvider: decoded.identities ? JSON.parse(decoded.identities)[0]?.providerName : 'unknown'
+            };
+            
+            await createUserRecord(userData);
+          } else {
+            // Update last login for existing user
+            await updateUserRecord(decoded.sub, {
+              'metadata.lastLogin': new Date().toISOString(),
+              'metadata.loginCount': (userRecord.metadata?.loginCount || 0) + 1
+            });
+          }
+        }
+      }
+    } catch (userRecordError) {
+      // Don't fail the login if user record creation fails
+      console.error('[Auth] Error managing user record for OAuth:', userRecordError);
+    }
 
     // Set cross-subdomain cookies for SSO
     try {
