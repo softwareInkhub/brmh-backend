@@ -1,4 +1,8 @@
 //index file by Sapto
+// Load environment variables FIRST before any other imports
+import dotenv from 'dotenv';
+dotenv.config();
+
 import express from 'express';
 import { OpenAPIBackend } from 'openapi-backend';
 import swaggerUi from 'swagger-ui-express';
@@ -12,7 +16,6 @@ import cors from 'cors'
 import axios from 'axios';
 import multer from 'multer';
 import { handlers as dynamodbHandlers } from './lib/dynamodb-handlers.js';
-import dotenv from 'dotenv';
 import { exec } from 'child_process';
 
 import { handlers as unifiedHandlers } from './lib/unified-handlers.js';
@@ -75,8 +78,7 @@ import {
   getLogoutUrlHandler
 } from './utils/brmh-auth.js';
 
-// Load environment variables
-dotenv.config();
+// Environment variables already loaded at the top
 // Only log AWS config in development
 if (process.env.NODE_ENV !== 'production') {
   console.log("AWS_ACCESS_KEY_ID", process.env.AWS_ACCESS_KEY_ID ? 'SET' : 'NOT SET');
