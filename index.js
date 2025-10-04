@@ -653,7 +653,7 @@ app.post('/ai-agent', (req, res) => aiAgentHandler({ request: { requestBody: req
 // AI Agent streaming endpoint for chat and schema editing
 app.post('/ai-agent/stream', async (req, res) => {
   console.log('[AI Agent] !!! STREAMING ENDPOINT CALLED !!!');
-  const { message, namespace, history, schema } = req.body;
+  const { message, namespace, history, schema, uploadedSchemas } = req.body;
   
   // Import the intent detection function
   const { detectIntent } = await import('./lib/llm-agent-system.js');
@@ -671,7 +671,7 @@ app.post('/ai-agent/stream', async (req, res) => {
   });
   
   try {
-    await agentSystem.handleStreamingWithAgents(res, namespace, message, history, schema);
+    await agentSystem.handleStreamingWithAgents(res, namespace, message, history, schema, uploadedSchemas);
   } catch (error) {
     console.error('AI Agent streaming error:', error);
     res.status(500).json({ error: 'Failed to handle AI Agent streaming request' });
