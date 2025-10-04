@@ -113,6 +113,8 @@ const allowedOrigins = [
   'https://app.brmh.in',
   'https://projectmngnt.vercel.app',
   'https://projectmanagement.brmh.in',
+  'https://admin.brmh.in',
+  'https://drive.brmh.in',
 ];
 const originRegexes = [
   /^https:\/\/([a-z0-9-]+\.)*brmh\.in$/i,
