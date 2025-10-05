@@ -1,4 +1,8 @@
 //index file by Sapto
+// Load environment variables FIRST before any other imports
+import dotenv from 'dotenv';
+dotenv.config();
+
 import express from 'express';
 import { OpenAPIBackend } from 'openapi-backend';
 import swaggerUi from 'swagger-ui-express';
@@ -13,7 +17,6 @@ import cookieParser from 'cookie-parser';
 import axios from 'axios';
 import multer from 'multer';
 import { handlers as dynamodbHandlers } from './lib/dynamodb-handlers.js';
-import dotenv from 'dotenv';
 import { exec } from 'child_process';
 
 import { handlers as unifiedHandlers } from './lib/unified-handlers.js';
@@ -77,8 +80,7 @@ import {
   getLogoutUrlHandler
 } from './utils/brmh-auth.js';
 
-// Load environment variables
-dotenv.config();
+// Environment variables already loaded at the top
 // Only log AWS config in development
 if (process.env.NODE_ENV !== 'production') {
   console.log("AWS_ACCESS_KEY_ID", process.env.AWS_ACCESS_KEY_ID ? 'SET' : 'NOT SET');
@@ -691,7 +693,7 @@ app.post('/ai-agent', (req, res) => aiAgentHandler({ request: { requestBody: req
 // AI Agent streaming endpoint for chat and schema editing
 app.post('/ai-agent/stream', async (req, res) => {
   console.log('[AI Agent] !!! STREAMING ENDPOINT CALLED !!!');
-  const { message, namespace, history, schema } = req.body;
+  const { message, namespace, history, schema, uploadedSchemas } = req.body;
   
   // Import the intent detection function
   const { detectIntent } = await import('./lib/llm-agent-system.js');
@@ -709,7 +711,7 @@ app.post('/ai-agent/stream', async (req, res) => {
   });
   
   try {
-    await agentSystem.handleStreamingWithAgents(res, namespace, message, history, schema);
+    await agentSystem.handleStreamingWithAgents(res, namespace, message, history, schema, uploadedSchemas);
   } catch (error) {
     console.error('AI Agent streaming error:', error);
     res.status(500).json({ error: 'Failed to handle AI Agent streaming request' });
