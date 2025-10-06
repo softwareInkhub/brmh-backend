@@ -25,6 +25,7 @@ const { DynamoDBDocumentClient } = pkg;
 
 import { aiAgentHandler, aiAgentStreamHandler } from './lib/ai-agent-handlers.js';
 import { agentSystem, handleLambdaCodegen } from './lib/llm-agent-system.js';
+import { generateNamespaceFromArtifacts, saveGeneratedNamespace } from './lib/namespace-generator.js';
 import { lambdaDeploymentManager } from './lib/lambda-deployment.js';
 import { 
   cacheTableHandler, 
@@ -842,6 +843,37 @@ app.post('/ai-agent/schema-lambda-generation', async (req, res) => {
   }
 });
 
+// Smart namespace generation from BRD/HLD/LLD and attachments
+app.post('/ai-agent/generate-namespace-smart', upload.any(), async (req, res) => {
+  try {
+    const { prompt = '', brd = '', hld = '', lld = '' } = req.body || {};
+    const files = req.files || [];
+    
+    // Prepare attachments including buffers for extraction
+    const attachments = files.map(f => ({
+      name: f.originalname,
+      type: f.mimetype,
+      size: f.size,
+      buffer: f.buffer
+    }));
+
+    const result = await generateNamespaceFromArtifacts({ prompt, brd, hld, lld, attachments });
+    if (!result.success) {
+      return res.status(400).json({ success: false, error: result.error });
+    }
+
+    const save = await saveGeneratedNamespace(result.data);
+    if (!save.success) {
+      return res.status(500).json({ success: false, error: save.error || 'Failed to save generated namespace' });
+    }
+
+    return res.json({ success: true, namespaceId: result.namespaceId });
+  } catch (error) {
+    console.error('[AI Agent] Smart namespace generation error:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // Workspace Guidance and Navigation endpoint
 app.post('/ai-agent/workspace-guidance', async (req, res) => {
   try {
@@ -1031,7 +1063,6 @@ app.post('/save-api-to-namespace', async (req, res) => {
 });
 
 // Endpoint to add a schemaId to a namespace's schemaIds array
-debugger;
 app.post('/unified/namespace/:namespaceId/add-schema', async (req, res) => {
   try {
     const { namespaceId } = req.params;
