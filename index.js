@@ -210,7 +210,8 @@ app.post('/api/mock-server/stop', (req, res) => {
   }
 });
 
-app.get("/test",(req,res)=>{res.send("hello! world");
+app.get("/test",(req,res)=>{
+  res.json({ message: "hello! world", status: "ok", timestamp: new Date().toISOString() });
 })
 // Register Notifications routes
 registerNotificationRoutes(app, docClient);

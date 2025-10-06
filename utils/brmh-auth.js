@@ -457,11 +457,23 @@ function validateJwtToken(token) {
       return reject(new Error('JWKS not initialized'));
     }
     
-    jwt.verify(token, getKey, {
+    // First, try to decode to determine token type
+    const decoded = jwt.decode(token, { complete: true });
+    const tokenUse = decoded?.payload?.token_use;
+    
+    // For access tokens, don't validate audience (Cognito access tokens don't have client_id as audience)
+    // For ID tokens, validate audience
+    const verifyOptions = {
       algorithms: ['RS256'],
-      issuer: `https://cognito-idp.${process.env.AWS_COGNITO_REGION}.amazonaws.com/${process.env.AWS_COGNITO_USER_POOL_ID}`,
-      audience: process.env.AWS_COGNITO_CLIENT_ID
-    }, (err, decoded) => {
+      issuer: `https://cognito-idp.${process.env.AWS_COGNITO_REGION}.amazonaws.com/${process.env.AWS_COGNITO_USER_POOL_ID}`
+    };
+    
+    // Only add audience check for ID tokens
+    if (tokenUse === 'id') {
+      verifyOptions.audience = process.env.AWS_COGNITO_CLIENT_ID;
+    }
+    
+    jwt.verify(token, getKey, verifyOptions, (err, decoded) => {
       if (err) {
         reject(err);
       } else {
