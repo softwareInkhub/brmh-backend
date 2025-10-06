@@ -117,6 +117,9 @@ const allowedOrigins = [
   'https://projectmanagement.brmh.in',
   'https://admin.brmh.in',
   'https://drive.brmh.in',
+  'http://localhost:3000',
+  'http://localhost:3001',
+  'http://localhost:4000',
 ];
 const originRegexes = [
   /^https:\/\/([a-z0-9-]+\.)*brmh\.in$/i,
