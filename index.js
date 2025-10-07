@@ -301,7 +301,7 @@ Promise.all([
 // --- Lambda Deployment API Routes ---
 app.post('/lambda/deploy', async (req, res) => {
   try {
-    const { functionName, code, runtime = 'nodejs18.x', handler = 'index.handler', memorySize = 128, timeout = 30, dependencies = {}, environment = '', createApiGateway = true } = req.body;
+    const { functionName, code, runtime = 'nodejs18.x', handler = 'index.handler', memorySize = 128, timeout = 30, dependencies = {}, environment = '' } = req.body;
     
     if (!functionName || !code) {
       return res.status(400).json({ error: 'functionName and code are required' });
@@ -320,7 +320,7 @@ app.post('/lambda/deploy', async (req, res) => {
       timeout,
       dependencies,
       environment,
-      createApiGateway
+      true
     );
     
     const timeoutPromise = new Promise((_, reject) => {
@@ -333,9 +333,14 @@ app.post('/lambda/deploy', async (req, res) => {
     res.json(result);
   } catch (error) {
     console.error('[Lambda Deployment] Error:', error);
-    res.status(500).json({ 
+    const msg = error?.message || '';
+    const code = error?.code || error?.name || '';
+    const retryable = /EPIPE|ECONNRESET|TooManyRequests|Throttling/i.test(msg) || /EPIPE|ECONNRESET|Throttling/.test(code);
+    res.status(retryable ? 503 : 500).json({ 
       error: 'Failed to deploy Lambda function', 
-      details: error.message,
+      details: msg,
+      code,
+      retryable,
       timestamp: new Date().toISOString()
     });
   }
@@ -715,6 +720,14 @@ app.post('/ai-agent/lambda-codegen', async (req, res) => {
   }
 
   try {
+    // Enable streaming response
+    res.writeHead(200, {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Transfer-Encoding': 'chunked',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive'
+    });
+
     // Use the enhanced lambda codegen handler with streaming and automatic schema selection
     await handleLambdaCodegen({
       message,
@@ -731,8 +744,11 @@ app.post('/ai-agent/lambda-codegen', async (req, res) => {
 
   } catch (error) {
     console.error('[AI Agent] Lambda codegen error:', error);
-    res.write(`data: ${JSON.stringify({ error: 'Failed to generate Lambda code', details: error.message })}\n\n`);
-    res.end();
+    try {
+      res.write(`data: ${JSON.stringify({ route: 'lambda', type: 'error', error: 'Failed to generate Lambda code', details: error.message })}\n\n`);
+      res.write('data: [DONE]\n\n');
+      res.end();
+    } catch {}
   }
 });
 
