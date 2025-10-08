@@ -78,7 +78,10 @@ import {
   validateJwtToken,
   debugPkceStoreHandler,
   logoutHandler,
-  getLogoutUrlHandler
+  getLogoutUrlHandler,
+  adminCreateUserHandler,
+  adminConfirmUserHandler,
+  adminListUsersHandler
 } from './utils/brmh-auth.js';
 
 import {
@@ -2007,6 +2010,16 @@ app.get('/auth/logout-redirect', (req, res) => {
     return res.status(500).json({ error: 'Failed to build logout redirect URL', details: error.message });
   }
 });
+
+// Admin Routes - User Management
+// Create user in both Cognito and DynamoDB
+app.post('/admin/users/create', adminCreateUserHandler);
+
+// Confirm user email manually (admin)
+app.post('/admin/users/confirm', adminConfirmUserHandler);
+
+// List all users in Cognito
+app.get('/admin/users/list', adminListUsersHandler);
 
 // --- Roles and Permissions Routes ---
 // Create a new role for a namespace

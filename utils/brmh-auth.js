@@ -1432,6 +1432,219 @@ async function getLogoutUrlHandler(req, res) {
   }
 }
 
+// Admin: Create user in both Cognito and DynamoDB
+async function adminCreateUserHandler(req, res) {
+  try {
+    const { username, email, password, phoneNumber, temporaryPassword = false, namespace, role, permissions } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        error: 'Email is required'
+      });
+    }
+
+    if (!userPool) {
+      return res.status(500).json({
+        success: false,
+        error: 'Cognito User Pool not configured'
+      });
+    }
+
+    // Create username from email if not provided
+    const displayName = username || email.split('@')[0];
+    const sanitized = displayName.replace(/\s+/g, '_').replace(/[^\w-]/g, '_');
+    const cognitoUsername = sanitized || `user_${Date.now()}`;
+
+    console.log('[Admin] Creating user in Cognito:', { cognitoUsername, email });
+
+    // Determine password
+    const userPassword = password || temporaryPassword ? 
+      `Temp${Math.random().toString(36).slice(-8)}!` : 
+      `Pass${Math.random().toString(36).slice(-8)}!`;
+
+    // Prepare attributes
+    const attributeList = [
+      new CognitoUserAttribute({ Name: 'email', Value: email })
+    ];
+
+    if (phoneNumber) {
+      const formattedPhone = phoneNumber.startsWith('+') ? phoneNumber : `+${phoneNumber}`;
+      attributeList.push(new CognitoUserAttribute({ Name: 'phone_number', Value: formattedPhone }));
+    }
+
+    // Create user in Cognito
+    return new Promise((resolve, reject) => {
+      userPool.signUp(cognitoUsername, userPassword, attributeList, null, async (err, result) => {
+        if (err) {
+          console.error('[Admin] Cognito signup error:', err);
+          return res.status(400).json({
+            success: false,
+            error: 'Failed to create user in Cognito',
+            details: err.message
+          });
+        }
+
+        console.log('[Admin] User created in Cognito:', result.userSub);
+
+        try {
+          // Create user record in DynamoDB
+          const userData = {
+            sub: result.userSub,
+            username: displayName,
+            email: email,
+            phoneNumber: phoneNumber,
+            cognitoUsername: cognitoUsername,
+            signupMethod: 'admin',
+            verified: false
+          };
+
+          const userRecord = await createUserRecord(userData, null);
+
+          // If namespace and role provided, assign them
+          if (namespace && role && permissions) {
+            const namespaceRoles = userRecord.namespaceRoles || {};
+            namespaceRoles[namespace] = {
+              role,
+              permissions: Array.isArray(permissions) ? permissions : [permissions],
+              assignedAt: new Date().toISOString(),
+              assignedBy: 'admin'
+            };
+            await updateUserRecord(result.userSub, { namespaceRoles });
+          }
+
+          console.log('[Admin] User record created in DynamoDB');
+
+          return res.status(201).json({
+            success: true,
+            message: 'User created successfully in both Cognito and DynamoDB',
+            user: {
+              userId: result.userSub,
+              cognitoUsername,
+              email,
+              phoneNumber,
+              temporaryPassword: temporaryPassword ? userPassword : undefined,
+              emailVerificationRequired: true
+            }
+          });
+        } catch (dbError) {
+          console.error('[Admin] Error creating DynamoDB record:', dbError);
+          return res.status(500).json({
+            success: false,
+            error: 'User created in Cognito but failed to create DynamoDB record',
+            details: dbError.message,
+            userId: result.userSub
+          });
+        }
+      });
+    });
+  } catch (error) {
+    console.error('[Admin] Error in admin create user:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to create user',
+      details: error.message
+    });
+  }
+}
+
+// Admin: Confirm user email manually
+async function adminConfirmUserHandler(req, res) {
+  try {
+    const { username } = req.body;
+
+    if (!username) {
+      return res.status(400).json({
+        success: false,
+        error: 'username (cognitoUsername) is required'
+      });
+    }
+
+    const client = new CognitoIdentityProviderClient({
+      region: process.env.AWS_COGNITO_REGION || process.env.AWS_REGION || 'us-east-1'
+    });
+
+    const { AdminConfirmSignUpCommand } = await import('@aws-sdk/client-cognito-identity-provider');
+
+    const command = new AdminConfirmSignUpCommand({
+      UserPoolId: process.env.AWS_COGNITO_USER_POOL_ID,
+      Username: username
+    });
+
+    await client.send(command);
+
+    console.log('[Admin] Confirmed user:', username);
+
+    // Update DynamoDB record
+    try {
+      const userRecord = await getUserRecord(username);
+      if (userRecord) {
+        await updateUserRecord(userRecord.userId, {
+          'metadata.verified': true
+        });
+      }
+    } catch (dbError) {
+      console.warn('[Admin] Could not update DynamoDB verification status:', dbError.message);
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'User confirmed successfully'
+    });
+  } catch (error) {
+    console.error('[Admin] Error confirming user:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to confirm user',
+      details: error.message
+    });
+  }
+}
+
+// Admin: List all users in Cognito
+async function adminListUsersHandler(req, res) {
+  try {
+    const { limit = 60 } = req.query;
+
+    const client = new CognitoIdentityProviderClient({
+      region: process.env.AWS_COGNITO_REGION || process.env.AWS_REGION || 'us-east-1'
+    });
+
+    const { ListUsersCommand } = await import('@aws-sdk/client-cognito-identity-provider');
+
+    const command = new ListUsersCommand({
+      UserPoolId: process.env.AWS_COGNITO_USER_POOL_ID,
+      Limit: parseInt(limit)
+    });
+
+    const response = await client.send(command);
+
+    const users = response.Users.map(user => ({
+      username: user.Username,
+      userStatus: user.UserStatus,
+      enabled: user.Enabled,
+      userCreateDate: user.UserCreateDate,
+      attributes: user.Attributes.reduce((acc, attr) => {
+        acc[attr.Name] = attr.Value;
+        return acc;
+      }, {})
+    }));
+
+    return res.status(200).json({
+      success: true,
+      count: users.length,
+      users
+    });
+  } catch (error) {
+    console.error('[Admin] Error listing users:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to list users',
+      details: error.message
+    });
+  }
+}
+
 export { 
   generateOAuthUrlHandler, 
   exchangeTokenHandler, 
@@ -1448,5 +1661,9 @@ export {
   updateUserLoginWithDomain,
   deleteUserRecord,
   extractDomainFromOrigin,
-  extractNamespaceFromDomain
+  extractNamespaceFromDomain,
+  // Admin functions
+  adminCreateUserHandler,
+  adminConfirmUserHandler,
+  adminListUsersHandler
 };
