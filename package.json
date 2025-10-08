@@ -36,6 +36,7 @@
     "aws-amplify": "^6.15.4",
     "axios": "^1.6.7",
     "cheerio": "^1.1.2",
+    "client-api-gateway": "github:aws-sdk/client-api-gateway",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",

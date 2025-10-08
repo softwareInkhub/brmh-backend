@@ -25,7 +25,7 @@ const { DynamoDBDocumentClient } = pkg;
 
 import { aiAgentHandler, aiAgentStreamHandler } from './lib/ai-agent-handlers.js';
 import { agentSystem, handleLambdaCodegen } from './lib/llm-agent-system.js';
-import { generateNamespaceFromArtifacts, saveGeneratedNamespace } from './lib/namespace-generator.js';
+import { generateNamespaceFromArtifacts, saveGeneratedNamespace, generateDocumentsFromNamespace } from './lib/namespace-generator.js';
 import { lambdaDeploymentManager } from './lib/lambda-deployment.js';
 import { 
   cacheTableHandler, 
@@ -886,6 +886,31 @@ app.post('/ai-agent/generate-namespace-smart', upload.any(), async (req, res) =>
     return res.json({ success: true, namespaceId: result.namespaceId });
   } catch (error) {
     console.error('[AI Agent] Smart namespace generation error:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Generate BRD/HLD/LLD documents from namespace context
+app.post('/ai-agent/generate-documents', async (req, res) => {
+  try {
+    const { namespaceId, documentTypes = ['brd', 'hld', 'lld'], format = 'json' } = req.body || {};
+    
+    if (!namespaceId) {
+      return res.status(400).json({ success: false, error: 'namespaceId is required' });
+    }
+
+    const result = await generateDocumentsFromNamespace({ namespaceId, documentTypes, format });
+    if (!result.success) {
+      return res.status(500).json({ success: false, error: result.error });
+    }
+
+    return res.json({ 
+      success: true, 
+      documents: result.documents,
+      namespaceId: namespaceId
+    });
+  } catch (error) {
+    console.error('[AI Agent] Document generation error:', error);
     return res.status(500).json({ success: false, error: error.message });
   }
 });
