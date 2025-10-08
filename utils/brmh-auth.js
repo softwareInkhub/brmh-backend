@@ -169,6 +169,12 @@ async function exchangeTokenHandler(req, res) {
         const decoded = jwt.decode(tokens.id_token);
         
         if (decoded && decoded.sub) {
+          // Extract domain from origin header
+          const origin = req.headers.origin || req.headers.referer;
+          const loginDomain = extractDomainFromOrigin(origin);
+          
+          console.log('[Auth] OAuth login from domain:', loginDomain);
+          
           // Check if user exists
           let userRecord = await getUserRecord(decoded.sub);
           
@@ -187,13 +193,10 @@ async function exchangeTokenHandler(req, res) {
               oauthProvider: decoded.identities ? JSON.parse(decoded.identities)[0]?.providerName : 'unknown'
             };
             
-            await createUserRecord(userData);
+            await createUserRecord(userData, loginDomain);
           } else {
-            // Update last login for existing user
-            await updateUserRecord(decoded.sub, {
-              'metadata.lastLogin': new Date().toISOString(),
-              'metadata.loginCount': (userRecord.metadata?.loginCount || 0) + 1
-            });
+            // Update last login for existing user with domain tracking
+            await updateUserLoginWithDomain(decoded.sub, loginDomain);
           }
         }
       }
@@ -338,25 +341,83 @@ initializeJwks();
 // User management functions for DynamoDB
 const USERS_TABLE = process.env.USERS_TABLE || 'users';
 
-// Create user record in DynamoDB
-async function createUserRecord(userData) {
+// Helper function to extract domain from origin header
+function extractDomainFromOrigin(origin) {
+  if (!origin) return 'unknown';
   try {
+    const url = new URL(origin);
+    return url.hostname; // e.g., "drive.brmh.in", "admin.brmh.in"
+  } catch (error) {
+    return origin; // Return as-is if URL parsing fails
+  }
+}
+
+// Helper function to extract namespace/subdomain from domain
+function extractNamespaceFromDomain(domain) {
+  if (!domain || domain === 'unknown') return null;
+  
+  // Extract subdomain from domain like "drive.brmh.in" -> "drive"
+  // or "admin.brmh.in" -> "admin"
+  const parts = domain.split('.');
+  
+  // If it's already a subdomain name (no dots), return it
+  if (parts.length === 1) return parts[0];
+  
+  // If it's brmh.in, return null (main domain)
+  if (parts.length === 2 && parts[0] === 'brmh') return null;
+  
+  // If it's subdomain.brmh.in, return subdomain
+  if (parts.length >= 3 && parts[parts.length - 2] === 'brmh') {
+    return parts[0];
+  }
+  
+  // For localhost or other patterns, return the first part
+  return parts[0];
+}
+
+// Create user record in DynamoDB
+async function createUserRecord(userData, loginDomain = null) {
+  try {
+    const now = new Date().toISOString();
+    const namespace = extractNamespaceFromDomain(loginDomain);
+    
     const userRecord = {
       userId: userData.sub || userData.username,
       username: userData.username,
       email: userData.email,
       phoneNumber: userData.phoneNumber,
       cognitoUsername: userData.cognitoUsername,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      createdAt: now,
+      updatedAt: now,
       status: 'active',
       // Add any additional metadata
       metadata: {
         signupMethod: userData.signupMethod || 'email',
         verified: userData.verified || false,
         lastLogin: null,
-        loginCount: 0
-      }
+        loginCount: 0,
+        // Track domains/subdomains user has accessed
+        accessedDomains: loginDomain ? [loginDomain] : [],
+        accessedNamespaces: namespace ? [namespace] : [],
+        lastAccessedDomain: loginDomain || null,
+        lastAccessedNamespace: namespace || null,
+        domainAccessHistory: loginDomain ? [{
+          domain: loginDomain,
+          namespace: namespace,
+          firstAccess: now,
+          lastAccess: now,
+          accessCount: 1
+        }] : []
+      },
+      // Namespace-specific roles and permissions
+      namespaceRoles: namespace ? {
+        [namespace]: {
+          role: 'viewer', // Default role
+          permissions: ['read:all'], // Default permissions
+          assignedAt: now,
+          assignedBy: 'system'
+        }
+      } : {}
     };
 
     console.log('[Auth] Creating user record in DynamoDB:', {
@@ -430,6 +491,85 @@ async function updateUserRecord(userId, updates) {
     return response.Attributes;
   } catch (error) {
     console.error('[Auth] Error updating user record in DynamoDB:', error);
+    throw error;
+  }
+}
+
+// Update user login with domain tracking and namespace
+async function updateUserLoginWithDomain(userId, loginDomain) {
+  try {
+    const now = new Date().toISOString();
+    
+    // Get current user record to check existing domain history
+    const userRecord = await getUserRecord(userId);
+    
+    if (!userRecord) {
+      console.warn('[Auth] User record not found for domain tracking:', userId);
+      return null;
+    }
+
+    const namespace = extractNamespaceFromDomain(loginDomain);
+
+    // Initialize metadata if it doesn't exist
+    const metadata = userRecord.metadata || {};
+    const accessedDomains = metadata.accessedDomains || [];
+    const accessedNamespaces = metadata.accessedNamespaces || [];
+    const domainAccessHistory = metadata.domainAccessHistory || [];
+    const loginCount = (metadata.loginCount || 0) + 1;
+
+    // Add domain to accessed domains list if not already there
+    if (loginDomain && !accessedDomains.includes(loginDomain)) {
+      accessedDomains.push(loginDomain);
+    }
+
+    // Add namespace to accessed namespaces list if not already there
+    if (namespace && !accessedNamespaces.includes(namespace)) {
+      accessedNamespaces.push(namespace);
+    }
+
+    // Update domain access history
+    const existingDomainIndex = domainAccessHistory.findIndex(d => d.domain === loginDomain);
+    if (existingDomainIndex >= 0) {
+      // Update existing domain entry
+      domainAccessHistory[existingDomainIndex].lastAccess = now;
+      domainAccessHistory[existingDomainIndex].accessCount += 1;
+    } else if (loginDomain) {
+      // Add new domain entry
+      domainAccessHistory.push({
+        domain: loginDomain,
+        namespace: namespace,
+        firstAccess: now,
+        lastAccess: now,
+        accessCount: 1
+      });
+    }
+
+    // Initialize namespace roles if accessing a new namespace
+    const namespaceRoles = userRecord.namespaceRoles || {};
+    if (namespace && !namespaceRoles[namespace]) {
+      namespaceRoles[namespace] = {
+        role: 'viewer', // Default role for new namespace
+        permissions: ['read:all'], // Default permissions
+        assignedAt: now,
+        assignedBy: 'system'
+      };
+    }
+
+    // Update the user record
+    const updates = {
+      'metadata.lastLogin': now,
+      'metadata.loginCount': loginCount,
+      'metadata.accessedDomains': accessedDomains,
+      'metadata.accessedNamespaces': accessedNamespaces,
+      'metadata.lastAccessedDomain': loginDomain || metadata.lastAccessedDomain,
+      'metadata.lastAccessedNamespace': namespace || metadata.lastAccessedNamespace,
+      'metadata.domainAccessHistory': domainAccessHistory,
+      'namespaceRoles': namespaceRoles
+    };
+
+    return await updateUserRecord(userId, updates);
+  } catch (error) {
+    console.error('[Auth] Error updating user login with domain:', error);
     throw error;
   }
 }
@@ -588,6 +728,12 @@ async function signupHandler(req, res) {
     }
     
     try {
+      // Extract domain from origin header
+      const origin = req.headers.origin || req.headers.referer;
+      const signupDomain = extractDomainFromOrigin(origin);
+      
+      console.log('[Auth] Signup from domain:', signupDomain);
+      
       // Create user record in DynamoDB
       const userData = {
         sub: result.userSub,
@@ -598,7 +744,7 @@ async function signupHandler(req, res) {
         verified: false
       };
       
-      await createUserRecord(userData);
+      await createUserRecord(userData, signupDomain);
       
       console.log('[Auth] User signup successful:', {
         username,
@@ -775,13 +921,15 @@ async function loginHandler(req, res) {
       if (idToken) {
         const decoded = await validateJwtToken(idToken);
         const userId = decoded.sub;
-        const userRecord = await getUserRecord(userId);
-        if (userRecord) {
-          await updateUserRecord(userId, {
-            'metadata.lastLogin': new Date().toISOString(),
-            'metadata.loginCount': (userRecord.metadata?.loginCount || 0) + 1
-          });
-        }
+        
+        // Extract domain from origin header
+        const origin = req.headers.origin || req.headers.referer;
+        const loginDomain = extractDomainFromOrigin(origin);
+        
+        console.log('[Auth] Custom login from domain:', loginDomain);
+        
+        // Update login with domain tracking
+        await updateUserLoginWithDomain(userId, loginDomain);
       }
     } catch (dbErr) {
       // Silently fail - don't block login if DynamoDB is unavailable
@@ -953,6 +1101,10 @@ async function phoneSignupHandler(req, res) {
       try { 
         console.log('[Auth] Phone signup success (phone as username)', { username: formattedPhone }); 
         
+        // Extract domain from origin header
+        const origin = req.headers.origin || req.headers.referer;
+        const signupDomain = extractDomainFromOrigin(origin);
+        
         // Create user record in DynamoDB
         const userData = {
           sub: result.userSub,
@@ -964,7 +1116,7 @@ async function phoneSignupHandler(req, res) {
           verified: false
         };
         
-        await createUserRecord(userData);
+        await createUserRecord(userData, signupDomain);
         
       } catch (dbError) {
         console.error('[Auth] Error creating user record in DynamoDB:', dbError);
@@ -1057,14 +1209,14 @@ async function phoneLoginHandler(req, res) {
       try { 
         console.log('[Auth] Phone login success'); 
         
-        // Update user record with login activity
-        const userRecord = await getUserRecord(result.accessToken.payload.sub);
-        if (userRecord) {
-          await updateUserRecord(result.accessToken.payload.sub, {
-            'metadata.lastLogin': new Date().toISOString(),
-            'metadata.loginCount': (userRecord.metadata?.loginCount || 0) + 1
-          });
-        }
+        // Extract domain from origin header
+        const origin = req.headers.origin || req.headers.referer;
+        const loginDomain = extractDomainFromOrigin(origin);
+        
+        console.log('[Auth] Phone login from domain:', loginDomain);
+        
+        // Update user record with login activity and domain tracking
+        await updateUserLoginWithDomain(result.accessToken.payload.sub, loginDomain);
       } catch (dbError) {
         console.error('[Auth] Error updating user login activity:', dbError);
         // Don't fail the login if DynamoDB update fails
@@ -1293,5 +1445,8 @@ export {
   createUserRecord,
   getUserRecord,
   updateUserRecord,
-  deleteUserRecord
+  updateUserLoginWithDomain,
+  deleteUserRecord,
+  extractDomainFromOrigin,
+  extractNamespaceFromDomain
 };

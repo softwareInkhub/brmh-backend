@@ -1,3 +1,4 @@
+
 //index file by Sapto
 // Load environment variables FIRST before any other imports
 import dotenv from 'dotenv';
@@ -79,6 +80,28 @@ import {
   logoutHandler,
   getLogoutUrlHandler
 } from './utils/brmh-auth.js';
+
+import {
+  createRoleHandler,
+  getRolesHandler,
+  getRoleByIdHandler,
+  updateRoleHandler,
+  deleteRoleHandler,
+  addPermissionsHandler,
+  removePermissionsHandler,
+  checkPermissionsHandler
+} from './utils/roles-permissions.js';
+
+import {
+  assignNamespaceRoleHandler,
+  getNamespaceRoleHandler,
+  getAllNamespaceRolesHandler,
+  updateNamespaceRoleHandler,
+  removeNamespaceRoleHandler,
+  checkNamespacePermissionsHandler,
+  addNamespacePermissionsHandler,
+  removeNamespacePermissionsHandler
+} from './utils/namespace-roles.js';
 
 // Environment variables already loaded at the top
 // Only log AWS config in development
@@ -1984,6 +2007,56 @@ app.get('/auth/logout-redirect', (req, res) => {
     return res.status(500).json({ error: 'Failed to build logout redirect URL', details: error.message });
   }
 });
+
+// --- Roles and Permissions Routes ---
+// Create a new role for a namespace
+app.post('/roles-permissions/namespaces/:namespaceId/roles', createRoleHandler);
+
+// Get all roles for a namespace
+app.get('/roles-permissions/namespaces/:namespaceId/roles', getRolesHandler);
+
+// Get a specific role
+app.get('/roles-permissions/namespaces/:namespaceId/roles/:roleId', getRoleByIdHandler);
+
+// Update a role
+app.put('/roles-permissions/namespaces/:namespaceId/roles/:roleId', updateRoleHandler);
+
+// Delete a role (soft delete by default, hard delete with ?hardDelete=true)
+app.delete('/roles-permissions/namespaces/:namespaceId/roles/:roleId', deleteRoleHandler);
+
+// Add permissions to a role
+app.post('/roles-permissions/namespaces/:namespaceId/roles/:roleId/permissions', addPermissionsHandler);
+
+// Remove permissions from a role
+app.delete('/roles-permissions/namespaces/:namespaceId/roles/:roleId/permissions', removePermissionsHandler);
+
+// Check if a role has specific permissions
+app.post('/roles-permissions/namespaces/:namespaceId/check-permissions', checkPermissionsHandler);
+
+// --- Namespace Roles Routes (stored in brmh-users table) ---
+// Assign a role to a user in a namespace
+app.post('/namespace-roles/assign', assignNamespaceRoleHandler);
+
+// Get a user's role in a specific namespace
+app.get('/namespace-roles/:userId/:namespace', getNamespaceRoleHandler);
+
+// Get all namespace roles for a user
+app.get('/namespace-roles/:userId', getAllNamespaceRolesHandler);
+
+// Update a user's role in a namespace
+app.put('/namespace-roles/:userId/:namespace', updateNamespaceRoleHandler);
+
+// Remove a user's role from a namespace
+app.delete('/namespace-roles/:userId/:namespace', removeNamespaceRoleHandler);
+
+// Check if a user has specific permissions in a namespace
+app.post('/namespace-roles/:userId/:namespace/check-permissions', checkNamespacePermissionsHandler);
+
+// Add permissions to a user's role in a namespace
+app.post('/namespace-roles/:userId/:namespace/add-permissions', addNamespacePermissionsHandler);
+
+// Remove permissions from a user's role in a namespace
+app.post('/namespace-roles/:userId/:namespace/remove-permissions', removeNamespacePermissionsHandler);
 
 
 const PORT = process.env.PORT || 5001;
