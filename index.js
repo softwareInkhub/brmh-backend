@@ -27,6 +27,7 @@ const { DynamoDBDocumentClient } = pkg;
 
 import { aiAgentHandler, aiAgentStreamHandler } from './lib/ai-agent-handlers.js';
 import { agentSystem, handleLambdaCodegen } from './lib/llm-agent-system.js';
+import { generateNamespaceFromArtifacts, saveGeneratedNamespace, generateDocumentsFromNamespace } from './lib/namespace-generator.js';
 import { lambdaDeploymentManager } from './lib/lambda-deployment.js';
 import { 
   cacheTableHandler, 
@@ -368,7 +369,7 @@ Promise.all([
 // --- Lambda Deployment API Routes ---
 app.post('/lambda/deploy', async (req, res) => {
   try {
-    const { functionName, code, runtime = 'nodejs18.x', handler = 'index.handler', memorySize = 128, timeout = 30, dependencies = {}, environment = '', createApiGateway = true } = req.body;
+    const { functionName, code, runtime = 'nodejs18.x', handler = 'index.handler', memorySize = 128, timeout = 30, dependencies = {}, environment = '' } = req.body;
     
     if (!functionName || !code) {
       return res.status(400).json({ error: 'functionName and code are required' });
@@ -387,7 +388,7 @@ app.post('/lambda/deploy', async (req, res) => {
       timeout,
       dependencies,
       environment,
-      createApiGateway
+      true
     );
     
     const timeoutPromise = new Promise((_, reject) => {
@@ -400,9 +401,14 @@ app.post('/lambda/deploy', async (req, res) => {
     res.json(result);
   } catch (error) {
     console.error('[Lambda Deployment] Error:', error);
-    res.status(500).json({ 
+    const msg = error?.message || '';
+    const code = error?.code || error?.name || '';
+    const retryable = /EPIPE|ECONNRESET|TooManyRequests|Throttling/i.test(msg) || /EPIPE|ECONNRESET|Throttling/.test(code);
+    res.status(retryable ? 503 : 500).json({ 
       error: 'Failed to deploy Lambda function', 
-      details: error.message,
+      details: msg,
+      code,
+      retryable,
       timestamp: new Date().toISOString()
     });
   }
@@ -782,6 +788,14 @@ app.post('/ai-agent/lambda-codegen', async (req, res) => {
   }
 
   try {
+    // Enable streaming response
+    res.writeHead(200, {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Transfer-Encoding': 'chunked',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive'
+    });
+
     // Use the enhanced lambda codegen handler with streaming and automatic schema selection
     await handleLambdaCodegen({
       message,
@@ -798,8 +812,11 @@ app.post('/ai-agent/lambda-codegen', async (req, res) => {
 
   } catch (error) {
     console.error('[AI Agent] Lambda codegen error:', error);
-    res.write(`data: ${JSON.stringify({ error: 'Failed to generate Lambda code', details: error.message })}\n\n`);
-    res.end();
+    try {
+      res.write(`data: ${JSON.stringify({ route: 'lambda', type: 'error', error: 'Failed to generate Lambda code', details: error.message })}\n\n`);
+      res.write('data: [DONE]\n\n');
+      res.end();
+    } catch {}
   }
 });
 
@@ -907,6 +924,62 @@ app.post('/ai-agent/schema-lambda-generation', async (req, res) => {
     })}\n\n`);
     res.write('data: [DONE]\n\n');
     res.end();
+  }
+});
+
+// Smart namespace generation from BRD/HLD/LLD and attachments
+app.post('/ai-agent/generate-namespace-smart', upload.any(), async (req, res) => {
+  try {
+    const { prompt = '', brd = '', hld = '', lld = '' } = req.body || {};
+    const files = req.files || [];
+    
+    // Prepare attachments including buffers for extraction
+    const attachments = files.map(f => ({
+      name: f.originalname,
+      type: f.mimetype,
+      size: f.size,
+      buffer: f.buffer
+    }));
+
+    const result = await generateNamespaceFromArtifacts({ prompt, brd, hld, lld, attachments });
+    if (!result.success) {
+      return res.status(400).json({ success: false, error: result.error });
+    }
+
+    const save = await saveGeneratedNamespace(result.data);
+    if (!save.success) {
+      return res.status(500).json({ success: false, error: save.error || 'Failed to save generated namespace' });
+    }
+
+    return res.json({ success: true, namespaceId: result.namespaceId });
+  } catch (error) {
+    console.error('[AI Agent] Smart namespace generation error:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Generate BRD/HLD/LLD documents from namespace context
+app.post('/ai-agent/generate-documents', async (req, res) => {
+  try {
+    const { namespaceId, documentTypes = ['brd', 'hld', 'lld'], format = 'json' } = req.body || {};
+    
+    if (!namespaceId) {
+      return res.status(400).json({ success: false, error: 'namespaceId is required' });
+    }
+
+    const result = await generateDocumentsFromNamespace({ namespaceId, documentTypes, format });
+    if (!result.success) {
+      return res.status(500).json({ success: false, error: result.error });
+    }
+
+    return res.json({ 
+      success: true, 
+      documents: result.documents,
+      namespaceId: namespaceId
+    });
+  } catch (error) {
+    console.error('[AI Agent] Document generation error:', error);
+    return res.status(500).json({ success: false, error: error.message });
   }
 });
 
@@ -1099,7 +1172,6 @@ app.post('/save-api-to-namespace', async (req, res) => {
 });
 
 // Endpoint to add a schemaId to a namespace's schemaIds array
-debugger;
 app.post('/unified/namespace/:namespaceId/add-schema', async (req, res) => {
   try {
     const { namespaceId } = req.params;
