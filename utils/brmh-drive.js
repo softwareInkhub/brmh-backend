@@ -43,6 +43,29 @@ function getFolderS3Key(userId, folderPath) {
   return `${DRIVE_FOLDER}/users/${userId}/${folderPath}`.replace(/\/+/g, '/');
 }
 
+// Namespace-aware path helpers
+function slugifyName(name = '') {
+  return String(name)
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '');
+}
+
+function getS3KeyWithNamespace(userId, filePath, fileName, namespace) {
+  const nsSegment = namespace && namespace.id
+    ? `namespaces/${slugifyName(namespace.name || namespace.id)}_${namespace.id}/users/${userId}`
+    : `users/${userId}`;
+  return `${DRIVE_FOLDER}/${nsSegment}/${filePath}/${fileName}`.replace(/\/+/g, '/');
+}
+
+function getFolderS3KeyWithNamespace(userId, folderPath, namespace) {
+  const nsSegment = namespace && namespace.id
+    ? `namespaces/${slugifyName(namespace.name || namespace.id)}_${namespace.id}/users/${userId}`
+    : `users/${userId}`;
+  return `${DRIVE_FOLDER}/${nsSegment}/${folderPath}`.replace(/\/+/g, '/');
+}
+
 function validateMimeType(mimeType) {
   return ALLOWED_MIME_TYPES.includes(mimeType);
 }
@@ -54,7 +77,14 @@ function validateFileSize(size) {
 // File Operations
 export async function uploadFile(userId, fileData, parentId = 'ROOT') {
   try {
-    const { name, mimeType, size, content, tags = [] } = fileData;
+    const { name, mimeType, size, content, tags = [], namespace = null } = fileData;
+    
+    // Debug logging
+    console.log('=== UPLOADFILE DEBUG ===');
+    console.log('userId:', userId);
+    console.log('parentId:', parentId);
+    console.log('namespace:', namespace);
+    console.log('fileData:', { name, mimeType, size, tags });
     
     // Validation
     if (!name || !mimeType || !size || !content) {
@@ -82,7 +112,14 @@ export async function uploadFile(userId, fileData, parentId = 'ROOT') {
       parentPath = parentFolder.path || '';
     }
     
-    const s3Key = getS3Key(userId, parentPath, name);
+    const s3Key = getS3KeyWithNamespace(userId, parentPath, name, namespace);
+    
+    console.log('=== S3 KEY GENERATION ===');
+    console.log('userId:', userId);
+    console.log('parentPath:', parentPath);
+    console.log('name:', name);
+    console.log('namespace:', namespace);
+    console.log('Generated s3Key:', s3Key);
     
     // Convert base64 content back to binary data for S3
     const binaryContent = Buffer.from(content, 'base64');
@@ -114,6 +151,8 @@ export async function uploadFile(userId, fileData, parentId = 'ROOT') {
         mimeType,
         size,
         tags,
+        namespaceId: namespace?.id || null,
+        namespaceName: namespace?.name || null,
         createdAt: timestamp,
         updatedAt: timestamp,
         ownerId: userId
@@ -169,7 +208,7 @@ export async function createFolder(userId, folderData, parentId = 'ROOT') {
     }
     
     const folderPath = parentPath ? `${parentPath}/${name}` : name;
-    const s3Key = getFolderS3Key(userId, folderPath);
+    const s3Key = getFolderS3KeyWithNamespace(userId, folderPath, { id: folderData?.namespaceId || null, name: folderData?.namespaceName || null });
     
     // Create placeholder in S3 (optional, for consistency)
     await s3Client.send(new PutObjectCommand({
@@ -190,6 +229,8 @@ export async function createFolder(userId, folderData, parentId = 'ROOT') {
         path: folderPath,
         s3Key,
         description,
+        namespaceId: folderData?.namespaceId || null,
+        namespaceName: folderData?.namespaceName || null,
         createdAt: timestamp,
         updatedAt: timestamp,
         ownerId: userId
@@ -271,7 +312,7 @@ export async function getFolderById(userId, folderId) {
   }
 }
 
-export async function listFiles(userId, parentId = 'ROOT', limit = 50, nextToken = null) {
+export async function listFiles(userId, parentId = 'ROOT', limit = 50, nextToken = null, namespaceId = null) {
   try {
     // For now, use a simple scan approach - in production you'd use GSI
     const response = await fetch(`${CRUD_API_BASE_URL}/crud?tableName=brmh-drive-files&pagination=true&itemPerPage=${limit}`, {
@@ -286,7 +327,8 @@ export async function listFiles(userId, parentId = 'ROOT', limit = 50, nextToken
     const files = result.items?.filter(item => 
       item.ownerId === userId && 
       item.type === 'file' && 
-      item.parentId === parentId
+      item.parentId === parentId &&
+      (namespaceId ? item.namespaceId === namespaceId : true)
     ) || [];
     
     return {
@@ -299,7 +341,7 @@ export async function listFiles(userId, parentId = 'ROOT', limit = 50, nextToken
   }
 }
 
-export async function listFolders(userId, parentId = 'ROOT', limit = 50, nextToken = null) {
+export async function listFolders(userId, parentId = 'ROOT', limit = 50, nextToken = null, namespaceId = null) {
   try {
     // For now, use a simple scan approach - in production you'd use GSI
     const response = await fetch(`${CRUD_API_BASE_URL}/crud?tableName=brmh-drive-files&pagination=true&itemPerPage=${limit}`, {
@@ -314,7 +356,8 @@ export async function listFolders(userId, parentId = 'ROOT', limit = 50, nextTok
     const folders = result.items?.filter(item => 
       item.ownerId === userId && 
       item.type === 'folder' && 
-      item.parentId === parentId
+      item.parentId === parentId &&
+      (namespaceId ? item.namespaceId === namespaceId : true)
     ) || [];
     
     return {
@@ -327,10 +370,10 @@ export async function listFolders(userId, parentId = 'ROOT', limit = 50, nextTok
   }
 }
 
-export async function listFolderContents(userId, folderId, limit = 50, nextToken = null) {
+export async function listFolderContents(userId, folderId, limit = 50, nextToken = null, namespaceId = null) {
   try {
-    const files = await listFiles(userId, folderId, limit, nextToken);
-    const folders = await listFolders(userId, folderId, limit, nextToken);
+    const files = await listFiles(userId, folderId, limit, nextToken, namespaceId);
+    const folders = await listFolders(userId, folderId, limit, nextToken, namespaceId);
     
     return {
       files: files.files,
@@ -365,7 +408,7 @@ export async function renameFile(userId, fileId, newName) {
       ? newName.trim() 
       : file.path.replace(file.name, newName.trim());
     
-    const newS3Key = getS3Key(userId, newPath.replace(`/${newName.trim()}`, ''), newName.trim());
+    const newS3Key = getS3KeyWithNamespace(userId, newPath.replace(`/${newName.trim()}`, ''), newName.trim(), { id: file.namespaceId, name: file.namespaceName });
     
     // Update using CRUD API
     const updateData = {
@@ -600,7 +643,7 @@ export async function renameFolder(userId, folderId, newName) {
       : folder.path.replace(folder.name, newName.trim());
     
     // Calculate new S3 key
-    const newS3Key = getFolderS3Key(userId, newPath);
+    const newS3Key = getFolderS3KeyWithNamespace(userId, newPath, { id: folder.namespaceId, name: folder.namespaceName });
     
     // Update using CRUD API
     const updateData = {
@@ -1280,7 +1323,7 @@ export async function moveFile(userId, fileId, newParentId) {
     }
     
     // Calculate new S3 key
-    const newS3Key = getS3Key(userId, newPath.replace(`/${file.name}`, ''), file.name);
+    const newS3Key = getS3KeyWithNamespace(userId, newPath.replace(`/${file.name}`, ''), file.name, { id: file.namespaceId, name: file.namespaceName });
     
     // Update file metadata in DynamoDB
     const updateData = {
@@ -1496,7 +1539,7 @@ async function updateChildItemsPaths(userId, folderId, oldPath, newPath) {
     // Update files
     for (const file of contents.files || []) {
       const newFilePath = file.path.replace(oldPath, newPath);
-      const newFileS3Key = getS3Key(userId, newFilePath.replace(`/${file.name}`, ''), file.name);
+      const newFileS3Key = getS3KeyWithNamespace(userId, newFilePath.replace(`/${file.name}`, ''), file.name, { id: file.namespaceId, name: file.namespaceName });
       
       const updateData = {
         tableName: 'brmh-drive-files',
@@ -1534,7 +1577,7 @@ async function updateChildItemsPaths(userId, folderId, oldPath, newPath) {
     // Update subfolders recursively
     for (const subfolder of contents.folders || []) {
       const newSubfolderPath = subfolder.path.replace(oldPath, newPath);
-      const newSubfolderS3Key = getFolderS3Key(userId, newSubfolderPath);
+      const newSubfolderS3Key = getFolderS3KeyWithNamespace(userId, newSubfolderPath, { id: subfolder.namespaceId, name: subfolder.namespaceName });
       
       const updateData = {
         tableName: 'brmh-drive-files',

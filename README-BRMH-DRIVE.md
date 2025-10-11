@@ -34,12 +34,17 @@ The system consists of two main components:
 ```
 s3://brmh/brmh-drive/
 ├── .system                    # System initialization
-└── users/
-    ├── user123/              # User-specific folders
-    │   ├── document.pdf
-    │   └── Work Documents/
-    └── user456/
-        └── Photos/
+├── users/                     # Backward-compatible non-namespace storage
+│   ├── user123/
+│   │   ├── document.pdf
+│   │   └── Work Documents/
+│   └── user456/
+│       └── Photos/
+└── namespaces/                # Namespace-scoped storage (recommended)
+    └── <namespace-slug>_<namespaceId>/
+        └── users/
+            └── <userId>/
+                └── ... files and folders ...
 ```
 
 ### DynamoDB Schema
@@ -90,7 +95,8 @@ userId: string (required)
 file: File (required)
 parentId: string (optional, default: "ROOT")
 tags: string (optional, comma-separated)
-namespaceId: string (optional)
+namespaceId: string (optional, recommended for namespace-scoped projects)
+fieldName: string (optional, creates a subfolder under the namespace folder)
 folderId: string (optional)
 ```
 
@@ -98,6 +104,7 @@ folderId: string (optional)
 ```json
 {
   "userId": "user123",
+  "namespaceId": "ns_abc123",
   "fileData": {
     "name": "document.pdf",
     "mimeType": "application/pdf",
@@ -114,6 +121,7 @@ folderId: string (optional)
 {
   "success": true,
   "fileId": "FILE_abc123def456",
+  "s3Key": "brmh-drive/namespaces/finance-tools_ns_abc123/users/user123/document.pdf",
   "message": "File uploaded successfully"
 }
 ```
@@ -143,13 +151,14 @@ GET /drive/file/{userId}/{fileId}
 
 #### List User Files
 ```http
-GET /drive/files/{userId}?parentId=ROOT&limit=50&lastEvaluatedKey=...
+GET /drive/files/{userId}?parentId=ROOT&limit=50&lastEvaluatedKey=...&namespaceId=ns_abc123
 ```
 
 **Query Parameters**:
 - `parentId`: Filter by parent folder (default: "ROOT")
 - `limit`: Maximum number of files to return (default: 50)
 - `lastEvaluatedKey`: For pagination
+- `namespaceId`: Optional; when provided, scopes results to that namespace
 
 **Response**:
 ```json
@@ -274,13 +283,14 @@ GET /drive/folder/{userId}/{folderId}
 
 #### List User Folders
 ```http
-GET /drive/folders/{userId}?parentId=ROOT&limit=50&lastEvaluatedKey=...
+GET /drive/folders/{userId}?parentId=ROOT&limit=50&lastEvaluatedKey=...&namespaceId=ns_abc123
 ```
 
 **Query Parameters**:
 - `parentId`: Filter by parent folder (default: "ROOT")
 - `limit`: Maximum number of folders to return (default: 50)
 - `lastEvaluatedKey`: For pagination
+- `namespaceId`: Optional; when provided, scopes results to that namespace
 
 **Response**:
 ```json
@@ -302,12 +312,13 @@ GET /drive/folders/{userId}?parentId=ROOT&limit=50&lastEvaluatedKey=...
 
 #### List Folder Contents
 ```http
-GET /drive/contents/{userId}/{folderId}?limit=50&lastEvaluatedKey=...
+GET /drive/contents/{userId}/{folderId}?limit=50&lastEvaluatedKey=...&namespaceId=ns_abc123
 ```
 
 **Query Parameters**:
 - `limit`: Maximum number of items to return (default: 50)
 - `lastEvaluatedKey`: For pagination
+- `namespaceId`: Optional; when provided, scopes results to that namespace
 
 **Response**:
 ```json

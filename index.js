@@ -2288,7 +2288,7 @@ app.get('/api/icon/:s3Key(*)', async (req, res) => {
 app.get('/orders/short-ids', fetchOrdersWithShortIdsHandler);
 
 // --- BRMH Drive System API Routes ---
-
+//drive updated for namespace+id
 // Create namespace folder endpoint
 app.post('/drive/namespace-folder', async (req, res) => {
   try {
@@ -2318,8 +2318,17 @@ app.post('/drive/upload', upload.single('file'), async (req, res) => {
   try {
     const { userId, parentId = 'ROOT', tags, namespaceId, fieldName } = req.body;
     
-    // For namespace-specific uploads, use namespaceId as userId
-    const effectiveUserId = namespaceId || userId;
+    // Debug: Log what we received
+    console.log('=== DRIVE UPLOAD DEBUG ===');
+    console.log('req.body:', req.body);
+    console.log('userId:', userId);
+    console.log('namespaceId:', namespaceId);
+    console.log('parentId:', parentId);
+    console.log('fieldName:', fieldName);
+    console.log('req.file:', req.file ? { originalname: req.file.originalname, size: req.file.size } : 'No file');
+    
+    // Always use the real user id for the user segment; namespace is a separate prefix
+    const effectiveUserId = userId;
     
     if (!effectiveUserId) {
       return res.status(400).json({ error: 'userId or namespaceId is required' });
@@ -2356,37 +2365,71 @@ app.post('/drive/upload', upload.single('file'), async (req, res) => {
       return res.status(400).json({ error: 'Either file upload or fileData is required' });
     }
     
-    // For namespace uploads, use the namespace folder as parent
+    // For namespace uploads, use the namespace folder as parent and attach namespace info
     let effectiveParentId = parentId;
+    let namespaceInfo = null;
+    
+    console.log('Processing namespaceId:', namespaceId);
+    console.log('namespaceId type:', typeof namespaceId);
+    console.log('namespaceId truthy:', !!namespaceId);
+    
     if (namespaceId) {
-      // Get the namespace folder path
+      // Create namespace info directly from the provided namespaceId
+      // Extract namespace name from namespaceId if it contains a name prefix
+      let namespaceName = namespaceId;
+      if (namespaceId.includes('-')) {
+        // If namespaceId contains dashes, try to extract a readable name
+        const parts = namespaceId.split('-');
+        if (parts.length > 1) {
+          // Take the first part as the name (e.g., "marketing" from "marketing-c3490482-fcea-478f-804b-32a33f200ce3")
+          namespaceName = parts[0];
+        }
+      }
+      
+      namespaceInfo = { id: namespaceId, name: namespaceName };
+      
+      // Try to get namespace folder path from API, but don't fail if it doesn't exist
       try {
         const namespaceRes = await fetch(`${process.env.API_BASE_URL || 'http://localhost:5001'}/unified/namespaces/${namespaceId}`);
         if (namespaceRes.ok) {
           const namespaceData = await namespaceRes.json();
+          if (namespaceData?.name) {
+            namespaceInfo.name = namespaceData.name;
+          }
           if (namespaceData['folder-path']) {
-            // Use the namespace folder as the parent
             effectiveParentId = namespaceData['folder-path'];
-            
-            // If fieldName is provided, create a subfolder for the field
-            if (fieldName) {
-              // Create field-specific folder within namespace folder
-              const fieldFolderPath = `${namespaceData['folder-path']}/${fieldName}`;
-              try {
-                // Create the field folder if it doesn't exist
-                await brmhDrive.createFolder(effectiveUserId, fieldName, effectiveParentId);
-                effectiveParentId = fieldFolderPath;
-              } catch (error) {
-                console.log('Could not create field folder, using namespace folder');
-              }
-            }
           }
         }
       } catch (error) {
-        console.log('Could not get namespace folder path, using default parent');
+        console.log('Namespace API not available, using namespaceId directly for storage path');
+      }
+      
+      // If fieldName is provided, create a subfolder for the field
+      if (fieldName) {
+        try {
+          // Create the field folder if it doesn't exist
+          await brmhDrive.createFolder(effectiveUserId, { name: fieldName, namespaceId, namespaceName }, effectiveParentId);
+          effectiveParentId = effectiveParentId === 'ROOT' ? fieldName : `${effectiveParentId}/${fieldName}`;
+        } catch (error) {
+          console.log('Could not create field folder, using namespace folder');
+        }
       }
     }
     
+    // Attach namespace to influence storage path if provided
+    if (fileData) {
+      fileData.namespace = namespaceInfo;
+    }
+
+    // Debug logging
+    console.log('=== FINAL UPLOAD PARAMS ===');
+    console.log('effectiveUserId:', effectiveUserId);
+    console.log('namespaceId:', namespaceId);
+    console.log('namespaceInfo:', namespaceInfo);
+    console.log('effectiveParentId:', effectiveParentId);
+    console.log('fieldName:', fieldName);
+    console.log('fileData.namespace:', fileData?.namespace);
+
     const result = await brmhDrive.uploadFile(effectiveUserId, fileData, effectiveParentId);
     
     // Add file path to response for namespace uploads
@@ -2420,9 +2463,9 @@ app.post('/drive/folder', async (req, res) => {
 app.get('/drive/files/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
-    const { parentId = 'ROOT', limit = 50, nextToken } = req.query;
+    const { parentId = 'ROOT', limit = 50, nextToken, namespaceId = null } = req.query;
     
-    const result = await brmhDrive.listFiles(userId, parentId, parseInt(limit), nextToken);
+    const result = await brmhDrive.listFiles(userId, parentId, parseInt(limit), nextToken, namespaceId || null);
     res.json(result);
   } catch (error) {
     console.error('Drive list files error:', error);
@@ -2433,9 +2476,9 @@ app.get('/drive/files/:userId', async (req, res) => {
 app.get('/drive/folders/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
-    const { parentId = 'ROOT', limit = 50, nextToken } = req.query;
+    const { parentId = 'ROOT', limit = 50, nextToken, namespaceId = null } = req.query;
     
-    const result = await brmhDrive.listFolders(userId, parentId, parseInt(limit), nextToken);
+    const result = await brmhDrive.listFolders(userId, parentId, parseInt(limit), nextToken, namespaceId || null);
     res.json(result);
   } catch (error) {
     console.error('Drive list folders error:', error);
@@ -2446,9 +2489,9 @@ app.get('/drive/folders/:userId', async (req, res) => {
 app.get('/drive/contents/:userId/:folderId', async (req, res) => {
   try {
     const { userId, folderId } = req.params;
-    const { limit = 50, nextToken } = req.query;
+    const { limit = 50, nextToken, namespaceId = null } = req.query;
     
-    const result = await brmhDrive.listFolderContents(userId, folderId, parseInt(limit), nextToken);
+    const result = await brmhDrive.listFolderContents(userId, folderId, parseInt(limit), nextToken, namespaceId || null);
     res.json(result);
   } catch (error) {
     console.error('Drive list folder contents error:', error);
