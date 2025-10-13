@@ -1333,3 +1333,254 @@ paths:
                 properties:
                   error:
                     type: string
+
+  # Duplication Operations
+  /namespaces/{namespaceId}/duplicate:
+    parameters:
+      - name: namespaceId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: ID of the namespace to duplicate
+    post:
+      operationId: duplicateNamespace
+      summary: Duplicate a namespace with all its accounts, methods, and schemas
+      description: Creates a complete copy of the namespace including all associated accounts, methods, and schemas with new IDs
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                newName:
+                  type: string
+                  description: Optional new name for the duplicated namespace. If not provided, will append "(Copy)" to the original name
+                  example: "My Namespace Copy"
+      responses:
+        '201':
+          description: Namespace duplicated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  namespace:
+                    type: object
+                    description: The duplicated namespace data
+                  duplicatedAccounts:
+                    type: integer
+                    description: Number of accounts duplicated
+                  duplicatedMethods:
+                    type: integer
+                    description: Number of methods duplicated
+                  duplicatedSchemas:
+                    type: integer
+                    description: Number of schemas duplicated
+                  mapping:
+                    type: object
+                    description: Mapping of old IDs to new IDs
+                    properties:
+                      namespaceId:
+                        type: string
+                      accountIdMap:
+                        type: object
+                      methodIdMap:
+                        type: object
+                      schemaIdMap:
+                        type: object
+        '404':
+          description: Namespace not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+
+  /accounts/{accountId}/duplicate:
+    parameters:
+      - name: accountId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: ID of the account to duplicate
+    post:
+      operationId: duplicateAccount
+      summary: Duplicate an account within the same namespace
+      description: Creates a copy of the account with a new ID, keeping it in the same namespace
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                newName:
+                  type: string
+                  description: Optional new name for the duplicated account. If not provided, will append "(Copy)" to the original name
+                  example: "Production Account Copy"
+      responses:
+        '201':
+          description: Account duplicated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  account:
+                    type: object
+                    description: The duplicated account data
+                  accountId:
+                    type: string
+                    description: ID of the new duplicated account
+        '404':
+          description: Account not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+
+  /methods/{methodId}/duplicate:
+    parameters:
+      - name: methodId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: ID of the method to duplicate
+    post:
+      operationId: duplicateMethod
+      summary: Duplicate a method within the same namespace
+      description: Creates a copy of the method with a new ID, keeping it in the same namespace
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                newName:
+                  type: string
+                  description: Optional new name for the duplicated method. If not provided, will append "(Copy)" to the original name
+                  example: "GET /users/list Copy"
+      responses:
+        '201':
+          description: Method duplicated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  method:
+                    type: object
+                    description: The duplicated method data
+                  methodId:
+                    type: string
+                    description: ID of the new duplicated method
+        '404':
+          description: Method not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+
+  /schema/{schemaId}/duplicate:
+    parameters:
+      - name: schemaId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: ID of the schema to duplicate
+    post:
+      operationId: duplicateSchema
+      summary: Duplicate a schema within the same namespace
+      description: Creates a copy of the schema with a new ID, keeping it in the same namespace and updating the namespace's schemaIds array
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                newName:
+                  type: string
+                  description: Optional new name for the duplicated schema. If not provided, will append "(Copy)" to the original name
+                  example: "User Schema Copy"
+      responses:
+        '201':
+          description: Schema duplicated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  schema:
+                    type: object
+                    description: The duplicated schema data
+                  schemaId:
+                    type: string
+                    description: ID of the new duplicated schema
+        '404':
+          description: Schema not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
