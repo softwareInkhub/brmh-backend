@@ -667,7 +667,7 @@ app.post('/ai-agent', (req, res) => aiAgentHandler({ request: { requestBody: req
 // AI Agent streaming endpoint for chat and schema editing
 app.post('/ai-agent/stream', async (req, res) => {
   console.log('[AI Agent] !!! STREAMING ENDPOINT CALLED !!!');
-  const { message, namespace, history, schema, uploadedSchemas } = req.body;
+  const { message, namespace, allNamespaces, history, schema, uploadedSchemas } = req.body;
   
   // Import the intent detection function
   const { detectIntent } = await import('./lib/llm-agent-system.js');
@@ -685,7 +685,7 @@ app.post('/ai-agent/stream', async (req, res) => {
   });
   
   try {
-    await agentSystem.handleStreamingWithAgents(res, namespace, message, history, schema, uploadedSchemas);
+    await agentSystem.handleStreamingWithAgents(res, namespace, message, history, schema, uploadedSchemas, allNamespaces);
   } catch (error) {
     console.error('AI Agent streaming error:', error);
     res.status(500).json({ error: 'Failed to handle AI Agent streaming request' });
@@ -695,8 +695,8 @@ app.post('/ai-agent/stream', async (req, res) => {
 // AI Agent Lambda codegen endpoint
 app.post('/ai-agent/lambda-codegen', async (req, res) => {
   console.log('[AI Agent] !!! LAMBDA CODEGEN ENDPOINT CALLED !!!');
-  const { message, originalMessage, namespace, selectedSchema, functionName, runtime, handler, memory, timeout, environment } = req.body;
-  console.log('[AI Agent] Lambda codegen request received:', { message, originalMessage, selectedSchema, functionName, runtime, handler, memory, timeout, environment, namespace });
+  const { message, originalMessage, namespace, allNamespaces, selectedSchema, functionName, runtime, handler, memory, timeout, environment } = req.body;
+  console.log('[AI Agent] Lambda codegen request received:', { message, originalMessage, selectedSchema, functionName, runtime, handler, memory, timeout, environment, namespace, allNamespaces });
 
   // Import the intent detection function
   const { detectIntent } = await import('./lib/llm-agent-system.js');
@@ -745,6 +745,7 @@ app.post('/ai-agent/lambda-codegen', async (req, res) => {
       timeout,
       environment,
       namespace, // Pass namespace for automatic schema selection
+      allNamespaces, // Pass all namespaces in context
       res // Pass the response object for streaming
     });
 
