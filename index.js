@@ -440,6 +440,85 @@ app.post('/lambda/create-api-gateway', async (req, res) => {
   }
 });
 
+// API Method Testing endpoint
+app.post('/api-method/test', async (req, res) => {
+  try {
+    const { url, method, headers, body, timeout = 30000 } = req.body;
+    
+    if (!url || !method) {
+      return res.status(400).json({ error: 'URL and method are required' });
+    }
+    
+    console.log(`[API Method Test] Testing ${method} ${url}`);
+    
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
+    
+    const fetchOptions = {
+      method: method.toUpperCase(),
+      headers: {
+        'Content-Type': 'application/json',
+        ...headers
+      },
+      signal: controller.signal
+    };
+    
+    if (body && method.toUpperCase() !== 'GET') {
+      fetchOptions.body = typeof body === 'string' ? body : JSON.stringify(body);
+    }
+    
+    const response = await fetch(url, fetchOptions);
+    clearTimeout(timeoutId);
+    
+    const responseData = {
+      status: response.status,
+      statusText: response.statusText,
+      headers: Object.fromEntries(response.headers.entries()),
+      url: response.url,
+      redirected: response.redirected,
+      type: response.type
+    };
+    
+    // Try to parse response as JSON, fallback to text
+    let responseBody;
+    const contentType = response.headers.get('content-type');
+    if (contentType && contentType.includes('application/json')) {
+      try {
+        responseBody = await response.json();
+      } catch (e) {
+        responseBody = await response.text();
+      }
+    } else {
+      responseBody = await response.text();
+    }
+    
+    responseData.body = responseBody;
+    
+    res.json({
+      success: true,
+      data: responseData,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('[API Method Test] Error:', error);
+    
+    if (error.name === 'AbortError') {
+      res.status(408).json({ 
+        success: false,
+        error: 'Request timeout',
+        details: `Request exceeded ${req.body.timeout || 30000}ms timeout`
+      });
+    } else {
+      res.status(500).json({ 
+        success: false,
+        error: 'Failed to test API method',
+        details: error.message 
+      });
+    }
+  }
+});
+
 // Get deployment metadata endpoint
 app.get('/lambda/deployments/:deploymentId', async (req, res) => {
   try {
