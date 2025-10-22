@@ -676,16 +676,32 @@ async function signupHandler(req, res) {
   if (!email || !password) {
     return res.status(400).json({ success: false, error: 'Missing required fields: email, password' });
   }
+  
+  // Detect if email field contains a phone number (E.164 format: +countrycodephonenumber)
+  const isPhoneNumber = /^\+\d{10,15}$/.test(email);
   const displayName = (username || '').toString().trim();
   const sanitized = displayName ? displayName.replace(/\s+/g, '_') : '';
-  // Do NOT use email as the Cognito username when pool uses email alias. Derive a non-email username.
+  
+  // Generate Cognito username
   let cognitoUsername = sanitized;
   if (!cognitoUsername) {
-    const local = String(email).split('@')[0].replace(/[^\p{L}\p{M}\p{S}\p{N}\p{P}]/gu, '_');
-    cognitoUsername = `${local}_${Date.now()}`;
+    if (isPhoneNumber) {
+      // For phone numbers, use last 10 digits as base for username
+      const phoneDigits = email.replace(/\D/g, '');
+      cognitoUsername = `user_${phoneDigits.slice(-10)}_${Date.now()}`;
+    } else {
+      // For emails, use local part
+      const local = String(email).split('@')[0].replace(/[^\p{L}\p{M}\p{S}\p{N}\p{P}]/gu, '_');
+      cognitoUsername = `${local}_${Date.now()}`;
+    }
   }
 
-  userPool.signUp(cognitoUsername, password, [{ Name: 'email', Value: email }], null, async (err, result) => {
+  // Set the appropriate attribute based on whether it's phone or email
+  const userAttributes = isPhoneNumber 
+    ? [{ Name: 'phone_number', Value: email }]
+    : [{ Name: 'email', Value: email }];
+
+  userPool.signUp(cognitoUsername, password, userAttributes, null, async (err, result) => {
     if (err) {
       console.error('[Auth] Signup error:', err);
       // If the derived username still conflicts, generate a new one and retry once
@@ -696,7 +712,7 @@ async function signupHandler(req, res) {
       }
       const fallbackUsername = `${cognitoUsername}_u${Math.floor(Math.random()*1e6)}`;
       try {
-        userPool.signUp(fallbackUsername, password, [{ Name: 'email', Value: email }], null, async (fallbackErr, fallbackResult) => {
+        userPool.signUp(fallbackUsername, password, userAttributes, null, async (fallbackErr, fallbackResult) => {
           if (fallbackErr) {
             console.error('[Auth] Signup fallback error:', fallbackErr);
             return res.status(400).json({ success: false, error: fallbackErr.message });
@@ -705,19 +721,23 @@ async function signupHandler(req, res) {
             const userData = {
               sub: fallbackResult.userSub,
               username: displayName || fallbackUsername,
-              email: email,
+              email: isPhoneNumber ? null : email,
+              phone_number: isPhoneNumber ? email : null,
               cognitoUsername: fallbackUsername,
-              signupMethod: 'email',
+              signupMethod: isPhoneNumber ? 'phone' : 'email',
               verified: false
             };
             await createUserRecord(userData);
           } catch (dbError) {
             console.error('[Auth] Error creating user record in DynamoDB:', dbError);
           }
+          const successMessage = isPhoneNumber 
+            ? 'Account created successfully! Please check your phone for verification code.'
+            : 'Account created successfully! Please check your email for verification.';
           return res.status(200).json({
             success: true,
             result: fallbackResult,
-            message: 'Account created successfully! Please check your email for verification.'
+            message: successMessage
           });
         });
         return; // prevent double response
@@ -738,9 +758,10 @@ async function signupHandler(req, res) {
       const userData = {
         sub: result.userSub,
         username: displayName || cognitoUsername,
-        email: email,
+        email: isPhoneNumber ? null : email,
+        phone_number: isPhoneNumber ? email : null,
         cognitoUsername: cognitoUsername,
-        signupMethod: 'email',
+        signupMethod: isPhoneNumber ? 'phone' : 'email',
         verified: false
       };
       
@@ -748,13 +769,18 @@ async function signupHandler(req, res) {
       
       console.log('[Auth] User signup successful:', {
         username,
-        userSub: result.userSub
+        userSub: result.userSub,
+        method: isPhoneNumber ? 'phone' : 'email'
       });
+      
+      const successMessage = isPhoneNumber 
+        ? 'Account created successfully! Please check your phone for verification code.'
+        : 'Account created successfully! Please check your email for verification.';
       
       res.status(200).json({ 
         success: true, 
         result,
-        message: 'Account created successfully! Please check your email for verification.'
+        message: successMessage
       });
     } catch (dbError) {
       console.error('[Auth] Error creating user record in DynamoDB:', dbError);
