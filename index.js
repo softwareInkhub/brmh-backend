@@ -335,6 +335,12 @@ const unifiedApiHandlers = {
   // Table Operations
   validateTable: unifiedHandlers.validateTable,
 
+  // Duplication Operations
+  duplicateNamespace: unifiedHandlers.duplicateNamespace,
+  duplicateAccount: unifiedHandlers.duplicateAccount,
+  duplicateMethod: unifiedHandlers.duplicateMethod,
+  duplicateSchema: unifiedHandlers.duplicateSchema,
+
  
 }; 
 
@@ -369,7 +375,7 @@ Promise.all([
 // --- Lambda Deployment API Routes ---
 app.post('/lambda/deploy', async (req, res) => {
   try {
-    const { functionName, code, runtime = 'nodejs18.x', handler = 'index.handler', memorySize = 128, timeout = 30, dependencies = {}, environment = '' } = req.body;
+    const { functionName, code, runtime = 'nodejs18.x', handler = 'index.handler', memorySize = 128, timeout = 30, dependencies = {}, environment = '', createApiGateway = true } = req.body;
     
     if (!functionName || !code) {
       return res.status(400).json({ error: 'functionName and code are required' });
@@ -388,7 +394,7 @@ app.post('/lambda/deploy', async (req, res) => {
       timeout,
       dependencies,
       environment,
-      true
+      createApiGateway
     );
     
     const timeoutPromise = new Promise((_, reject) => {
