@@ -1,0 +1,393 @@
+{
+  "comment": "BRMH Notification System - Configuration Examples",
+  "version": "2.0.0",
+  "examples": {
+    "basic_crud_monitoring": {
+      "description": "Monitor all CRUD operations on a single table",
+      "connection": {
+        "name": "production-whapi",
+        "token": "YOUR_WHAPI_TOKEN_HERE",
+        "baseUrl": "https://gate.whapi.cloud",
+        "testMode": false
+      },
+      "triggers": [
+        {
+          "name": "Orders - Create",
+          "eventType": "crud_create",
+          "connectionId": "REPLACE_WITH_CONNECTION_ID",
+          "action": {
+            "type": "whapi_message",
+            "to": "919876543210",
+            "textTemplate": "✅ New order created: {{event.data.body.item.id}}"
+          },
+          "filters": {
+            "tableName": "shopify-orders",
+            "method": "POST"
+          },
+          "active": true
+        },
+        {
+          "name": "Orders - Update",
+          "eventType": "crud_update",
+          "connectionId": "REPLACE_WITH_CONNECTION_ID",
+          "action": {
+            "type": "whapi_message",
+            "to": "919876543210",
+            "textTemplate": "🔄 Order updated: {{event.data.body.key.id}}"
+          },
+          "filters": {
+            "tableName": "shopify-orders",
+            "method": "PUT"
+          },
+          "active": true
+        },
+        {
+          "name": "Orders - Delete",
+          "eventType": "crud_delete",
+          "connectionId": "REPLACE_WITH_CONNECTION_ID",
+          "action": {
+            "type": "whapi_message",
+            "to": "919876543210",
+            "textTemplate": "❌ Order deleted: {{event.data.body.id}}"
+          },
+          "filters": {
+            "tableName": "shopify-orders",
+            "method": "DELETE"
+          },
+          "active": true
+        }
+      ]
+    },
+    "team_notifications": {
+      "description": "Send notifications to WhatsApp groups for team collaboration",
+      "connection": {
+        "name": "team-notifications",
+        "token": "YOUR_WHAPI_TOKEN_HERE",
+        "baseUrl": "https://gate.whapi.cloud",
+        "testMode": false
+      },
+      "triggers": [
+        {
+          "name": "Critical Orders to Team",
+          "eventType": "crud_create",
+          "connectionId": "REPLACE_WITH_CONNECTION_ID",
+          "action": {
+            "type": "whapi_group",
+            "groupIds": ["120363xyz@g.us"],
+            "messageTemplate": "🚨 URGENT ORDER\n\nOrder ID: {{event.data.body.item.id}}\nAmount: ${{event.data.body.item.total}}\nCustomer: {{event.data.body.item.customer}}\n\nAction required!"
+          },
+          "filters": {
+            "tableName": "shopify-orders"
+          },
+          "active": true
+        },
+        {
+          "name": "System Errors to Dev Team",
+          "eventType": "crud_create",
+          "connectionId": "REPLACE_WITH_CONNECTION_ID",
+          "action": {
+            "type": "whapi_group",
+            "groupIds": ["120363abc@g.us"],
+            "messageTemplate": "⚠️ SYSTEM ERROR\n\n{{event.data.body.item.error}}\n\nTable: {{event.tableName}}\nTime: {{event.data.response.timestamp}}"
+          },
+          "filters": {
+            "tableName": "error-logs",
+            "method": "POST"
+          },
+          "active": true
+        }
+      ]
+    },
+    "community_announcements": {
+      "description": "Post to WhatsApp community subgroups",
+      "connection": {
+        "name": "community-bot",
+        "token": "YOUR_WHAPI_TOKEN_HERE",
+        "baseUrl": "https://gate.whapi.cloud",
+        "testMode": false
+      },
+      "triggers": [
+        {
+          "name": "Product Launch Announcement",
+          "eventType": "crud_create",
+          "connectionId": "REPLACE_WITH_CONNECTION_ID",
+          "action": {
+            "type": "whapi_community",
+            "communityId": "120363xyz@g.us",
+            "groupIds": [
+              "120363announcements@g.us",
+              "120363updates@g.us"
+            ],
+            "messageTemplate": "🚀 NEW PRODUCT LAUNCH\n\n{{event.data.body.item.name}}\nPrice: ${{event.data.body.item.price}}\n\nCheck it out now!"
+          },
+          "filters": {
+            "tableName": "products",
+            "method": "POST"
+          },
+          "active": true
+        }
+      ]
+    },
+    "namespace_monitoring": {
+      "description": "Monitor namespace operations with namespace tagging",
+      "connection": {
+        "name": "namespace-monitor",
+        "token": "YOUR_WHAPI_TOKEN_HERE",
+        "baseUrl": "https://gate.whapi.cloud",
+        "testMode": false
+      },
+      "triggers": [
+        {
+          "name": "Marketing Namespace Updates",
+          "eventType": "namespace_updated",
+          "connectionId": "REPLACE_WITH_CONNECTION_ID",
+          "action": {
+            "type": "whapi_message",
+            "to": "919876543210",
+            "textTemplate": "📊 Marketing namespace updated\n\nNamespace: {{event.data.response.namespace-name}}\nTime: {{event.data.response.timestamp}}"
+          },
+          "filters": {
+            "pathContains": "/unified/namespaces"
+          },
+          "namespaceTags": ["marketing"],
+          "active": true
+        },
+        {
+          "name": "Sales Namespace Created",
+          "eventType": "namespace_created",
+          "connectionId": "REPLACE_WITH_CONNECTION_ID",
+          "action": {
+            "type": "whapi_message",
+            "to": "919876543210",
+            "textTemplate": "✨ New sales namespace created\n\nName: {{event.data.response.namespace-name}}\nID: {{event.data.response.namespace-id}}"
+          },
+          "filters": {
+            "pathContains": "/unified/namespaces"
+          },
+          "namespaceTags": ["sales"],
+          "active": true
+        }
+      ]
+    },
+    "multi_table_monitoring": {
+      "description": "Monitor multiple tables with different configurations",
+      "connection": {
+        "name": "multi-table-monitor",
+        "token": "YOUR_WHAPI_TOKEN_HERE",
+        "baseUrl": "https://gate.whapi.cloud",
+        "testMode": false
+      },
+      "triggers": [
+        {
+          "name": "User Registration",
+          "eventType": "crud_create",
+          "connectionId": "REPLACE_WITH_CONNECTION_ID",
+          "action": {
+            "type": "whapi_message",
+            "to": "919876543210",
+            "textTemplate": "👤 New user registered\n\nEmail: {{event.data.body.item.email}}\nName: {{event.data.body.item.name}}"
+          },
+          "filters": {
+            "tableName": "users",
+            "method": "POST"
+          },
+          "active": true
+        },
+        {
+          "name": "Payment Processed",
+          "eventType": "crud_create",
+          "connectionId": "REPLACE_WITH_CONNECTION_ID",
+          "action": {
+            "type": "whapi_message",
+            "to": "919876543210",
+            "textTemplate": "💳 Payment processed\n\nAmount: ${{event.data.body.item.amount}}\nOrder: {{event.data.body.item.orderId}}\nStatus: {{event.data.body.item.status}}"
+          },
+          "filters": {
+            "tableName": "payments",
+            "method": "POST"
+          },
+          "active": true
+        },
+        {
+          "name": "Inventory Low Stock",
+          "eventType": "crud_update",
+          "connectionId": "REPLACE_WITH_CONNECTION_ID",
+          "action": {
+            "type": "whapi_message",
+            "to": "919876543210",
+            "textTemplate": "⚠️ LOW STOCK ALERT\n\nProduct: {{event.data.body.updates.name}}\nRemaining: {{event.data.body.updates.quantity}}\n\nReorder needed!"
+          },
+          "filters": {
+            "tableName": "inventory",
+            "method": "PUT"
+          },
+          "active": true
+        }
+      ]
+    },
+    "advanced_filtering": {
+      "description": "Use advanced filters for precise trigger matching",
+      "connection": {
+        "name": "filtered-notifications",
+        "token": "YOUR_WHAPI_TOKEN_HERE",
+        "baseUrl": "https://gate.whapi.cloud",
+        "testMode": false
+      },
+      "triggers": [
+        {
+          "name": "High Value Orders Only",
+          "eventType": "crud_create",
+          "connectionId": "REPLACE_WITH_CONNECTION_ID",
+          "action": {
+            "type": "whapi_message",
+            "to": "919876543210",
+            "textTemplate": "💎 HIGH VALUE ORDER\n\nOrder: {{event.data.body.item.id}}\nAmount: ${{event.data.body.item.total}}"
+          },
+          "filters": {
+            "tableName": "shopify-orders",
+            "method": "POST"
+          },
+          "active": true,
+          "comment": "Add business logic filtering in CRUD handler"
+        },
+        {
+          "name": "Specific Namespace Operations",
+          "eventType": "namespace_updated",
+          "connectionId": "REPLACE_WITH_CONNECTION_ID",
+          "action": {
+            "type": "whapi_message",
+            "to": "919876543210",
+            "textTemplate": "Namespace operation in production\n\nPath: {{event.path}}\nMethod: {{event.method}}"
+          },
+          "filters": {
+            "pathContains": "/unified/namespaces/production",
+            "method": "PUT"
+          },
+          "namespaceTags": ["production", "critical"],
+          "active": true
+        }
+      ]
+    },
+    "test_mode_setup": {
+      "description": "Safe testing configuration - no actual messages sent",
+      "connection": {
+        "name": "test-connection",
+        "token": "YOUR_WHAPI_TOKEN_HERE",
+        "baseUrl": "https://gate.whapi.cloud",
+        "testMode": true
+      },
+      "triggers": [
+        {
+          "name": "Test Trigger",
+          "eventType": "crud_create",
+          "connectionId": "REPLACE_WITH_CONNECTION_ID",
+          "action": {
+            "type": "whapi_message",
+            "to": "919876543210",
+            "textTemplate": "Test message: {{event.type}}"
+          },
+          "filters": {
+            "tableName": "test-table"
+          },
+          "active": true
+        }
+      ]
+    }
+  },
+  "setup_instructions": {
+    "step1": "Create connection using POST /notify/connection",
+    "step2": "Copy the returned connectionId",
+    "step3": "Replace REPLACE_WITH_CONNECTION_ID in triggers",
+    "step4": "Replace phone numbers with your actual numbers",
+    "step5": "Update table names to match your DynamoDB tables",
+    "step6": "Create triggers using POST /notify/trigger or POST /notify/triggers/bulk",
+    "step7": "Test with testMode: true first",
+    "step8": "Set testMode: false when ready for production"
+  },
+  "template_variables": {
+    "trigger_context": [
+      "{{trigger.name}}",
+      "{{trigger.eventType}}",
+      "{{trigger.id}}"
+    ],
+    "event_context": [
+      "{{event.type}}",
+      "{{event.method}}",
+      "{{event.tableName}}",
+      "{{event.path}}",
+      "{{event.resource}}",
+      "{{event.actor}}"
+    ],
+    "data_context": [
+      "{{event.data.body}}",
+      "{{event.data.body.item}}",
+      "{{event.data.body.key}}",
+      "{{event.data.body.updates}}",
+      "{{event.data.result}}",
+      "{{event.data.response}}"
+    ],
+    "examples": [
+      "Order ID: {{event.data.body.item.id}}",
+      "User: {{event.actor}}",
+      "Table: {{event.tableName}}",
+      "Status: {{event.data.body.item.status || 'unknown'}}"
+    ]
+  },
+  "bulk_create_example": {
+    "description": "Use this format for POST /notify/triggers/bulk",
+    "payload": {
+      "triggers": [
+        {
+          "name": "Trigger 1",
+          "eventType": "crud_create",
+          "connectionId": "CONN_ID",
+          "action": {
+            "type": "whapi_message",
+            "to": "919876543210",
+            "textTemplate": "Message 1"
+          },
+          "filters": {
+            "tableName": "table1"
+          },
+          "active": true
+        },
+        {
+          "name": "Trigger 2",
+          "eventType": "crud_update",
+          "connectionId": "CONN_ID",
+          "action": {
+            "type": "whapi_message",
+            "to": "919876543210",
+            "textTemplate": "Message 2"
+          },
+          "filters": {
+            "tableName": "table2"
+          },
+          "active": true
+        }
+      ]
+    }
+  },
+  "phone_number_format": {
+    "correct": [
+      "919876543210",
+      "14155551234",
+      "447700900000"
+    ],
+    "incorrect": [
+      "+919876543210",
+      "+1-415-555-1234",
+      "44 7700 900000"
+    ],
+    "note": "Remove + and spaces from phone numbers"
+  },
+  "group_id_format": {
+    "example": "120363xyz@g.us",
+    "note": "Get from /notify/groups/:connectionId endpoint"
+  },
+  "community_id_format": {
+    "example": "120363abc@g.us",
+    "note": "Get from /notify/communities/:connectionId endpoint"
+  }
+}
+

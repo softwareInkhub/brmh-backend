@@ -433,11 +433,25 @@ export function registerNotificationRoutes(app, docClient) {
     }
   });
 
-  // List triggers
-  app.get('/notify/triggers', async (_req, res) => {
+  // List triggers with optional filtering
+  app.get('/notify/triggers', async (req, res) => {
     try {
-      const items = await scanTable(TRIGGERS_TABLE, 1000);
-      res.json({ success: true, items });
+      const { tableName, eventType, active } = req.query;
+      let items = await scanTable(TRIGGERS_TABLE, 1000);
+      
+      // Apply filters
+      if (tableName) {
+        items = items.filter(t => t.filters?.tableName === tableName);
+      }
+      if (eventType) {
+        items = items.filter(t => t.eventType === eventType);
+      }
+      if (active !== undefined) {
+        const isActive = active === 'true';
+        items = items.filter(t => t.active === isActive);
+      }
+      
+      res.json({ success: true, items, count: items.length });
     } catch (error) {
       res.status(500).json({ success: false, error: error.message });
     }
@@ -460,11 +474,11 @@ export function registerNotificationRoutes(app, docClient) {
     }
   });
 
-  // Logs
+  // Logs with enhanced filtering and pagination
   app.get('/notify/logs', async (req, res) => {
     try {
-      const { namespace } = req.query;
-      let items = await scanTable(LOGS_TABLE, 200);
+      const { namespace, level, eventType, tableName, limit = 200, startTime, endTime } = req.query;
+      let items = await scanTable(LOGS_TABLE, parseInt(limit));
       
       // Filter by namespace if provided
       if (namespace) {
@@ -475,7 +489,40 @@ export function registerNotificationRoutes(app, docClient) {
         );
       }
       
-      res.json({ success: true, items });
+      // Filter by status/level
+      if (level) {
+        items = items.filter(item => item.status === level);
+      }
+      
+      // Filter by event type
+      if (eventType) {
+        items = items.filter(item => item.eventType === eventType);
+      }
+      
+      // Filter by table name
+      if (tableName) {
+        items = items.filter(item => 
+          item.eventSummary?.tableName === tableName
+        );
+      }
+      
+      // Filter by time range
+      if (startTime) {
+        items = items.filter(item => new Date(item.createdAt) >= new Date(startTime));
+      }
+      if (endTime) {
+        items = items.filter(item => new Date(item.createdAt) <= new Date(endTime));
+      }
+      
+      // Sort by timestamp descending
+      items.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+      
+      res.json({ 
+        success: true, 
+        items, 
+        count: items.length,
+        filters: { namespace, level, eventType, tableName, startTime, endTime }
+      });
     } catch (error) {
       res.status(500).json({ success: false, error: error.message });
     }
@@ -636,18 +683,191 @@ export function registerNotificationRoutes(app, docClient) {
     }
   });
 
+  // Update trigger (enable/disable, modify settings)
+  app.put('/notify/trigger/:triggerId', async (req, res) => {
+    try {
+      const { triggerId } = req.params;
+      const updates = req.body;
+      
+      const trigger = await getTriggerById(triggerId);
+      if (!trigger) return res.status(404).json({ success: false, error: 'Trigger not found' });
+      
+      const updatedTrigger = { ...trigger, ...updates, updatedAt: new Date().toISOString() };
+      await putItem(TRIGGERS_TABLE, updatedTrigger);
+      
+      await createLogEntry({ 
+        kind: 'trigger_updated', 
+        triggerId: trigger.id, 
+        name: trigger.name,
+        changes: updates
+      });
+      
+      res.json({ success: true, trigger: updatedTrigger });
+    } catch (error) {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // Delete trigger
+  app.delete('/notify/trigger/:triggerId', async (req, res) => {
+    try {
+      const { triggerId } = req.params;
+      const { DeleteCommand } = await import('@aws-sdk/lib-dynamodb');
+      
+      const trigger = await getTriggerById(triggerId);
+      if (!trigger) return res.status(404).json({ success: false, error: 'Trigger not found' });
+      
+      await documentClientRef.send(new DeleteCommand({
+        TableName: TRIGGERS_TABLE,
+        Key: { id: triggerId }
+      }));
+      
+      await createLogEntry({ 
+        kind: 'trigger_deleted', 
+        triggerId: trigger.id, 
+        name: trigger.name
+      });
+      
+      res.json({ success: true, message: 'Trigger deleted successfully' });
+    } catch (error) {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // Get analytics/stats
+  app.get('/notify/analytics', async (req, res) => {
+    try {
+      const { startDate, endDate } = req.query;
+      const logs = await scanTable(LOGS_TABLE, 1000);
+      
+      // Filter by date range if provided
+      let filteredLogs = logs;
+      if (startDate) {
+        filteredLogs = filteredLogs.filter(l => new Date(l.createdAt) >= new Date(startDate));
+      }
+      if (endDate) {
+        filteredLogs = filteredLogs.filter(l => new Date(l.createdAt) <= new Date(endDate));
+      }
+      
+      // Calculate statistics
+      const total = filteredLogs.length;
+      const successful = filteredLogs.filter(l => l.status === 'ok').length;
+      const failed = filteredLogs.filter(l => l.status === 'error').length;
+      const successRate = total > 0 ? ((successful / total) * 100).toFixed(2) : 0;
+      
+      // Group by event type
+      const byEventType = {};
+      filteredLogs.forEach(log => {
+        const type = log.eventType || 'unknown';
+        byEventType[type] = (byEventType[type] || 0) + 1;
+      });
+      
+      // Group by trigger
+      const byTrigger = {};
+      filteredLogs.forEach(log => {
+        const trigger = log.triggerId || 'unknown';
+        byTrigger[trigger] = (byTrigger[trigger] || 0) + 1;
+      });
+      
+      res.json({
+        success: true,
+        analytics: {
+          total,
+          successful,
+          failed,
+          successRate: parseFloat(successRate),
+          byEventType,
+          byTrigger,
+          dateRange: { startDate, endDate }
+        }
+      });
+    } catch (error) {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // Bulk operations - Create multiple triggers
+  app.post('/notify/triggers/bulk', async (req, res) => {
+    try {
+      const { triggers: triggersToCreate } = req.body;
+      
+      if (!Array.isArray(triggersToCreate) || triggersToCreate.length === 0) {
+        return res.status(400).json({ success: false, error: 'triggers array is required' });
+      }
+      
+      const created = [];
+      const errors = [];
+      
+      for (const triggerData of triggersToCreate) {
+        try {
+          const { name, eventType, filters = {}, action, connectionId, active = true, namespaceTags = [] } = triggerData;
+          
+          if (!name || !eventType || !action || !connectionId) {
+            errors.push({ triggerData, error: 'Missing required fields' });
+            continue;
+          }
+          
+          const item = {
+            id: uuidv4(),
+            name,
+            eventType,
+            filters,
+            action,
+            connectionId,
+            namespaceTags: Array.isArray(namespaceTags) ? namespaceTags : [],
+            active,
+            createdAt: new Date().toISOString()
+          };
+          
+          await putItem(TRIGGERS_TABLE, item);
+          created.push(item);
+          
+          await createLogEntry({ 
+            kind: 'trigger_bulk_created', 
+            triggerId: item.id, 
+            name: item.name
+          });
+        } catch (error) {
+          errors.push({ triggerData, error: error.message });
+        }
+      }
+      
+      res.json({
+        success: true,
+        created: created.length,
+        failed: errors.length,
+        createdTriggers: created,
+        errors
+      });
+    } catch (error) {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
 }
 
 // Helper to derive and emit events for known flows
 export function buildCrudEvent({ method, tableName, body, result }) {
   const typeMap = { POST: 'crud_create', PUT: 'crud_update', DELETE: 'crud_delete', GET: 'crud_read' };
   const type = typeMap[String(method).toUpperCase()] || 'crud_operation';
+  
+  // Extract notification metadata if present
+  const notificationMeta = body?.notificationMeta || {};
+  const recipient = body?.recipient || notificationMeta?.recipient;
+  const customMessage = body?.customMessage || notificationMeta?.message;
+  
   const event = {
     type,
     method,
     tableName,
     resource: 'dynamodb',
-    data: { body, result }
+    data: { 
+      body, 
+      result,
+      message: customMessage // Pass custom message if provided
+    },
+    recipient, // Include recipient if specified
+    actor: body?.actor || 'system'
   };
   console.log('[Backend] buildCrudEvent:', event);
   return event;
