@@ -508,6 +508,85 @@ app.post('/lambda/create-api-gateway', async (req, res) => {
   }
 });
 
+// API Method Testing endpoint
+app.post('/api-method/test', async (req, res) => {
+  try {
+    const { url, method, headers, body, timeout = 30000 } = req.body;
+    
+    if (!url || !method) {
+      return res.status(400).json({ error: 'URL and method are required' });
+    }
+    
+    console.log(`[API Method Test] Testing ${method} ${url}`);
+    
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
+    
+    const fetchOptions = {
+      method: method.toUpperCase(),
+      headers: {
+        'Content-Type': 'application/json',
+        ...headers
+      },
+      signal: controller.signal
+    };
+    
+    if (body && method.toUpperCase() !== 'GET') {
+      fetchOptions.body = typeof body === 'string' ? body : JSON.stringify(body);
+    }
+    
+    const response = await fetch(url, fetchOptions);
+    clearTimeout(timeoutId);
+    
+    const responseData = {
+      status: response.status,
+      statusText: response.statusText,
+      headers: Object.fromEntries(response.headers.entries()),
+      url: response.url,
+      redirected: response.redirected,
+      type: response.type
+    };
+    
+    // Try to parse response as JSON, fallback to text
+    let responseBody;
+    const contentType = response.headers.get('content-type');
+    if (contentType && contentType.includes('application/json')) {
+      try {
+        responseBody = await response.json();
+      } catch (e) {
+        responseBody = await response.text();
+      }
+    } else {
+      responseBody = await response.text();
+    }
+    
+    responseData.body = responseBody;
+    
+    res.json({
+      success: true,
+      data: responseData,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('[API Method Test] Error:', error);
+    
+    if (error.name === 'AbortError') {
+      res.status(408).json({ 
+        success: false,
+        error: 'Request timeout',
+        details: `Request exceeded ${req.body.timeout || 30000}ms timeout`
+      });
+    } else {
+      res.status(500).json({ 
+        success: false,
+        error: 'Failed to test API method',
+        details: error.message 
+      });
+    }
+  }
+});
+
 // Get deployment metadata endpoint
 app.get('/lambda/deployments/:deploymentId', async (req, res) => {
   try {
@@ -735,7 +814,7 @@ app.post('/ai-agent', (req, res) => aiAgentHandler({ request: { requestBody: req
 // AI Agent streaming endpoint for chat and schema editing
 app.post('/ai-agent/stream', async (req, res) => {
   console.log('[AI Agent] !!! STREAMING ENDPOINT CALLED !!!');
-  const { message, namespace, history, schema, uploadedSchemas } = req.body;
+  const { message, namespace, allNamespaces, history, schema, uploadedSchemas } = req.body;
   
   // Import the intent detection function
   const { detectIntent } = await import('./lib/llm-agent-system.js');
@@ -753,7 +832,7 @@ app.post('/ai-agent/stream', async (req, res) => {
   });
   
   try {
-    await agentSystem.handleStreamingWithAgents(res, namespace, message, history, schema, uploadedSchemas);
+    await agentSystem.handleStreamingWithAgents(res, namespace, message, history, schema, uploadedSchemas, allNamespaces);
   } catch (error) {
     console.error('AI Agent streaming error:', error);
     res.status(500).json({ error: 'Failed to handle AI Agent streaming request' });
@@ -763,8 +842,8 @@ app.post('/ai-agent/stream', async (req, res) => {
 // AI Agent Lambda codegen endpoint
 app.post('/ai-agent/lambda-codegen', async (req, res) => {
   console.log('[AI Agent] !!! LAMBDA CODEGEN ENDPOINT CALLED !!!');
-  const { message, originalMessage, namespace, selectedSchema, functionName, runtime, handler, memory, timeout, environment } = req.body;
-  console.log('[AI Agent] Lambda codegen request received:', { message, originalMessage, selectedSchema, functionName, runtime, handler, memory, timeout, environment, namespace });
+  const { message, originalMessage, namespace, allNamespaces, selectedSchema, functionName, runtime, handler, memory, timeout, environment } = req.body;
+  console.log('[AI Agent] Lambda codegen request received:', { message, originalMessage, selectedSchema, functionName, runtime, handler, memory, timeout, environment, namespace, allNamespaces });
 
   // Import the intent detection function
   const { detectIntent } = await import('./lib/llm-agent-system.js');
@@ -813,6 +892,7 @@ app.post('/ai-agent/lambda-codegen', async (req, res) => {
       timeout,
       environment,
       namespace, // Pass namespace for automatic schema selection
+      allNamespaces, // Pass all namespaces in context
       res // Pass the response object for streaming
     });
 
@@ -2322,23 +2402,43 @@ app.post('/drive/namespace-folder', async (req, res) => {
 
 app.post('/drive/upload', upload.single('file'), async (req, res) => {
   try {
-    const { userId, parentId = 'ROOT', tags, namespaceId, fieldName } = req.body;
+    const { userId, parentId = 'ROOT', tags, namespaceId, namespaceName, fieldName } = req.body;
     
     // Debug: Log what we received
     console.log('=== DRIVE UPLOAD DEBUG ===');
     console.log('req.body:', req.body);
     console.log('userId:', userId);
     console.log('namespaceId:', namespaceId);
+    console.log('namespaceName:', namespaceName);
     console.log('parentId:', parentId);
     console.log('fieldName:', fieldName);
     console.log('req.file:', req.file ? { originalname: req.file.originalname, size: req.file.size } : 'No file');
     
-    // Always use the real user id for the user segment; namespace is a separate prefix
-    const effectiveUserId = userId;
-    
-    if (!effectiveUserId) {
-      return res.status(400).json({ error: 'userId or namespaceId is required' });
+    // REQUIRED VALIDATION: userId
+    if (!userId) {
+      return res.status(400).json({ 
+        error: 'userId is required',
+        message: 'Please provide userId in the request body'
+      });
     }
+    
+    // REQUIRED VALIDATION: namespaceId
+    if (!namespaceId) {
+      return res.status(400).json({ 
+        error: 'namespaceId is required',
+        message: 'All drive operations must be scoped to a namespace. Please provide namespaceId'
+      });
+    }
+    
+    // REQUIRED VALIDATION: namespaceName
+    if (!namespaceName) {
+      return res.status(400).json({ 
+        error: 'namespaceName is required',
+        message: 'Please provide namespaceName for namespace identification'
+      });
+    }
+    
+    const effectiveUserId = userId;
     
     let fileData;
     
@@ -2373,52 +2473,36 @@ app.post('/drive/upload', upload.single('file'), async (req, res) => {
     
     // For namespace uploads, use the namespace folder as parent and attach namespace info
     let effectiveParentId = parentId;
-    let namespaceInfo = null;
     
     console.log('Processing namespaceId:', namespaceId);
+    console.log('namespaceName:', namespaceName);
     console.log('namespaceId type:', typeof namespaceId);
     console.log('namespaceId truthy:', !!namespaceId);
     
-    if (namespaceId) {
-      // Create namespace info directly from the provided namespaceId
-      // Extract namespace name from namespaceId if it contains a name prefix
-      let namespaceName = namespaceId;
-      if (namespaceId.includes('-')) {
-        // If namespaceId contains dashes, try to extract a readable name
-        const parts = namespaceId.split('-');
-        if (parts.length > 1) {
-          // Take the first part as the name (e.g., "marketing" from "marketing-c3490482-fcea-478f-804b-32a33f200ce3")
-          namespaceName = parts[0];
+    // Create namespace info from provided namespaceId and namespaceName (both are now required)
+    const namespaceInfo = { id: namespaceId, name: namespaceName };
+    
+    // Try to get namespace folder path from API, but don't fail if it doesn't exist
+    try {
+      const namespaceRes = await fetch(`${process.env.API_BASE_URL || 'http://localhost:5001'}/unified/namespaces/${namespaceId}`);
+      if (namespaceRes.ok) {
+        const namespaceData = await namespaceRes.json();
+        if (namespaceData['folder-path']) {
+          effectiveParentId = namespaceData['folder-path'];
         }
       }
-      
-      namespaceInfo = { id: namespaceId, name: namespaceName };
-      
-      // Try to get namespace folder path from API, but don't fail if it doesn't exist
+    } catch (error) {
+      console.log('Namespace API not available, using provided namespace info for storage path');
+    }
+    
+    // If fieldName is provided, create a subfolder for the field
+    if (fieldName) {
       try {
-        const namespaceRes = await fetch(`${process.env.API_BASE_URL || 'http://localhost:5001'}/unified/namespaces/${namespaceId}`);
-        if (namespaceRes.ok) {
-          const namespaceData = await namespaceRes.json();
-          if (namespaceData?.name) {
-            namespaceInfo.name = namespaceData.name;
-          }
-          if (namespaceData['folder-path']) {
-            effectiveParentId = namespaceData['folder-path'];
-          }
-        }
+        // Create the field folder if it doesn't exist
+        await brmhDrive.createFolder(effectiveUserId, { name: fieldName, namespaceId, namespaceName }, effectiveParentId);
+        effectiveParentId = effectiveParentId === 'ROOT' ? fieldName : `${effectiveParentId}/${fieldName}`;
       } catch (error) {
-        console.log('Namespace API not available, using namespaceId directly for storage path');
-      }
-      
-      // If fieldName is provided, create a subfolder for the field
-      if (fieldName) {
-        try {
-          // Create the field folder if it doesn't exist
-          await brmhDrive.createFolder(effectiveUserId, { name: fieldName, namespaceId, namespaceName }, effectiveParentId);
-          effectiveParentId = effectiveParentId === 'ROOT' ? fieldName : `${effectiveParentId}/${fieldName}`;
-        } catch (error) {
-          console.log('Could not create field folder, using namespace folder');
-        }
+        console.log('Could not create field folder, using namespace folder');
       }
     }
     
@@ -2454,8 +2538,28 @@ app.post('/drive/folder', async (req, res) => {
   try {
     const { userId, folderData, parentId = 'ROOT' } = req.body;
     
-    if (!userId || !folderData) {
-      return res.status(400).json({ error: 'userId and folderData are required' });
+    // REQUIRED VALIDATION: userId
+    if (!userId) {
+      return res.status(400).json({ 
+        error: 'userId is required',
+        message: 'Please provide userId in the request body'
+      });
+    }
+    
+    // REQUIRED VALIDATION: folderData
+    if (!folderData) {
+      return res.status(400).json({ 
+        error: 'folderData is required',
+        message: 'Please provide folderData with folder details'
+      });
+    }
+    
+    // REQUIRED VALIDATION: namespaceId and namespaceName in folderData
+    if (!folderData.namespaceId || !folderData.namespaceName) {
+      return res.status(400).json({ 
+        error: 'namespaceId and namespaceName are required in folderData',
+        message: 'All folders must be scoped to a namespace. Please provide namespaceId and namespaceName in folderData'
+      });
     }
     
     const result = await brmhDrive.createFolder(userId, folderData, parentId);
@@ -2469,9 +2573,17 @@ app.post('/drive/folder', async (req, res) => {
 app.get('/drive/files/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
-    const { parentId = 'ROOT', limit = 50, nextToken, namespaceId = null } = req.query;
+    const { parentId = 'ROOT', limit = 50, nextToken, namespaceId } = req.query;
     
-    const result = await brmhDrive.listFiles(userId, parentId, parseInt(limit), nextToken, namespaceId || null);
+    // REQUIRED VALIDATION: namespaceId
+    if (!namespaceId) {
+      return res.status(400).json({ 
+        error: 'namespaceId is required',
+        message: 'Please provide namespaceId as a query parameter'
+      });
+    }
+    
+    const result = await brmhDrive.listFiles(userId, parentId, parseInt(limit), nextToken, namespaceId);
     res.json(result);
   } catch (error) {
     console.error('Drive list files error:', error);
@@ -2482,9 +2594,17 @@ app.get('/drive/files/:userId', async (req, res) => {
 app.get('/drive/folders/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
-    const { parentId = 'ROOT', limit = 50, nextToken, namespaceId = null } = req.query;
+    const { parentId = 'ROOT', limit = 50, nextToken, namespaceId } = req.query;
     
-    const result = await brmhDrive.listFolders(userId, parentId, parseInt(limit), nextToken, namespaceId || null);
+    // REQUIRED VALIDATION: namespaceId
+    if (!namespaceId) {
+      return res.status(400).json({ 
+        error: 'namespaceId is required',
+        message: 'Please provide namespaceId as a query parameter'
+      });
+    }
+    
+    const result = await brmhDrive.listFolders(userId, parentId, parseInt(limit), nextToken, namespaceId);
     res.json(result);
   } catch (error) {
     console.error('Drive list folders error:', error);
@@ -2495,9 +2615,17 @@ app.get('/drive/folders/:userId', async (req, res) => {
 app.get('/drive/contents/:userId/:folderId', async (req, res) => {
   try {
     const { userId, folderId } = req.params;
-    const { limit = 50, nextToken, namespaceId = null } = req.query;
+    const { limit = 50, nextToken, namespaceId } = req.query;
     
-    const result = await brmhDrive.listFolderContents(userId, folderId, parseInt(limit), nextToken, namespaceId || null);
+    // REQUIRED VALIDATION: namespaceId
+    if (!namespaceId) {
+      return res.status(400).json({ 
+        error: 'namespaceId is required',
+        message: 'Please provide namespaceId as a query parameter'
+      });
+    }
+    
+    const result = await brmhDrive.listFolderContents(userId, folderId, parseInt(limit), nextToken, namespaceId);
     res.json(result);
   } catch (error) {
     console.error('Drive list folder contents error:', error);
@@ -2508,11 +2636,29 @@ app.get('/drive/contents/:userId/:folderId', async (req, res) => {
 app.get('/drive/file/:userId/:fileId', async (req, res) => {
   try {
     const { userId, fileId } = req.params;
+    const { namespaceId } = req.query;
+    
+    // REQUIRED VALIDATION: namespaceId
+    if (!namespaceId) {
+      return res.status(400).json({ 
+        error: 'namespaceId is required',
+        message: 'Please provide namespaceId as a query parameter'
+      });
+    }
     
     const result = await brmhDrive.getFileById(userId, fileId);
     if (!result) {
       return res.status(404).json({ error: 'File not found' });
     }
+    
+    // Verify file belongs to the specified namespace
+    if (result.namespaceId !== namespaceId) {
+      return res.status(403).json({ 
+        error: 'Access denied',
+        message: 'File does not belong to the specified namespace'
+      });
+    }
+    
     res.json(result);
   } catch (error) {
     console.error('Drive get file error:', error);
@@ -2523,11 +2669,29 @@ app.get('/drive/file/:userId/:fileId', async (req, res) => {
 app.get('/drive/folder/:userId/:folderId', async (req, res) => {
   try {
     const { userId, folderId } = req.params;
+    const { namespaceId } = req.query;
+    
+    // REQUIRED VALIDATION: namespaceId
+    if (!namespaceId) {
+      return res.status(400).json({ 
+        error: 'namespaceId is required',
+        message: 'Please provide namespaceId as a query parameter'
+      });
+    }
     
     const result = await brmhDrive.getFolderById(userId, folderId);
     if (!result) {
       return res.status(404).json({ error: 'Folder not found' });
     }
+    
+    // Verify folder belongs to the specified namespace
+    if (result.namespaceId !== namespaceId) {
+      return res.status(403).json({ 
+        error: 'Access denied',
+        message: 'Folder does not belong to the specified namespace'
+      });
+    }
+    
     res.json(result);
   } catch (error) {
     console.error('Drive get folder error:', error);
@@ -2538,10 +2702,27 @@ app.get('/drive/folder/:userId/:folderId', async (req, res) => {
 app.patch('/drive/rename/:userId/:fileId', async (req, res) => {
   try {
     const { userId, fileId } = req.params;
-    const { newName } = req.body;
+    const { newName, namespaceId } = req.body;
     
     if (!newName) {
       return res.status(400).json({ error: 'newName is required' });
+    }
+    
+    // REQUIRED VALIDATION: namespaceId
+    if (!namespaceId) {
+      return res.status(400).json({ 
+        error: 'namespaceId is required',
+        message: 'Please provide namespaceId in the request body'
+      });
+    }
+    
+    // Verify file belongs to namespace before renaming
+    const file = await brmhDrive.getFileById(userId, fileId);
+    if (file && file.namespaceId !== namespaceId) {
+      return res.status(403).json({ 
+        error: 'Access denied',
+        message: 'File does not belong to the specified namespace'
+      });
     }
     
     const result = await brmhDrive.renameFile(userId, fileId, newName);
@@ -2555,6 +2736,24 @@ app.patch('/drive/rename/:userId/:fileId', async (req, res) => {
 app.delete('/drive/file/:userId/:fileId', async (req, res) => {
   try {
     const { userId, fileId } = req.params;
+    const { namespaceId } = req.query;
+    
+    // REQUIRED VALIDATION: namespaceId
+    if (!namespaceId) {
+      return res.status(400).json({ 
+        error: 'namespaceId is required',
+        message: 'Please provide namespaceId as a query parameter'
+      });
+    }
+    
+    // Verify file belongs to namespace before deleting
+    const file = await brmhDrive.getFileById(userId, fileId);
+    if (file && file.namespaceId !== namespaceId) {
+      return res.status(403).json({ 
+        error: 'Access denied',
+        message: 'File does not belong to the specified namespace'
+      });
+    }
     
     const result = await brmhDrive.deleteFile(userId, fileId);
     res.json(result);
@@ -2567,6 +2766,24 @@ app.delete('/drive/file/:userId/:fileId', async (req, res) => {
 app.get('/drive/download/:userId/:fileId', async (req, res) => {
   try {
     const { userId, fileId } = req.params;
+    const { namespaceId } = req.query;
+    
+    // REQUIRED VALIDATION: namespaceId
+    if (!namespaceId) {
+      return res.status(400).json({ 
+        error: 'namespaceId is required',
+        message: 'Please provide namespaceId as a query parameter'
+      });
+    }
+    
+    // Verify file belongs to namespace before generating download URL
+    const file = await brmhDrive.getFileById(userId, fileId);
+    if (file && file.namespaceId !== namespaceId) {
+      return res.status(403).json({ 
+        error: 'Access denied',
+        message: 'File does not belong to the specified namespace'
+      });
+    }
     
     const result = await brmhDrive.generateDownloadUrl(userId, fileId);
     res.json(result);
@@ -2579,6 +2796,25 @@ app.get('/drive/download/:userId/:fileId', async (req, res) => {
 app.get('/drive/preview/:userId/:fileId', async (req, res) => {
   try {
     const { userId, fileId } = req.params;
+    const { namespaceId } = req.query;
+    
+    // REQUIRED VALIDATION: namespaceId
+    if (!namespaceId) {
+      return res.status(400).json({ 
+        error: 'namespaceId is required',
+        message: 'Please provide namespaceId as a query parameter'
+      });
+    }
+    
+    // Verify file belongs to namespace before generating preview URL
+    const file = await brmhDrive.getFileById(userId, fileId);
+    if (file && file.namespaceId !== namespaceId) {
+      return res.status(403).json({ 
+        error: 'Access denied',
+        message: 'File does not belong to the specified namespace'
+      });
+    }
+    
     const result = await brmhDrive.generatePreviewUrl(userId, fileId);
     res.json(result);
   } catch (error) {
@@ -2603,6 +2839,23 @@ app.post('/drive/share/file/:userId/:fileId', async (req, res) => {
     const { userId, fileId } = req.params;
     const shareData = req.body;
     
+    // REQUIRED VALIDATION: namespaceId
+    if (!shareData.namespaceId) {
+      return res.status(400).json({ 
+        error: 'namespaceId is required',
+        message: 'Please provide namespaceId in the request body'
+      });
+    }
+    
+    // Verify file belongs to namespace before sharing
+    const file = await brmhDrive.getFileById(userId, fileId);
+    if (file && file.namespaceId !== shareData.namespaceId) {
+      return res.status(403).json({ 
+        error: 'Access denied',
+        message: 'File does not belong to the specified namespace'
+      });
+    }
+    
     const result = await brmhDrive.shareFile(userId, fileId, shareData);
     res.json(result);
   } catch (error) {
@@ -2616,6 +2869,23 @@ app.post('/drive/share/folder/:userId/:folderId', async (req, res) => {
     const { userId, folderId } = req.params;
     const shareData = req.body;
     
+    // REQUIRED VALIDATION: namespaceId
+    if (!shareData.namespaceId) {
+      return res.status(400).json({ 
+        error: 'namespaceId is required',
+        message: 'Please provide namespaceId in the request body'
+      });
+    }
+    
+    // Verify folder belongs to namespace before sharing
+    const folder = await brmhDrive.getFolderById(userId, folderId);
+    if (folder && folder.namespaceId !== shareData.namespaceId) {
+      return res.status(403).json({ 
+        error: 'Access denied',
+        message: 'Folder does not belong to the specified namespace'
+      });
+    }
+    
     const result = await brmhDrive.shareFolder(userId, folderId, shareData);
     res.json(result);
   } catch (error) {
@@ -2627,9 +2897,26 @@ app.post('/drive/share/folder/:userId/:folderId', async (req, res) => {
 app.get('/drive/shared/with-me/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
-    const { limit = 50, nextToken } = req.query;
+    const { limit = 50, nextToken, namespaceId } = req.query;
+    
+    // REQUIRED VALIDATION: namespaceId
+    if (!namespaceId) {
+      return res.status(400).json({ 
+        error: 'namespaceId is required',
+        message: 'Please provide namespaceId as a query parameter'
+      });
+    }
     
     const result = await brmhDrive.getSharedWithMe(userId, parseInt(limit), nextToken);
+    
+    // Filter results by namespaceId
+    if (result.sharedItems) {
+      result.sharedItems = result.sharedItems.filter(item => {
+        // Check if the shared item has namespaceId in its metadata
+        return item.originalNamespaceId === namespaceId;
+      });
+    }
+    
     res.json(result);
   } catch (error) {
     console.error('Drive get shared with me error:', error);
@@ -2640,9 +2927,25 @@ app.get('/drive/shared/with-me/:userId', async (req, res) => {
 app.get('/drive/shared/by-me/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
-    const { limit = 50, nextToken } = req.query;
+    const { limit = 50, nextToken, namespaceId } = req.query;
+    
+    // REQUIRED VALIDATION: namespaceId
+    if (!namespaceId) {
+      return res.status(400).json({ 
+        error: 'namespaceId is required',
+        message: 'Please provide namespaceId as a query parameter'
+      });
+    }
     
     const result = await brmhDrive.getSharedByMe(userId, parseInt(limit), nextToken);
+    
+    // Filter results by namespaceId
+    if (result.sharedItems) {
+      result.sharedItems = result.sharedItems.filter(item => {
+        return item.originalNamespaceId === namespaceId;
+      });
+    }
+    
     res.json(result);
   } catch (error) {
     console.error('Drive get shared by me error:', error);
@@ -2653,10 +2956,18 @@ app.get('/drive/shared/by-me/:userId', async (req, res) => {
 app.patch('/drive/share/:userId/:shareId/permissions', async (req, res) => {
   try {
     const { userId, shareId } = req.params;
-    const { permissions } = req.body;
+    const { permissions, namespaceId } = req.body;
     
     if (!permissions) {
       return res.status(400).json({ error: 'permissions is required' });
+    }
+    
+    // REQUIRED VALIDATION: namespaceId
+    if (!namespaceId) {
+      return res.status(400).json({ 
+        error: 'namespaceId is required',
+        message: 'Please provide namespaceId in the request body'
+      });
     }
     
     const result = await brmhDrive.updateSharePermissions(userId, shareId, permissions);
@@ -2670,6 +2981,15 @@ app.patch('/drive/share/:userId/:shareId/permissions', async (req, res) => {
 app.delete('/drive/share/:userId/:shareId/revoke', async (req, res) => {
   try {
     const { userId, shareId } = req.params;
+    const { namespaceId } = req.query;
+    
+    // REQUIRED VALIDATION: namespaceId
+    if (!namespaceId) {
+      return res.status(400).json({ 
+        error: 'namespaceId is required',
+        message: 'Please provide namespaceId as a query parameter'
+      });
+    }
     
     const result = await brmhDrive.revokeShare(userId, shareId);
     res.json(result);
@@ -2682,6 +3002,15 @@ app.delete('/drive/share/:userId/:shareId/revoke', async (req, res) => {
 app.get('/drive/shared/:userId/:shareId/download', async (req, res) => {
   try {
     const { userId, shareId } = req.params;
+    const { namespaceId } = req.query;
+    
+    // REQUIRED VALIDATION: namespaceId
+    if (!namespaceId) {
+      return res.status(400).json({ 
+        error: 'namespaceId is required',
+        message: 'Please provide namespaceId as a query parameter'
+      });
+    }
     
     const result = await brmhDrive.getSharedFileContent(userId, shareId);
     res.json(result);
@@ -2695,6 +3024,24 @@ app.get('/drive/shared/:userId/:shareId/download', async (req, res) => {
 app.delete('/drive/folder/:userId/:folderId', async (req, res) => {
   try {
     const { userId, folderId } = req.params;
+    const { namespaceId } = req.query;
+    
+    // REQUIRED VALIDATION: namespaceId
+    if (!namespaceId) {
+      return res.status(400).json({ 
+        error: 'namespaceId is required',
+        message: 'Please provide namespaceId as a query parameter'
+      });
+    }
+    
+    // Verify folder belongs to namespace before deleting
+    const folder = await brmhDrive.getFolderById(userId, folderId);
+    if (folder && folder.namespaceId !== namespaceId) {
+      return res.status(403).json({ 
+        error: 'Access denied',
+        message: 'Folder does not belong to the specified namespace'
+      });
+    }
     
     const result = await brmhDrive.deleteFolder(userId, folderId);
     res.json(result);
@@ -2708,10 +3055,27 @@ app.delete('/drive/folder/:userId/:folderId', async (req, res) => {
 app.patch('/drive/rename/folder/:userId/:folderId', async (req, res) => {
   try {
     const { userId, folderId } = req.params;
-    const { newName } = req.body;
+    const { newName, namespaceId } = req.body;
     
     if (!newName) {
       return res.status(400).json({ error: 'newName is required' });
+    }
+    
+    // REQUIRED VALIDATION: namespaceId
+    if (!namespaceId) {
+      return res.status(400).json({ 
+        error: 'namespaceId is required',
+        message: 'Please provide namespaceId in the request body'
+      });
+    }
+    
+    // Verify folder belongs to namespace before renaming
+    const folder = await brmhDrive.getFolderById(userId, folderId);
+    if (folder && folder.namespaceId !== namespaceId) {
+      return res.status(403).json({ 
+        error: 'Access denied',
+        message: 'Folder does not belong to the specified namespace'
+      });
     }
     
     const result = await brmhDrive.renameFolder(userId, folderId, newName);
@@ -2726,10 +3090,27 @@ app.patch('/drive/rename/folder/:userId/:folderId', async (req, res) => {
 app.patch('/drive/move/file/:userId/:fileId', async (req, res) => {
   try {
     const { userId, fileId } = req.params;
-    const { newParentId } = req.body;
+    const { newParentId, namespaceId } = req.body;
     
     if (!newParentId) {
       return res.status(400).json({ error: 'newParentId is required' });
+    }
+    
+    // REQUIRED VALIDATION: namespaceId
+    if (!namespaceId) {
+      return res.status(400).json({ 
+        error: 'namespaceId is required',
+        message: 'Please provide namespaceId in the request body'
+      });
+    }
+    
+    // Verify file belongs to namespace before moving
+    const file = await brmhDrive.getFileById(userId, fileId);
+    if (file && file.namespaceId !== namespaceId) {
+      return res.status(403).json({ 
+        error: 'Access denied',
+        message: 'File does not belong to the specified namespace'
+      });
     }
     
     const result = await brmhDrive.moveFile(userId, fileId, newParentId);
@@ -2744,10 +3125,27 @@ app.patch('/drive/move/file/:userId/:fileId', async (req, res) => {
 app.patch('/drive/move/folder/:userId/:folderId', async (req, res) => {
   try {
     const { userId, folderId } = req.params;
-    const { newParentId } = req.body;
+    const { newParentId, namespaceId } = req.body;
     
     if (!newParentId) {
       return res.status(400).json({ error: 'newParentId is required' });
+    }
+    
+    // REQUIRED VALIDATION: namespaceId
+    if (!namespaceId) {
+      return res.status(400).json({ 
+        error: 'namespaceId is required',
+        message: 'Please provide namespaceId in the request body'
+      });
+    }
+    
+    // Verify folder belongs to namespace before moving
+    const folder = await brmhDrive.getFolderById(userId, folderId);
+    if (folder && folder.namespaceId !== namespaceId) {
+      return res.status(403).json({ 
+        error: 'Access denied',
+        message: 'Folder does not belong to the specified namespace'
+      });
     }
     
     const result = await brmhDrive.moveFolder(userId, folderId, newParentId);
