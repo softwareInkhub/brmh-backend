@@ -307,14 +307,14 @@ Promise.all([
 // --- Lambda Deployment API Routes ---
 app.post('/lambda/deploy', async (req, res) => {
   try {
-    const { functionName, code, runtime = 'nodejs18.x', handler = 'index.handler', memorySize = 128, timeout = 30, dependencies = {}, environment = '', createApiGateway = true } = req.body;
+    const { functionName, code, runtime = 'nodejs18.x', handler = 'index.handler', memorySize = 128, timeout = 30, dependencies = {}, environment = '', createApiGateway = true, namespaceId } = req.body;
     
     if (!functionName || !code) {
       return res.status(400).json({ error: 'functionName and code are required' });
     }
 
     console.log(`[Lambda Deployment] Deploying function: ${functionName}`);
-    console.log(`[Lambda Deployment] Request body:`, { functionName, runtime, handler, memorySize, timeout, dependencies, environment, createApiGateway });
+    console.log(`[Lambda Deployment] Request body:`, { functionName, runtime, handler, memorySize, timeout, dependencies, environment, createApiGateway, namespaceId });
     
     // Set timeout for the entire deployment process (15 minutes)
     const deploymentPromise = lambdaDeploymentManager.deployLambdaFunction(
@@ -326,7 +326,8 @@ app.post('/lambda/deploy', async (req, res) => {
       timeout,
       dependencies,
       environment,
-      createApiGateway
+      createApiGateway,
+      namespaceId
     );
     
     const timeoutPromise = new Promise((_, reject) => {
@@ -440,6 +441,31 @@ app.post('/lambda/create-api-gateway', async (req, res) => {
   }
 });
 
+// Delete Lambda function from both AWS and DynamoDB
+app.delete('/lambda/:functionName', async (req, res) => {
+  try {
+    const { functionName } = req.params;
+    
+    if (!functionName) {
+      return res.status(400).json({ error: 'functionName is required' });
+    }
+
+    console.log(`[Lambda Deletion] Deleting function: ${functionName}`);
+    
+    const result = await lambdaDeploymentManager.deleteLambdaFunction(functionName);
+    
+    console.log(`[Lambda Deletion] Deletion result:`, result);
+    
+    res.json(result);
+  } catch (error) {
+    console.error('[Lambda Deletion] Error:', error);
+    res.status(500).json({ 
+      error: 'Failed to delete Lambda function',
+      details: error.message 
+    });
+  }
+});
+
 // API Method Testing endpoint
 app.post('/api-method/test', async (req, res) => {
   try {
@@ -545,11 +571,11 @@ app.get('/lambda/deployments/:deploymentId', async (req, res) => {
 // List deployments endpoint
 app.get('/lambda/deployments', async (req, res) => {
   try {
-    const { functionName } = req.query;
+    const { functionName, namespaceIds } = req.query;
     
-    console.log(`[Deployments] Listing deployments${functionName ? ` for function: ${functionName}` : ''}`);
+    console.log(`[Deployments] Listing deployments`, { functionName, namespaceIds });
     
-    const deployments = await lambdaDeploymentManager.listDeployments(functionName);
+    const deployments = await lambdaDeploymentManager.listDeployments(functionName, namespaceIds);
     
     res.json({ deployments });
   } catch (error) {
