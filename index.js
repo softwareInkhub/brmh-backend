@@ -2365,8 +2365,23 @@ app.get('/api/icon/:s3Key(*)', async (req, res) => {
     // Pipe the S3 object stream directly to the response
     response.Body.pipe(res);
   } catch (error) {
-    console.error('Error serving icon:', error);
-    res.status(404).json({ error: 'Icon not found' });
+    console.error('Error serving icon:', {
+      s3Key: decodeURIComponent(req.params.s3Key),
+      error: error.message,
+      code: error.$metadata?.httpStatusCode,
+      errorName: error.name
+    });
+    
+    // Return a transparent 1x1 PNG as fallback instead of JSON error
+    // This prevents image load errors in the frontend
+    const transparentPng = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
+      'base64'
+    );
+    
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.status(200).send(transparentPng);
   }
 });
 
@@ -2482,18 +2497,9 @@ app.post('/drive/upload', upload.single('file'), async (req, res) => {
     // Create namespace info from provided namespaceId and namespaceName (both are now required)
     const namespaceInfo = { id: namespaceId, name: namespaceName };
     
-    // Try to get namespace folder path from API, but don't fail if it doesn't exist
-    try {
-      const namespaceRes = await fetch(`${process.env.API_BASE_URL || 'http://localhost:5001'}/unified/namespaces/${namespaceId}`);
-      if (namespaceRes.ok) {
-        const namespaceData = await namespaceRes.json();
-        if (namespaceData['folder-path']) {
-          effectiveParentId = namespaceData['folder-path'];
-        }
-      }
-    } catch (error) {
-      console.log('Namespace API not available, using provided namespace info for storage path');
-    }
+    // Note: We don't override effectiveParentId with the namespace folder-path
+    // because brmh-drive.js already has namespace-aware path generation.
+    // The folder-path is a file system path, not a folder ID that can be looked up in the database.
     
     // If fieldName is provided, create a subfolder for the field
     if (fieldName) {
