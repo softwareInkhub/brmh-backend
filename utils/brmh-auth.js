@@ -670,15 +670,18 @@ async function signupHandler(req, res) {
     });
   }
   
-  const { username, password, email } = req.body;
+  const { username, password, email, phone_number } = req.body;
+
+  // Accept either email or phone_number field
+  const emailOrPhone = email || phone_number;
 
   // Enforce required fields and Cognito-safe username
-  if (!email || !password) {
-    return res.status(400).json({ success: false, error: 'Missing required fields: email, password' });
+  if (!emailOrPhone || !password) {
+    return res.status(400).json({ success: false, error: 'Missing required fields: email or phone_number, and password' });
   }
   
-  // Detect if email field contains a phone number (E.164 format: +countrycodephonenumber)
-  const isPhoneNumber = /^\+\d{10,15}$/.test(email);
+  // Detect if the field contains a phone number (E.164 format: +countrycodephonenumber)
+  const isPhoneNumber = /^\+\d{10,15}$/.test(emailOrPhone);
   const displayName = (username || '').toString().trim();
   const sanitized = displayName ? displayName.replace(/\s+/g, '_') : '';
   
@@ -687,19 +690,19 @@ async function signupHandler(req, res) {
   if (!cognitoUsername) {
     if (isPhoneNumber) {
       // For phone numbers, use last 10 digits as base for username
-      const phoneDigits = email.replace(/\D/g, '');
+      const phoneDigits = emailOrPhone.replace(/\D/g, '');
       cognitoUsername = `user_${phoneDigits.slice(-10)}_${Date.now()}`;
     } else {
       // For emails, use local part
-      const local = String(email).split('@')[0].replace(/[^\p{L}\p{M}\p{S}\p{N}\p{P}]/gu, '_');
+      const local = String(emailOrPhone).split('@')[0].replace(/[^\p{L}\p{M}\p{S}\p{N}\p{P}]/gu, '_');
       cognitoUsername = `${local}_${Date.now()}`;
     }
   }
 
   // Set the appropriate attribute based on whether it's phone or email
   const userAttributes = isPhoneNumber 
-    ? [{ Name: 'phone_number', Value: email }]
-    : [{ Name: 'email', Value: email }];
+    ? [{ Name: 'phone_number', Value: emailOrPhone }]
+    : [{ Name: 'email', Value: emailOrPhone }];
 
   userPool.signUp(cognitoUsername, password, userAttributes, null, async (err, result) => {
     if (err) {
@@ -721,8 +724,8 @@ async function signupHandler(req, res) {
             const userData = {
               sub: fallbackResult.userSub,
               username: displayName || fallbackUsername,
-              email: isPhoneNumber ? null : email,
-              phone_number: isPhoneNumber ? email : null,
+              email: isPhoneNumber ? null : emailOrPhone,
+              phone_number: isPhoneNumber ? emailOrPhone : null,
               cognitoUsername: fallbackUsername,
               signupMethod: isPhoneNumber ? 'phone' : 'email',
               verified: false
@@ -758,8 +761,8 @@ async function signupHandler(req, res) {
       const userData = {
         sub: result.userSub,
         username: displayName || cognitoUsername,
-        email: isPhoneNumber ? null : email,
-        phone_number: isPhoneNumber ? email : null,
+        email: isPhoneNumber ? null : emailOrPhone,
+        phone_number: isPhoneNumber ? emailOrPhone : null,
         cognitoUsername: cognitoUsername,
         signupMethod: isPhoneNumber ? 'phone' : 'email',
         verified: false
