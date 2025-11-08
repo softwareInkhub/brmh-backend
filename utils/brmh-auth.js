@@ -685,6 +685,12 @@ async function signupHandler(req, res) {
   const displayName = (username || '').toString().trim();
   const sanitized = displayName ? displayName.replace(/\s+/g, '_') : '';
   
+  console.log('[Auth] Signup request:', {
+    isPhoneNumber,
+    emailOrPhone: emailOrPhone ? `${emailOrPhone.substring(0, 5)}...` : 'none',
+    hasUsername: !!displayName
+  });
+  
   // Generate Cognito username
   let cognitoUsername = sanitized;
   if (!cognitoUsername) {
@@ -699,10 +705,23 @@ async function signupHandler(req, res) {
     }
   }
 
-  // Set the appropriate attribute based on whether it's phone or email
-  const userAttributes = isPhoneNumber 
-    ? [{ Name: 'phone_number', Value: emailOrPhone }]
-    : [{ Name: 'email', Value: emailOrPhone }];
+  // Set the appropriate attributes based on whether it's phone or email
+  // Note: Cognito User Pool requires email, so for phone signups we provide a placeholder email
+  const userAttributes = [];
+  
+  if (isPhoneNumber) {
+    // For phone number signup, provide both phone and a placeholder email
+    userAttributes.push({ Name: 'phone_number', Value: emailOrPhone });
+    // Create a placeholder email using the phone number
+    const phoneDigits = emailOrPhone.replace(/\D/g, '');
+    const placeholderEmail = `${phoneDigits}@phone.brmh.in`;
+    userAttributes.push({ Name: 'email', Value: placeholderEmail });
+    console.log('[Auth] Phone signup - using placeholder email:', placeholderEmail);
+  } else {
+    // For email signup, just use the email
+    userAttributes.push({ Name: 'email', Value: emailOrPhone });
+    console.log('[Auth] Email signup - using email:', emailOrPhone);
+  }
 
   userPool.signUp(cognitoUsername, password, userAttributes, null, async (err, result) => {
     if (err) {
@@ -715,17 +734,32 @@ async function signupHandler(req, res) {
       }
       const fallbackUsername = `${cognitoUsername}_u${Math.floor(Math.random()*1e6)}`;
       try {
-        userPool.signUp(fallbackUsername, password, userAttributes, null, async (fallbackErr, fallbackResult) => {
+        // Recreate user attributes for fallback signup (in case they need to be regenerated)
+        const fallbackUserAttributes = [];
+        if (isPhoneNumber) {
+          fallbackUserAttributes.push({ Name: 'phone_number', Value: emailOrPhone });
+          const phoneDigits = emailOrPhone.replace(/\D/g, '');
+          const placeholderEmail = `${phoneDigits}@phone.brmh.in`;
+          fallbackUserAttributes.push({ Name: 'email', Value: placeholderEmail });
+        } else {
+          fallbackUserAttributes.push({ Name: 'email', Value: emailOrPhone });
+        }
+        
+        userPool.signUp(fallbackUsername, password, fallbackUserAttributes, null, async (fallbackErr, fallbackResult) => {
           if (fallbackErr) {
             console.error('[Auth] Signup fallback error:', fallbackErr);
             return res.status(400).json({ success: false, error: fallbackErr.message });
           }
           try {
+            // Prepare user data for DynamoDB
+            const phoneDigits = isPhoneNumber ? emailOrPhone.replace(/\D/g, '') : null;
+            const placeholderEmail = isPhoneNumber ? `${phoneDigits}@phone.brmh.in` : null;
+            
             const userData = {
               sub: fallbackResult.userSub,
               username: displayName || fallbackUsername,
-              email: isPhoneNumber ? null : emailOrPhone,
-              phone_number: isPhoneNumber ? emailOrPhone : null,
+              email: isPhoneNumber ? placeholderEmail : emailOrPhone,
+              phoneNumber: isPhoneNumber ? emailOrPhone : null,
               cognitoUsername: fallbackUsername,
               signupMethod: isPhoneNumber ? 'phone' : 'email',
               verified: false
@@ -757,12 +791,16 @@ async function signupHandler(req, res) {
       
       console.log('[Auth] Signup from domain:', signupDomain);
       
+      // Prepare user data for DynamoDB
+      const phoneDigits = isPhoneNumber ? emailOrPhone.replace(/\D/g, '') : null;
+      const placeholderEmail = isPhoneNumber ? `${phoneDigits}@phone.brmh.in` : null;
+      
       // Create user record in DynamoDB
       const userData = {
         sub: result.userSub,
         username: displayName || cognitoUsername,
-        email: isPhoneNumber ? null : emailOrPhone,
-        phone_number: isPhoneNumber ? emailOrPhone : null,
+        email: isPhoneNumber ? placeholderEmail : emailOrPhone,
+        phoneNumber: isPhoneNumber ? emailOrPhone : null,
         cognitoUsername: cognitoUsername,
         signupMethod: isPhoneNumber ? 'phone' : 'email',
         verified: false
