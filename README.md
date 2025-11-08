@@ -1,485 +1,424 @@
-# BRMH Backend - Cache System Documentation
+# BRMH Project - Comprehensive Architecture Guide
 
-## Overview
+## 🎯 Project Overview
 
-The BRMH (Backend Resource Management Hub) cache system provides high-performance data caching using AWS ElastiCache (Valkey) with Redis-compatible operations. The system supports both individual item caching and chunked data storage with automatic duplicate detection, non-blocking operations, and optimized performance.
+BRMH (Business Resource Management Hub) is a comprehensive API integration and data management platform that provides:
 
-## Recent Optimizations (Latest Update)
+- **Unified API Management**: Organize external APIs into namespaces with accounts and methods
+- **Data Synchronization**: Fetch, cache, and sync data from external APIs with pagination support
+- **File Management**: Google Drive-like file storage system with S3 integration
+- **AI Agent System**: Automated data processing, web scraping, and mock data generation
+- **Real-time Caching**: Redis/Valkey-based caching with DynamoDB integration
+- **Search & Indexing**: Algolia-powered search across all data
+- **Notification System**: Multi-channel notifications (WhatsApp, Email, Push)
 
-### Performance Improvements
-- **Non-blocking cache updates**: Background processing prevents API blocking
-- **Parallel cache configuration processing**: Multiple configs processed simultaneously
-- **Optimized logging**: Reduced verbosity with one-liner status messages
-- **Queue system**: Prevents data loss during concurrent bulk operations
-- **Enhanced pagination**: Better handling of large datasets with improved limits
+## 🏗️ Core Architecture
 
-## Architecture
+### 1. Namespace Structure
 
-### Components
-- **AWS ElastiCache (Valkey)**: Redis-compatible managed caching service
-- **DynamoDB**: Primary data source for caching
-- **Express.js**: API endpoints for cache operations
-- **ioredis**: Redis client for Node.js
-- **Lambda Functions**: Data streaming and cache update triggers
-- **Queue System**: In-memory queue for pending cache updates
+The BRMH system is organized around a hierarchical **Namespace → Account → Method** structure:
 
-### Cache Key Structure
 ```
-{project}:{tableName}:{identifier}
+Namespace (e.g., "Shopify")
+├── Account (e.g., "Production Store", "Test Store")
+│   ├── Method (e.g., "Get Orders", "Create Product")
+│   ├── Method (e.g., "Update Customer", "Delete Order")
+│   └── Method (e.g., "Get Analytics")
+└── Account (e.g., "Development Store")
+    ├── Method (e.g., "Get Orders", "Create Product")
+    └── Method (e.g., "Test Webhook")
 ```
 
-**Examples:**
-- Individual items: `my-app:shopify-inkhub-get-products:12345`
-- Chunked data: `my-app:shopify-inkhub-get-products:chunk:0`
-- Individual items with ID: `my-app:shopify-inkhub-get-products:0000`
+#### Namespace
+- **Purpose**: Groups related APIs (e.g., Shopify, Stripe, Google APIs)
+- **Properties**: `namespace-id`, `namespace-name`, `namespace-url`, `tags`
+- **Example**: `{ "namespace-name": "Shopify", "namespace-url": "https://api.shopify.com" }`
 
-## Cache Strategies
+#### Account
+- **Purpose**: Represents different instances/credentials within a namespace
+- **Properties**: `namespace-account-name`, `namespace-account-url-override`, `namespace-account-header`, `variables`, `tags`
+- **Example**: `{ "namespace-account-name": "Production Store", "namespace-account-header": [{"key": "Authorization", "value": "Bearer token123"}] }`
 
-### 1. Individual Item Caching (`recordsPerKey = 1`)
-- Each DynamoDB item is cached separately
-- Key format: `{project}:{tableName}:{itemId}`
-- **Benefits:**
-  - Granular access to individual items
-  - Better cache hit rates
-  - Easy item-level updates/deletes
-- **Use case:** When you need frequent access to specific items
+#### Method
+- **Purpose**: Defines specific API endpoints and operations
+- **Properties**: `namespace-method-name`, `namespace-method-type`, `namespace-method-url-override`, `namespace-method-header`, `namespace-method-queryParams`, `namespace-method-body`
+- **Example**: `{ "namespace-method-name": "Get Orders", "namespace-method-type": "GET", "namespace-method-url-override": "/admin/api/2023-10/orders.json" }`
 
-### 2. Chunked Data Caching (`recordsPerKey > 1`)
-- Multiple items grouped into chunks
-- Key format: `{project}:{tableName}:chunk:{chunkIndex}`
-- **Benefits:**
-  - Efficient bulk operations
-  - Reduced key overhead
-  - Better for large datasets
-- **Use case:** When you need bulk data retrieval
+### 2. Data Flow Architecture
 
-## API Endpoints
+```
+External API → Namespace Method → Account Credentials → Unified Handler → DynamoDB/S3/Cache
+```
 
-### Cache Table Data
-**POST** `/cache/table`
+## 📡 API Endpoints Structure
 
-Caches entire DynamoDB table data with duplicate detection.
+### Core API Routes
 
-**Request Body:**
+#### Namespace Management
+```bash
+GET    /unified/namespaces                    # List all namespaces
+POST   /unified/namespaces                    # Create namespace
+GET    /unified/namespaces/{namespaceId}      # Get namespace details
+PUT    /unified/namespaces/{namespaceId}      # Update namespace
+DELETE /unified/namespaces/{namespaceId}      # Delete namespace
+```
+
+#### Account Management
+```bash
+GET    /unified/namespaces/{namespaceId}/accounts     # List namespace accounts
+POST   /unified/namespaces/{namespaceId}/accounts     # Create account
+GET    /unified/accounts/{accountId}                  # Get account details
+PUT    /unified/accounts/{accountId}                  # Update account
+DELETE /unified/accounts/{accountId}                  # Delete account
+```
+
+#### Method Management
+```bash
+GET    /unified/namespaces/{namespaceId}/methods      # List namespace methods
+POST   /unified/namespaces/{namespaceId}/methods      # Create method
+GET    /unified/methods/{methodId}                    # Get method details
+PUT    /unified/methods/{methodId}                    # Update method
+DELETE /unified/methods/{methodId}                    # Delete method
+```
+
+#### Execution & Data Operations
+```bash
+POST   /unified/execute                           # Execute namespace request
+POST   /unified/execute/paginated                 # Execute with pagination
+POST   /execute                                   # Legacy execute endpoint
+```
+
+#### Caching System
+```bash
+GET    /cache/data                               # Get cached data
+POST   /cache/table                              # Cache table data
+DELETE /cache/clear                              # Clear cache
+GET    /cache/stats                              # Cache statistics
+```
+
+#### File Management (BRMH Drive)
+```bash
+POST   /drive/upload                             # Upload file
+GET    /drive/files/{userId}                     # List user files
+GET    /drive/download/{userId}/{fileId}         # Download file
+POST   /drive/folder                             # Create folder
+DELETE /drive/file/{userId}/{fileId}             # Delete file
+```
+
+#### Schema Management
+```bash
+GET    /unified/schema                           # List schemas
+POST   /unified/schema                           # Save schema
+GET    /unified/schema/{schemaId}                # Get schema
+PUT    /unified/schema/{schemaId}                # Update schema
+DELETE /unified/schema/{schemaId}                # Delete schema
+```
+
+## 🔧 Technical Implementation
+
+### Backend Stack
+- **Runtime**: Node.js with Express.js
+- **Database**: AWS DynamoDB (primary data store)
+- **File Storage**: AWS S3 (file management)
+- **Caching**: Redis/Valkey (ElastiCache)
+- **Search**: Algolia (indexing and search)
+- **Authentication**: AWS Cognito SSO
+- **Deployment**: EC2 with PM2 process manager
+
+### Frontend Stack
+- **Framework**: Next.js 14 with React 18
+- **Language**: TypeScript
+- **Styling**: Tailwind CSS
+- **UI Components**: Radix UI
+- **State Management**: Zustand
+- **Data Fetching**: React Query
+- **Authentication**: NextAuth.js
+
+### Key Files Structure
+
+#### Backend (`brmh-backend/`)
+```
+├── index.js                          # Main Express server
+├── lib/
+│   ├── unified-handlers.js           # Core namespace/account/method handlers
+│   ├── ai-agent-handlers.js          # AI agent system
+│   ├── dynamodb-handlers.js          # DynamoDB operations
+│   └── llm-agent-system.js           # LLM integration
+├── utils/
+│   ├── execute.js                    # Data execution and pagination
+│   ├── cache.js                      # Caching system
+│   ├── crud.js                       # CRUD operations
+│   ├── brmh-drive.js                 # File management system
+│   └── search-indexing.js            # Search indexing
+├── swagger/                          # OpenAPI specifications
+└── middleware/                       # Express middleware
+```
+
+#### Frontend (`brmh-frontend-v2/`)
+```
+├── app/
+│   ├── namespace/                    # Namespace management UI
+│   ├── aws/                          # AWS services management
+│   ├── components/                   # Reusable components
+│   ├── lib/                          # Utility functions
+│   └── types/                        # TypeScript definitions
+└── hooks/                            # Custom React hooks
+```
+
+## 🚀 Key Features
+
+### 1. Unified API Management
+- **Namespace Organization**: Group related APIs logically
+- **Account Management**: Handle multiple credentials per namespace
+- **Method Definition**: Define API endpoints with full configuration
+- **Dynamic Execution**: Execute API calls with runtime parameter injection
+
+### 2. Data Synchronization
+- **Pagination Support**: Handle paginated APIs (Shopify, Stripe, etc.)
+- **Execution Modes**: 
+  - `get-all`: Fetch all data (overwrites existing)
+  - `sync`: Incremental sync (skips existing items)
+- **Live Progress**: Real-time console logging of sync progress
+- **Auto-stop Logic**: Stop on first existing item or after 2000 matches
+
+### 3. Caching System
+- **Redis/Valkey Integration**: High-performance caching
+- **Chunked Storage**: Handle large datasets efficiently
+- **TTL Management**: Automatic cache expiration
+- **Metadata Tracking**: Data length, size, and type information
+
+### 4. File Management (BRMH Drive)
+- **S3 Integration**: Secure file storage
+- **User Isolation**: Separate storage per user
+- **Folder Structure**: Hierarchical organization
+- **Presigned URLs**: Secure file access
+
+### 5. AI Agent System
+- **Web Scraping**: Automated data extraction
+- **Mock Data Generation**: Generate test data
+- **Lambda Code Generation**: Create serverless functions
+- **Intent Detection**: Understand user requests
+
+### 6. Search & Indexing
+- **Algolia Integration**: Full-text search
+- **Automatic Sync**: DynamoDB stream integration
+- **Configurable Indexing**: Per-table indexing control
+
+## 📊 Data Models
+
+### DynamoDB Tables
+
+#### Namespaces Table
 ```json
 {
-  "project": "my-app",
-  "table": "shopify-inkhub-get-products",
-  "recordsPerKey": 100,
-  "ttl": 3600
+  "namespace-id": "uuid",
+  "namespace-name": "Shopify",
+  "namespace-url": "https://api.shopify.com",
+  "tags": ["ecommerce", "api"],
+  "createdAt": "timestamp",
+  "updatedAt": "timestamp"
 }
 ```
 
-**Response:**
+#### Accounts Table
 ```json
 {
-  "message": "Caching complete (bounded buffer)",
-  "project": "my-app",
-  "table": "shopify-inkhub-get-products",
-  "totalRecords": 1000,
-  "successfulWrites": 850,
-  "failedWrites": 0,
-  "attemptedKeys": 850,
-  "skippedDuplicates": 150,
-  "fillRate": "100.00%",
-  "durationMs": 5000,
-  "cacheKeys": ["key1", "key2"],
-  "totalCacheKeys": 850
-}
-```
-
-### Get Cache Keys
-**GET** `/cache/data?project={project}&table={table}`
-
-Retrieves all cache keys for a specific project and table (keys only, no data).
-
-**Response:**
-```json
-{
-  "message": "Cache keys retrieved in sequence (keys only)",
-  "keysFound": 132,
-  "keys": [
-    "my-app:shopify-inkhub-get-products:chunk:0",
-    "my-app:shopify-inkhub-get-products:chunk:1"
+  "account-id": "uuid",
+  "namespace-id": "uuid",
+  "namespace-account-name": "Production Store",
+  "namespace-account-url-override": "https://mystore.myshopify.com",
+  "namespace-account-header": [
+    {"key": "Authorization", "value": "Bearer token123"}
   ],
-  "note": "Use ?key=specific_key to get actual data for a specific key"
+  "variables": [
+    {"key": "store_id", "value": "12345"}
+  ],
+  "tags": ["production"],
+  "createdAt": "timestamp"
 }
 ```
 
-### Get Cache Data in Sequence (Paginated)
-**GET** `/cache/data-in-sequence?project={project}&table={table}&page={page}&limit={limit}&includeData={true|false}`
-
-Retrieves cached data with pagination support. By default, returns keys only unless `includeData=true` is specified.
-
-**Parameters:**
-- `page`: Page number (default: 1)
-- `limit`: Items per page (default: 1000)
-- `includeData`: Whether to include actual data (default: false)
-
-**Response (Keys Only - Default):**
+#### Methods Table
 ```json
 {
-  "message": "Cache keys retrieved in sequence with pagination (keys only)",
-  "keysFound": 100,
-  "totalKeys": 132,
-  "keys": ["chunk:0", "chunk:1", "chunk:2"],
-  "note": "Use ?includeData=true to get actual data for these keys",
-  "pagination": {
-    "currentPage": 1,
-    "totalPages": 2,
-    "hasMore": true,
-    "totalItems": 132
-  }
+  "method-id": "uuid",
+  "namespace-id": "uuid",
+  "namespace-method-name": "Get Orders",
+  "namespace-method-type": "GET",
+  "namespace-method-url-override": "/admin/api/2023-10/orders.json",
+  "namespace-method-header": [
+    {"key": "Content-Type", "value": "application/json"}
+  ],
+  "namespace-method-queryParams": {
+    "limit": "50",
+    "status": "any"
+  },
+  "namespace-method-body": {},
+  "tags": ["orders", "read"],
+  "createdAt": "timestamp"
 }
 ```
 
-**Response (With Data):**
-```json
+## 🔄 Execution Flow
+
+### 1. Namespace Request Execution
+```javascript
+// Example: Execute a Shopify order fetch
+POST /unified/execute
 {
-  "message": "Cached data retrieved in sequence with pagination",
-  "keysFound": 100,
-  "totalItems": 10000,
-  "keys": ["chunk:0", "chunk:1"],
-  "data": [...],
-  "pagination": {
-    "currentPage": 1,
-    "totalPages": 10,
-    "hasMore": true,
-    "totalItems": 10000
-  }
+  "namespaceId": "shopify-namespace-id",
+  "accountId": "production-store-account-id", 
+  "methodId": "get-orders-method-id",
+  "save": true,
+  "tableName": "shopify-orders"
 }
 ```
 
-
-
-### Update Cache from Lambda
-**POST** `/cache-data`
-
-Updates cache when DynamoDB data changes (triggered by Lambda). This endpoint is non-blocking and processes updates in parallel.
-
-**Request Body:**
-```json
+### 2. Pagination Configuration
+```javascript
+// Shopify pagination example
 {
-  "type": "INSERT|MODIFY|REMOVE",
-  "newItem": {...},
-  "oldItem": {...},
-  "extractedTableName": "shopify-inkhub-get-products"
+  "nextPageIn": "header",           // Pagination info in response headers
+  "nextPageField": "link",          // Header field containing next page URL
+  "isAbsoluteUrl": true,            // Next page URLs are absolute
+  "maxPages": null                  // Infinite pagination (default)
 }
 ```
 
-**Response (Success):**
-```json
-{
-  "message": "Cache update processed",
-  "tableName": "shopify-inkhub-get-products",
-  "type": "INSERT",
-  "totalConfigs": 2,
-  "successfulUpdates": 2,
-  "failedUpdates": 0,
-  "results": [...],
-  "durationMs": 150
-}
+### 3. Caching Flow
+```
+API Request → Check Cache → If Miss: Fetch from API → Store in Cache → Return Data
 ```
 
-**Response (Queued - During Bulk Operation):**
-```json
-{
-  "message": "Cache update queued for later processing",
-  "reason": "Bulk cache operation in progress",
-  "tableName": "shopify-inkhub-get-products",
-  "type": "INSERT",
-  "operationKey": "my-app:shopify-inkhub-get-products",
-  "queuedUpdates": 3,
-  "estimatedWaitTime": "Until bulk cache completes"
-}
+## 🛠️ Development Setup
+
+### Backend Setup
+```bash
+cd brmh-backend
+npm install
+npm start
 ```
 
-### Queue Management Endpoints
-
-**GET** `/cache/bulk-operations`
-Returns currently active bulk cache operations.
-
-**DELETE** `/cache/bulk-operations`
-Clears all active bulk cache operation locks (emergency reset).
-
-**GET** `/cache/pending-updates`
-Returns the current state of pending updates queue.
-
-**DELETE** `/cache/pending-updates?operationKey={key}`
-Clears pending updates for a specific operation key or all pending updates.
-
-## Duplicate Detection & Management
-
-### How It Works
-The cache system automatically detects and handles duplicates during insert operations:
-
-1. **Individual Items**: Checks if item ID already exists in cache
-2. **Chunked Items**: Scans chunk for duplicate items and filters them out
-
-### Duplicate Handling Strategies
-
-| Scenario | Action | Result |
-|----------|--------|---------|
-| Individual duplicate item | Skip entirely | Item not cached |
-| Chunk with some duplicates | Filter duplicates, cache unique items | Partial chunk cached |
-| Chunk with all duplicates | Skip entire chunk | Chunk not cached |
-| No duplicates | Cache normally | Full data cached |
-
-### Console Output Examples
+### Frontend Setup
+```bash
+cd brmh-frontend-v2
+npm install
+npm run dev
 ```
-🔄 Cache INSERT: shopify-inkhub-get-products
-✅ Cache INSERT complete: 2/2 success (150ms)
-📦 Queued INSERT for my-app:shopify-inkhub-get-products (3 pending)
-```
-
-## Configuration
 
 ### Environment Variables
-```env
-REDIS_HOST=your-valkey-endpoint.amazonaws.com
-REDIS_PORT=6379
-REDIS_TLS=true
-REDIS_PASSWORD=your-password
+```bash
+# Backend
+AWS_ACCESS_KEY_ID=your_access_key
+AWS_SECRET_ACCESS_KEY=your_secret_key
+AWS_REGION=us-east-1
+REDIS_URL=your_redis_url
+ALGOLIA_APP_ID=your_algolia_id
+ALGOLIA_API_KEY=your_algolia_key
+
+# Frontend
+NEXT_PUBLIC_API_URL=http://localhost:5001
+NEXTAUTH_SECRET=your_auth_secret
 ```
 
-### Redis Client Configuration
-```javascript
-{
-  port: parseInt(process.env.REDIS_PORT),
-  tls: process.env.REDIS_TLS === 'true' ? {} : undefined,
-  lazyConnect: true,
-  connectTimeout: 15000,
-  commandTimeout: 15000,
-  enableOfflineQueue: true,
-  maxRetriesPerRequest: 5
-}
-```
+## 📈 Monitoring & Logging
 
-## Performance Optimizations
+### Console Logging
+- **Execution Progress**: Real-time page-by-page sync progress
+- **Cache Operations**: Cache hits, misses, and storage operations
+- **Error Tracking**: Comprehensive error logging with context
+- **Performance Metrics**: Response times and data sizes
 
-### 1. Non-Blocking Operations
-- **Background processing**: Cleanup operations run in background using `setImmediate()`
-- **Parallel processing**: Multiple cache configurations processed simultaneously
-- **Immediate response**: API responds immediately while processing continues
-- **No API blocking**: Other endpoints remain responsive during cache updates
+### CloudWatch Integration
+- **Centralized Logging**: All operations logged to CloudWatch
+- **Error Monitoring**: Automatic error detection and alerting
+- **Performance Tracking**: API response times and throughput
 
-### 2. Queue System
-- **Concurrency control**: Prevents data loss during concurrent bulk operations
-- **In-memory queue**: Pending updates queued when bulk operations are active
-- **Automatic processing**: Queued updates processed after bulk operation completes
-- **Race condition protection**: Ensures data integrity during high concurrency
+## 🔒 Security Features
 
-### 3. Optimized Logging
-- **One-liner messages**: Reduced verbosity with concise status updates
-- **No repetitive logs**: Eliminated duplicate and verbose logging
-- **Performance tracking**: Duration and success rate logging
-- **Clean PM2 logs**: Minimal noise in production logs
+### Authentication
+- **AWS Cognito SSO**: Enterprise-grade authentication
+- **JWT Tokens**: Secure session management
+- **Role-based Access**: Granular permissions
 
-### 4. Enhanced Pagination
-- **Improved limits**: Default limit increased from 10 to 1000
-- **Keys-only default**: Returns keys by default to prevent timeouts
-- **Explicit data retrieval**: Data only fetched when `includeData=true`
-- **Better pagination info**: Enhanced pagination metadata
+### Data Security
+- **User Isolation**: Separate data spaces per user
+- **Encrypted Storage**: S3 server-side encryption
+- **Secure APIs**: Presigned URLs and token-based access
+- **Input Validation**: Comprehensive request validation
 
-### 5. Bounded Buffer
-- Processes data in chunks to manage memory usage
-- Writes chunks as soon as buffer is full
-- Prevents memory overflow with large datasets
+## 🚀 Deployment
 
-### 6. SCAN vs KEYS
-- Uses `SCAN` command for Valkey compatibility
-- Avoids blocking operations on large datasets
-- Supports pattern matching for key retrieval
+### EC2 Deployment
+- **GitHub Actions**: Automated CI/CD pipeline
+- **PM2 Process Manager**: Application lifecycle management
+- **Nginx Reverse Proxy**: Load balancing and SSL termination
+- **Auto-scaling**: Dynamic resource allocation
 
-### 7. Sequential Chunking
-- Chunks are numbered sequentially (chunk:0, chunk:1, etc.)
-- Enables efficient data retrieval in order
-- Supports pagination for large datasets
+### Infrastructure
+- **AWS Services**: DynamoDB, S3, ElastiCache, Lambda, API Gateway
+- **Monitoring**: CloudWatch, X-Ray tracing
+- **Backup**: Automated DynamoDB backups
+- **Security**: VPC, Security Groups, IAM roles
 
-## Error Handling
+## 📚 API Documentation
 
-### Common Errors & Solutions
+### Interactive Documentation
+- **Swagger UI**: Available at `/api-docs`
+- **OpenAPI Specs**: Complete API specifications in `swagger/` directory
+- **Postman Collection**: Import-ready API collection
 
-1. **Connection Timeout**
-   ```
-   Error: connect ETIMEDOUT
-   ```
-   **Solution:** Check security groups and network ACLs
+### Key Documentation Files
+- `BRMH-DRIVE-README.md`: File management system guide
+- `EXECUTE.md`: Data execution and pagination guide
+- `UnifiedNamespaceSchema.md`: Complete API schema reference
+- `MOCK_DATA_AGENT.md`: AI agent system documentation
 
-2. **Unknown Command**
-   ```
-   ReplyError: ERR unknown command 'keys'
-   ```
-   **Solution:** Use `SCAN` instead of `KEYS` for Valkey
+## 🎯 Use Cases
 
-3. **Stream Not Writable**
-   ```
-   Error: Stream isn't writeable and enableOfflineQueue options is false
-   ```
-   **Solution:** Enable offline queue in Redis configuration
+### 1. E-commerce Integration
+- **Shopify**: Orders, products, customers, analytics
+- **Stripe**: Payments, subscriptions, webhooks
+- **Inventory Management**: Real-time stock synchronization
 
-4. **Cache Update Queued**
-   ```
-   Status: 202 Accepted
-   Message: "Cache update queued for later processing"
-   ```
-   **Solution:** This is normal during bulk operations. Updates will be processed automatically.
+### 2. Marketing Automation
+- **Email Campaigns**: Customer segmentation and targeting
+- **Social Media**: Content scheduling and analytics
+- **CRM Integration**: Lead management and tracking
 
-5. **Gateway Timeout (504)**
-   ```
-   Error: 504 Gateway Timeout
-   ```
-   **Solution:** Use pagination or set `includeData=false` for large datasets
+### 3. Data Analytics
+- **Business Intelligence**: Cross-platform data aggregation
+- **Reporting**: Automated report generation
+- **Real-time Dashboards**: Live data visualization
 
-## Monitoring & Debugging
+### 4. File Management
+- **Document Storage**: Secure file organization
+- **Collaboration**: Team file sharing
+- **Backup**: Automated file backup and versioning
 
-### Cache Health Check
-**GET** `/test-valkey-connection`
+## 🔮 Future Enhancements
 
-Tests connectivity to Valkey cache.
+### Planned Features
+- **Real-time Webhooks**: Event-driven data synchronization
+- **Advanced Analytics**: Machine learning insights
+- **Multi-tenant Architecture**: Enterprise-grade isolation
+- **API Marketplace**: Third-party integrations
+- **Mobile Apps**: iOS and Android applications
 
-### Cache Cleanup
-**POST** `/cache/cleanup-timestamp-chunks`
+### Technical Improvements
+- **GraphQL API**: Flexible data querying
+- **Microservices**: Service-oriented architecture
+- **Kubernetes**: Container orchestration
+- **Event Sourcing**: Audit trail and replay capabilities
 
-Converts timestamp-based chunks to sequential numbering.
+---
 
-**POST** `/cache/clear-unwanted-order-data`
+## 📞 Support & Resources
 
-Removes non-cache-config data from cache table.
+- **API Documentation**: `/api-docs` (Swagger UI)
+- **GitHub Repository**: Source code and issue tracking
+- **CloudWatch Logs**: Application monitoring and debugging
+- **AWS Console**: Infrastructure management
 
-### Queue Management
-**GET** `/cache/bulk-operations`
+**🎯 BRMH is a production-ready platform for API integration, data management, and business automation!**
 
-Check currently active bulk cache operations.
-
-**GET** `/cache/pending-updates`
-
-View pending cache updates in queue.
-
-## Best Practices
-
-### 1. Cache Strategy Selection
-- Use individual caching for frequently accessed specific items
-- Use chunked caching for bulk data operations
-- Consider data access patterns when choosing strategy
-
-### 2. TTL Management
-- Set appropriate TTL based on data freshness requirements
-- Monitor cache hit rates and adjust TTL accordingly
-- Use longer TTL for stable data, shorter for frequently changing data
-
-### 3. Memory Management
-- Monitor cache size and memory usage
-- Implement cache eviction policies if needed
-- Use bounded buffer for large dataset processing
-
-### 4. Performance Optimization
-- Use `includeData=false` for key-only operations to prevent timeouts
-- Leverage pagination for large datasets
-- Monitor queue status during high concurrency periods
-- Use parallel processing for multiple cache configurations
-
-### 5. Error Recovery
-- Implement retry logic for failed cache operations
-- Log cache errors for debugging
-- Have fallback mechanisms for cache failures
-- Monitor queue system for stuck operations
-
-## Example Usage
-
-### Frontend Integration
-```javascript
-// Cache a table
-const cacheTable = async (tableName) => {
-  const response = await fetch('/cache/table', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      project: 'my-app',
-      table: tableName,
-      recordsPerKey: 100,
-      ttl: 3600
-    })
-  });
-  return response.json();
-};
-
-// Get cache keys only (fast, no data)
-const getCacheKeys = async (tableName) => {
-  const response = await fetch(
-    `/cache/data-in-sequence?project=my-app&table=${tableName}&page=1&limit=1000`
-  );
-  return response.json();
-};
-
-// Get cached data with pagination
-const getCachedData = async (tableName, page = 1, limit = 100) => {
-  const response = await fetch(
-    `/cache/data-in-sequence?project=my-app&table=${tableName}&page=${page}&limit=${limit}&includeData=true`
-  );
-  return response.json();
-};
-
-// Get specific cache key data
-const getSpecificCacheData = async (tableName, key) => {
-  const response = await fetch(
-    `/cache/data?project=my-app&table=${tableName}&key=${key}`
-  );
-  return response.json();
-};
-```
-
-### Monitoring Cache Performance
-```javascript
-// Check cache keys and counts
-const getCacheKeys = async (tableName) => {
-  const response = await fetch(
-    `/cache/data?project=my-app&table=${tableName}`
-  );
-  return response.json();
-};
-
-// Monitor queue status
-const getQueueStatus = async () => {
-  const [bulkOps, pendingUpdates] = await Promise.all([
-    fetch('/cache/bulk-operations').then(r => r.json()),
-    fetch('/cache/pending-updates').then(r => r.json())
-  ]);
-  return { bulkOps, pendingUpdates };
-};
-```
-
-## Troubleshooting
-
-### Cache Not Updating
-1. Check Lambda trigger configuration
-2. Verify DynamoDB stream settings
-3. Ensure cache update endpoint is accessible
-4. Check queue status for stuck operations
-
-### Performance Issues
-1. Monitor cache hit rates
-2. Check for memory pressure
-3. Optimize chunk sizes based on data patterns
-4. Use `includeData=false` for key-only operations
-5. Monitor queue system during high concurrency
-
-### Data Inconsistency
-1. Verify TTL settings
-2. Check for cache invalidation logic
-3. Monitor duplicate detection logs
-4. Check for queued updates that haven't been processed
-
-### Timeout Issues
-1. Use pagination for large datasets
-2. Set `includeData=false` for key-only operations
-3. Increase API Gateway timeout limits
-4. Monitor cache update queue status
-
-## Support
-
-For issues related to the cache system:
-1. Check console logs for detailed error messages
-2. Monitor cache metrics and performance
-3. Review this documentation for common solutions
-4. Contact the development team for complex issues
