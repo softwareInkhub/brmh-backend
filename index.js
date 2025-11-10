@@ -107,6 +107,18 @@ import {
   removeNamespacePermissionsHandler
 } from './utils/namespace-roles.js';
 
+import {
+  grantResourceAccessHandler,
+  bulkGrantResourceAccessHandler,
+  revokeResourceAccessHandler,
+  updateResourceAccessHandler,
+  getUserResourcesHandler,
+  checkResourceAccessHandler,
+  getResourceUsersHandler,
+  getUserResourcesSummaryHandler,
+  getResourceConfigHandler
+} from './utils/user-resources.js';
+
 // Environment variables already loaded at the top
 // Only log AWS config in development
 if (process.env.NODE_ENV !== 'production') {
@@ -2228,6 +2240,34 @@ app.post('/namespace-roles/:userId/:namespace/add-permissions', addNamespacePerm
 
 // Remove permissions from a user's role in a namespace
 app.post('/namespace-roles/:userId/:namespace/remove-permissions', removeNamespacePermissionsHandler);
+
+// --- User Resources Routes (Resource-level Access Control) ---
+// Get resource configuration (available types and permissions)
+app.get('/user-resources/config', getResourceConfigHandler);
+
+// Grant resource access to a user
+app.post('/user-resources/grant', grantResourceAccessHandler);
+
+// Bulk grant resource access to multiple users
+app.post('/user-resources/grant-bulk', bulkGrantResourceAccessHandler);
+
+// Revoke resource access from a user
+app.delete('/user-resources/revoke', revokeResourceAccessHandler);
+
+// Update resource access permissions
+app.put('/user-resources/:userId/:resourceType/:resourceId', updateResourceAccessHandler);
+
+// Get all resources for a user
+app.get('/user-resources/:userId', getUserResourcesHandler);
+
+// Get resource access summary for a user
+app.get('/user-resources/:userId/summary', getUserResourcesSummaryHandler);
+
+// Check if user has access to a resource
+app.post('/user-resources/:userId/check-access', checkResourceAccessHandler);
+
+// Get all users with access to a specific resource
+app.get('/user-resources/resource/:resourceType/:resourceId/users', getResourceUsersHandler);
 
 
 const PORT = process.env.PORT || 5001;
