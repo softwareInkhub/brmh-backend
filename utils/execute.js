@@ -334,37 +334,90 @@ const executeNamespace = async (event) => {
       };
     }
 
+    // Determine backend URL - use environment variable or try to infer from request
+    // If event has headers with host, use that; otherwise use env var or default
+    let backendUrl = process.env.BACKEND_URL || process.env.CRUD_API_BASE_URL;
+    if (!backendUrl && event.headers && event.headers.Host) {
+      const protocol = event.headers['X-Forwarded-Proto'] || 'https';
+      backendUrl = `${protocol}://${event.headers.Host}`;
+    }
+    if (!backendUrl) {
+      backendUrl = 'http://localhost:5001';
+    }
+    // Remove trailing slash
+    backendUrl = backendUrl.replace(/\/+$/, '');
+
+    console.log(`[Namespace Execute] Using backend URL: ${backendUrl}`);
     console.log(`[Namespace Execute] Fetching details for namespace: ${namespaceId}, account: ${accountId}, method: ${methodId}`);
 
     // Fetch namespace details using API route
-    const namespaceResponse = await axios.get(`${process.env.BACKEND_URL || 'http://localhost:5001'}/unified/namespaces/${namespaceId}`);
-    if (namespaceResponse.status !== 200) {
+    let namespace;
+    try {
+      const namespaceResponse = await axios.get(`${backendUrl}/unified/namespaces/${namespaceId}`, {
+        validateStatus: () => true // Don't throw on 404
+      });
+      if (namespaceResponse.status !== 200) {
+        return {
+          statusCode: 404,
+          body: JSON.stringify({ error: `Namespace with id ${namespaceId} not found (status: ${namespaceResponse.status})` })
+        };
+      }
+      // Response data might be wrapped in a 'data' field
+      const namespaceData = namespaceResponse.data;
+      namespace = namespaceData.data || namespaceData;
+    } catch (error) {
+      console.error(`[Namespace Execute] Error fetching namespace:`, error.message);
       return {
         statusCode: 404,
-        body: JSON.stringify({ error: `Namespace with id ${namespaceId} not found` })
+        body: JSON.stringify({ error: `Failed to fetch namespace with id ${namespaceId}: ${error.message}` })
       };
     }
-    const namespace = namespaceResponse.data;
 
     // Fetch account details using API route
-    const accountResponse = await axios.get(`${process.env.BACKEND_URL || 'http://localhost:5001'}/unified/accounts/${accountId}`);
-    if (accountResponse.status !== 200) {
+    let account;
+    try {
+      const accountResponse = await axios.get(`${backendUrl}/unified/accounts/${accountId}`, {
+        validateStatus: () => true // Don't throw on 404
+      });
+      if (accountResponse.status !== 200) {
+        return {
+          statusCode: 404,
+          body: JSON.stringify({ error: `Account with id ${accountId} not found (status: ${accountResponse.status})` })
+        };
+      }
+      // Response data might be wrapped in a 'data' field
+      const accountData = accountResponse.data;
+      account = accountData.data || accountData;
+    } catch (error) {
+      console.error(`[Namespace Execute] Error fetching account:`, error.message);
       return {
         statusCode: 404,
-        body: JSON.stringify({ error: `Account with id ${accountId} not found` })
+        body: JSON.stringify({ error: `Failed to fetch account with id ${accountId}: ${error.message}` })
       };
     }
-    const account = accountResponse.data;
 
     // Fetch method details using API route
-    const methodResponse = await axios.get(`${process.env.BACKEND_URL || 'http://localhost:5001'}/unified/methods/${methodId}`);
-    if (methodResponse.status !== 200) {
+    let method;
+    try {
+      const methodResponse = await axios.get(`${backendUrl}/unified/methods/${methodId}`, {
+        validateStatus: () => true // Don't throw on 404
+      });
+      if (methodResponse.status !== 200) {
+        return {
+          statusCode: 404,
+          body: JSON.stringify({ error: `Method with id ${methodId} not found (status: ${methodResponse.status})` })
+        };
+      }
+      // Response data might be wrapped in a 'data' field
+      const methodData = methodResponse.data;
+      method = methodData.data || methodData;
+    } catch (error) {
+      console.error(`[Namespace Execute] Error fetching method:`, error.message);
       return {
         statusCode: 404,
-        body: JSON.stringify({ error: `Method with id ${methodId} not found` })
+        body: JSON.stringify({ error: `Failed to fetch method with id ${methodId}: ${error.message}` })
       };
     }
-    const method = methodResponse.data;
 
     console.log(`[Namespace Execute] Found namespace: ${namespace['namespace-name']}, account: ${account['namespace-account-name']}, method: ${method['namespace-method-name']}`);
 
