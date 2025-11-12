@@ -536,3 +536,40 @@ Final Result
 - Parallel step execution
 - Workflow monitoring dashboard
 
+
+{
+  "name": "Create Product and Notify",
+  "steps": [
+    {
+      "id": "step_1",
+      "type": "api",
+      "namespaceId": "shopify-ns",
+      "accountId": "shopify-account",
+      "methodId": "create-product",
+      "input": { "title": "New Product", "price": 99.99 },
+      "resultKey": "step1"
+    },
+    {
+      "id": "transform_1",
+      "type": "transform",
+      "inputMapping": {
+        "message": "✅ Product {{step1.data.product.id}} created!\nTitle: {{step1.data.product.title}}\nPrice: ${{step1.data.product.price}}",
+        "productId": "{{step1.data.product.id}}"
+      },
+      "resultKey": "transformed",
+      "next": "step_2"
+    },
+    {
+      "id": "step_2",
+      "type": "api",
+      "namespaceId": "whapi-ns",
+      "accountId": "whapi-account",
+      "methodId": "send-message",
+      "inputMapping": {
+        "message": "{{transformed.message}}",
+        "productId": "{{transformed.productId}}"
+      },
+      "resultKey": "step2"
+    }
+  ]
+}

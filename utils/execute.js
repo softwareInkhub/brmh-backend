@@ -425,8 +425,31 @@ const executeNamespace = async (event) => {
     const methodConfig = method;
     const url = methodConfig['namespace-method-url-override'] || methodConfig.url;
     const methodType = methodConfig['namespace-method-type'] || 'GET';
-    const headers = methodConfig['namespace-method-header'] || {};
-    const queryParams = methodConfig['namespace-method-queryParams'] || {};
+    
+    // Convert method headers from array to object (if it's an array)
+    let headers = methodConfig['namespace-method-header'] || {};
+    if (Array.isArray(headers)) {
+      const headersObj = {};
+      headers.forEach(header => {
+        if (header && header.key && header.value) {
+          headersObj[header.key] = header.value;
+        }
+      });
+      headers = headersObj;
+    }
+    
+    // Convert queryParams from array to object (if it's an array)
+    let queryParams = methodConfig['namespace-method-queryParams'] || {};
+    if (Array.isArray(queryParams)) {
+      const queryParamsObj = {};
+      queryParams.forEach(param => {
+        if (param && param.key && param.value) {
+          queryParamsObj[param.key] = param.value;
+        }
+      });
+      queryParams = queryParamsObj;
+    }
+    
     const requestBody = overrideBody || methodConfig['namespace-method-body'] || {};
 
     if (!url) {
@@ -489,13 +512,24 @@ const executeNamespace = async (event) => {
     });
 
     // Make the request
-    const response = await axios({
-      method: methodType.toUpperCase(),
+    // For GET/HEAD requests, don't send request body
+    const httpMethod = methodType.toUpperCase();
+    const requestConfig = {
+      method: httpMethod,
       url: urlObj.toString(),
       headers: finalHeaders,
-      data: requestBody, // Add request body support
       validateStatus: () => true
-    });
+    };
+    
+    // Only add data/body for non-GET/HEAD requests
+    if (httpMethod !== 'GET' && httpMethod !== 'HEAD') {
+      // Only add body if it's not empty
+      if (requestBody && Object.keys(requestBody).length > 0) {
+        requestConfig.data = requestBody;
+      }
+    }
+    
+    const response = await axios(requestConfig);
 
     // Save to DynamoDB if requested
     let savedItems = [];
