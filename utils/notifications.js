@@ -18,11 +18,35 @@ function assertDocClient() {
   if (!documentClientRef) throw new Error('Notifications service not initialized');
 }
 
+function cleanItem(item) {
+  // Remove undefined values from the item
+  const cleaned = {};
+  for (const [key, value] of Object.entries(item)) {
+    if (value !== undefined) {
+      if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+        const cleanedNested = cleanItem(value);
+        if (Object.keys(cleanedNested).length > 0) {
+          cleaned[key] = cleanedNested;
+        }
+      } else if (Array.isArray(value)) {
+        const cleanedArray = value.filter(v => v !== undefined);
+        if (cleanedArray.length > 0) {
+          cleaned[key] = cleanedArray;
+        }
+      } else {
+        cleaned[key] = value;
+      }
+    }
+  }
+  return cleaned;
+}
+
 async function putItem(tableName, item) {
   assertDocClient();
   const { PutCommand } = await import('@aws-sdk/lib-dynamodb');
-  await documentClientRef.send(new PutCommand({ TableName: tableName, Item: item }));
-  return item;
+  const cleanedItem = cleanItem(item);
+  await documentClientRef.send(new PutCommand({ TableName: tableName, Item: cleanedItem }));
+  return cleanedItem;
 }
 
 async function queryByGsi(tableName, indexName, keyConditionExpression, expressionAttributeValues, expressionAttributeNames) {
@@ -109,6 +133,46 @@ async function sendWhapiMessage(connection, payload) {
   return { status: res.status, data: res.data };
 }
 
+async function sendWhapiRequest(connection, method, endpoint, payload = {}) {
+  const baseUrl = connection.baseUrl || 'https://gate.whapi.cloud';
+  const token = connection.token;
+  const fullEndpoint = `${baseUrl.replace(/\/$/, '')}${endpoint}`;
+
+  if (connection.testMode) {
+    return { testMode: true, method, endpoint: fullEndpoint, payload };
+  }
+
+  const headers = {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${token}`
+  };
+
+  const config = { headers, validateStatus: () => true };
+  let res;
+  
+  switch (method.toUpperCase()) {
+    case 'GET':
+      res = await axios.get(fullEndpoint, config);
+      break;
+    case 'POST':
+      res = await axios.post(fullEndpoint, payload, config);
+      break;
+    case 'PUT':
+      res = await axios.put(fullEndpoint, payload, config);
+      break;
+    case 'PATCH':
+      res = await axios.patch(fullEndpoint, payload, config);
+      break;
+    case 'DELETE':
+      res = await axios.delete(fullEndpoint, config);
+      break;
+    default:
+      throw new Error(`Unsupported HTTP method: ${method}`);
+  }
+  
+  return { status: res.status, data: res.data };
+}
+
 function matchFilters(filters, event) {
   if (!filters) return true;
   try {
@@ -126,24 +190,95 @@ function matchFilters(filters, event) {
 async function executeAction(trigger, event) {
   const { action, connectionId } = trigger;
   console.log(`[Backend] executeAction for trigger ${trigger.name}:`, { action, connectionId });
-  if (!action || action.type !== 'whapi') return { skipped: true, reason: 'unsupported_action' };
+  
+  if (!action) return { skipped: true, reason: 'no_action' };
 
   const connection = await getConnection(connectionId);
   console.log(`[Backend] Connection found:`, connection ? { id: connection.id, name: connection.name, testMode: connection.testMode } : 'null');
   if (!connection) return { error: 'connection_not_found' };
 
-  const to = action.to || (event?.recipient || null);
-  const text = action.textTemplate ? interpolate(action.textTemplate, { trigger, event }) : (action.text || JSON.stringify({ eventType: event.type, at: new Date().toISOString() }));
+  // Handle different action types
+  switch (action.type) {
+    case 'whapi_message':
+      return await executeWhapiMessage(connection, action, event, trigger);
+    case 'whapi_community':
+      return await executeWhapiCommunity(connection, action, event, trigger);
+    case 'whapi_group':
+      return await executeWhapiGroup(connection, action, event, trigger);
+    case 'whapi':
+    default:
+      return await executeWhapiMessage(connection, action, event, trigger);
+  }
+}
 
-  console.log(`[Backend] Message details:`, { to, text: text.substring(0, 100) + (text.length > 100 ? '...' : '') });
+async function executeWhapiMessage(connection, action, event, trigger) {
+  const to = action.to || (event?.recipient || null);
+  
+  // Check for custom message override in event data
+  const customMessage = event?.data?.message || event?.message;
+  const text = customMessage || (action.textTemplate ? interpolate(action.textTemplate, { trigger, event }) : (action.text || JSON.stringify({ eventType: event.type, at: new Date().toISOString() })));
+
+  console.log(`[Backend] Message details:`, { to, text: text.substring(0, 100) + (text.length > 100 ? '...' : ''), customMessage: !!customMessage });
 
   if (!to || !text) return { error: 'invalid_action_config' };
 
   const payload = { to, body: text };
-  console.log(`[Backend] Sending WHAPI message:`, { to, bodyLength: text.length, testMode: connection.testMode });
+  console.log(`[Backend] Sending WHAPI message:`, { to, bodyLength: text.length, testMode: connection.testMode, customMessage: !!customMessage });
   const response = await sendWhapiMessage(connection, payload);
   console.log(`[Backend] WHAPI response:`, response);
   return response;
+}
+
+async function executeWhapiCommunity(connection, action, event, trigger) {
+  const { communityId, groupIds, messageTemplate } = action;
+  
+  if (!communityId) {
+    return { error: 'invalid_community_config' };
+  }
+
+  if (!Array.isArray(groupIds) || groupIds.length === 0) {
+    return { error: 'no_groups_to_send_to' };
+  }
+
+  // Check for custom message override in event data
+  const customMessage = event?.data?.message || event?.message;
+  const text = customMessage || (messageTemplate ? interpolate(messageTemplate, { trigger, event }) : 
+    `Community notification: ${event.type} at ${new Date().toISOString()}`);
+
+  const results = [];
+  
+  for (const groupId of groupIds) {
+    const payload = { to: groupId, body: text };
+    console.log(`[Backend] Sending community message to group ${groupId}:`, { bodyLength: text.length, testMode: connection.testMode, customMessage: !!customMessage });
+    const response = await sendWhapiMessage(connection, payload);
+    results.push({ groupId, response });
+  }
+  
+  return { communityId, groupIds, results };
+}
+
+async function executeWhapiGroup(connection, action, event, trigger) {
+  const { groupIds, messageTemplate } = action;
+  
+  if (!groupIds || !Array.isArray(groupIds) || groupIds.length === 0) {
+    return { error: 'invalid_group_config' };
+  }
+
+  // Check for custom message override in event data
+  const customMessage = event?.data?.message || event?.message;
+  const text = customMessage || (messageTemplate ? interpolate(messageTemplate, { trigger, event }) : 
+    `Group notification: ${event.type} at ${new Date().toISOString()}`);
+
+  const results = [];
+  
+  for (const groupId of groupIds) {
+    const payload = { to: groupId, body: text };
+    console.log(`[Backend] Sending group message to ${groupId}:`, { bodyLength: text.length, testMode: connection.testMode, customMessage: !!customMessage });
+    const response = await sendWhapiMessage(connection, payload);
+    results.push({ groupId, response });
+  }
+  
+  return { groupIds, results };
 }
 
 function interpolate(template, context) {
@@ -162,6 +297,13 @@ export async function notifyEvent(event) {
   try {
     console.log('[Backend] notifyEvent called with:', event);
     // event: { type, method, path, resource, tableName, data, actor }
+    
+    // Skip triggers with "none" event type - they should only be triggered manually
+    if (event.type === 'none') {
+      console.log('[Backend] Skipping automatic trigger for "none" event type - manual only');
+      return;
+    }
+    
     const triggers = await listTriggersByEvent(event.type);
     console.log(`[Backend] Found ${triggers.length} triggers for event type: ${event.type}`);
     for (const trig of triggers) {
@@ -179,6 +321,7 @@ export async function notifyEvent(event) {
         eventType: event.type,
         status: result?.error ? 'error' : 'ok',
         result,
+        namespaceTags: trig.namespaceTags || [],
         eventSummary: {
           method: event.method,
           path: event.path,
@@ -261,7 +404,7 @@ export function registerNotificationRoutes(app, docClient) {
   // Create a trigger
   app.post('/notify/trigger', async (req, res) => {
     try {
-      const { name, eventType, filters = {}, action, connectionId, active = true } = req.body || {};
+      const { name, eventType, filters = {}, action, connectionId, active = true, namespaceTags = [] } = req.body || {};
       if (!name || !eventType || !action || !connectionId) {
         return res.status(400).json({ success: false, error: 'name, eventType, action, connectionId are required' });
       }
@@ -272,22 +415,43 @@ export function registerNotificationRoutes(app, docClient) {
         filters,
         action,
         connectionId,
+        namespaceTags: Array.isArray(namespaceTags) ? namespaceTags : [],
         active,
         createdAt: new Date().toISOString()
       };
       await putItem(TRIGGERS_TABLE, item);
-      await createLogEntry({ kind: 'trigger_saved', triggerId: item.id, name: item.name, eventType: item.eventType });
+      await createLogEntry({ 
+        kind: 'trigger_saved', 
+        triggerId: item.id, 
+        name: item.name, 
+        eventType: item.eventType,
+        namespaceTags: item.namespaceTags
+      });
       res.json({ success: true, triggerId: item.id });
     } catch (error) {
       res.status(500).json({ success: false, error: error.message });
     }
   });
 
-  // List triggers
-  app.get('/notify/triggers', async (_req, res) => {
+  // List triggers with optional filtering
+  app.get('/notify/triggers', async (req, res) => {
     try {
-      const items = await scanTable(TRIGGERS_TABLE, 1000);
-      res.json({ success: true, items });
+      const { tableName, eventType, active } = req.query;
+      let items = await scanTable(TRIGGERS_TABLE, 1000);
+      
+      // Apply filters
+      if (tableName) {
+        items = items.filter(t => t.filters?.tableName === tableName);
+      }
+      if (eventType) {
+        items = items.filter(t => t.eventType === eventType);
+      }
+      if (active !== undefined) {
+        const isActive = active === 'true';
+        items = items.filter(t => t.active === isActive);
+      }
+      
+      res.json({ success: true, items, count: items.length });
     } catch (error) {
       res.status(500).json({ success: false, error: error.message });
     }
@@ -310,35 +474,94 @@ export function registerNotificationRoutes(app, docClient) {
     }
   });
 
-  // Logs
-  app.get('/notify/logs', async (_req, res) => {
+  // Logs with enhanced filtering and pagination
+  app.get('/notify/logs', async (req, res) => {
     try {
-      const items = await scanTable(LOGS_TABLE, 200);
-      res.json({ success: true, items });
+      const { namespace, level, eventType, tableName, limit = 200, startTime, endTime } = req.query;
+      let items = await scanTable(LOGS_TABLE, parseInt(limit));
+      
+      // Filter by namespace if provided
+      if (namespace) {
+        items = items.filter(item => 
+          item.namespaceTags && 
+          Array.isArray(item.namespaceTags) && 
+          item.namespaceTags.includes(namespace)
+        );
+      }
+      
+      // Filter by status/level
+      if (level) {
+        items = items.filter(item => item.status === level);
+      }
+      
+      // Filter by event type
+      if (eventType) {
+        items = items.filter(item => item.eventType === eventType);
+      }
+      
+      // Filter by table name
+      if (tableName) {
+        items = items.filter(item => 
+          item.eventSummary?.tableName === tableName
+        );
+      }
+      
+      // Filter by time range
+      if (startTime) {
+        items = items.filter(item => new Date(item.createdAt) >= new Date(startTime));
+      }
+      if (endTime) {
+        items = items.filter(item => new Date(item.createdAt) <= new Date(endTime));
+      }
+      
+      // Sort by timestamp descending
+      items.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+      
+      res.json({ 
+        success: true, 
+        items, 
+        count: items.length,
+        filters: { namespace, level, eventType, tableName, startTime, endTime }
+      });
     } catch (error) {
       res.status(500).json({ success: false, error: error.message });
     }
   });
 
-  // Fire a specific WHAPI trigger by id or name
-  app.all('/notify/whapi/:key', async (req, res) => {
+  // Fire a specific trigger by id or name
+  app.all('/notify/:key', async (req, res) => {
     try {
       const { key } = req.params;
-      let trigger = await getTriggerById(key);
-      if (!trigger) trigger = await getTriggerByName(key);
-      if (!trigger) return res.status(404).json({ success: false, error: 'Trigger not found' });
+      let trigger;
+      
+      // Check if this is a temporary test trigger
+      if (key === 'temp-test-trigger' && req.body?.trigger) {
+        trigger = req.body.trigger;
+        console.log('[Backend] Using temporary test trigger:', trigger);
+      } else {
+        // Look up existing trigger
+        trigger = await getTriggerById(key);
+        if (!trigger) trigger = await getTriggerByName(key);
+        if (!trigger) return res.status(404).json({ success: false, error: 'Trigger not found' });
+      }
 
       // Optional overrides via body
       const overrides = typeof req.body === 'object' ? req.body : {};
       const overrideTo = overrides.to;
+      const customMessage = overrides.message;
       const event = overrides.event || {
         type: trigger.eventType,
         method: 'MANUAL',
         resource: 'manual',
-        data: { body: overrides.data || {} }
+        data: { 
+          body: overrides.data || {},
+          message: customMessage // Include custom message in event data
+        },
+        message: customMessage // Also include at top level for compatibility
       };
 
       const trigToUse = overrideTo ? { ...trigger, action: { ...trigger.action, to: overrideTo } } : trigger;
+      console.log('[Backend] Executing trigger:', { id: trigToUse.id, name: trigToUse.name, action: trigToUse.action });
       const result = await executeAction(trigToUse, event);
 
       const log = await createLogEntry({
@@ -347,6 +570,7 @@ export function registerNotificationRoutes(app, docClient) {
         eventType: event.type,
         status: result?.error ? 'error' : 'ok',
         result,
+        namespaceTags: trigger.namespaceTags || [],
         eventSummary: {
           method: event.method,
           path: event.path,
@@ -357,21 +581,293 @@ export function registerNotificationRoutes(app, docClient) {
 
       res.json({ success: !result?.error, log, result });
     } catch (error) {
+      console.error('[Backend] Trigger execution error:', error);
       res.status(500).json({ success: false, error: error.message });
     }
   });
+
+  // Get communities for a connection
+  app.get('/notify/communities/:connectionId', async (req, res) => {
+    try {
+      const { connectionId } = req.params;
+      const connection = await getConnection(connectionId);
+      if (!connection) return res.status(404).json({ success: false, error: 'Connection not found' });
+
+      const response = await sendWhapiRequest(connection, 'GET', '/communities');
+      res.json({ 
+        success: true, 
+        connection: { id: connection.id, name: connection.name, testMode: connection.testMode },
+        testResult: response 
+      });
+    } catch (error) {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // Get groups for a connection
+  app.get('/notify/groups/:connectionId', async (req, res) => {
+    try {
+      const { connectionId } = req.params;
+      const connection = await getConnection(connectionId);
+      if (!connection) return res.status(404).json({ success: false, error: 'Connection not found' });
+
+      const response = await sendWhapiRequest(connection, 'GET', '/groups');
+      res.json({ 
+        success: true, 
+        connection: { id: connection.id, name: connection.name, testMode: connection.testMode },
+        testResult: response 
+      });
+    } catch (error) {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // Get community subgroups
+  app.get('/notify/communities/:connectionId/:communityId/subgroups', async (req, res) => {
+    try {
+      const { connectionId, communityId } = req.params;
+      console.log(`[Backend] Fetching subgroups for community ${communityId} with connection ${connectionId}`);
+      const connection = await getConnection(connectionId);
+      if (!connection) return res.status(404).json({ success: false, error: 'Connection not found' });
+
+      const response = await sendWhapiRequest(connection, 'GET', `/communities/${communityId}/subgroups`);
+      console.log(`[Backend] Subgroups response:`, response);
+      res.json({ 
+        success: true, 
+        connection: { id: connection.id, name: connection.name, testMode: connection.testMode },
+        testResult: response 
+      });
+    } catch (error) {
+      console.error(`[Backend] Subgroups error:`, error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // Test connection
+  app.get('/notify/test/:connectionId', async (req, res) => {
+    try {
+      const { connectionId } = req.params;
+      const connection = await getConnection(connectionId);
+      if (!connection) return res.status(404).json({ success: false, error: 'Connection not found' });
+
+      // Test with a simple GET request to communities
+      const response = await sendWhapiRequest(connection, 'GET', '/communities');
+      res.json({ 
+        success: true, 
+        connection: { id: connection.id, name: connection.name, testMode: connection.testMode },
+        testResult: response 
+      });
+    } catch (error) {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // Get contacts for a connection
+  app.get('/notify/contacts/:connectionId', async (req, res) => {
+    try {
+      const { connectionId } = req.params;
+      console.log(`[Backend] Fetching contacts for connection ${connectionId}`);
+      const connection = await getConnection(connectionId);
+      if (!connection) return res.status(404).json({ success: false, error: 'Connection not found' });
+
+      const response = await sendWhapiRequest(connection, 'GET', '/contacts');
+      console.log(`[Backend] Contacts response:`, response);
+      res.json({ 
+        success: true, 
+        connection: { id: connection.id, name: connection.name, testMode: connection.testMode },
+        testResult: response 
+      });
+    } catch (error) {
+      console.error(`[Backend] Contacts error:`, error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // Update trigger (enable/disable, modify settings)
+  app.put('/notify/trigger/:triggerId', async (req, res) => {
+    try {
+      const { triggerId } = req.params;
+      const updates = req.body;
+      
+      const trigger = await getTriggerById(triggerId);
+      if (!trigger) return res.status(404).json({ success: false, error: 'Trigger not found' });
+      
+      const updatedTrigger = { ...trigger, ...updates, updatedAt: new Date().toISOString() };
+      await putItem(TRIGGERS_TABLE, updatedTrigger);
+      
+      await createLogEntry({ 
+        kind: 'trigger_updated', 
+        triggerId: trigger.id, 
+        name: trigger.name,
+        changes: updates
+      });
+      
+      res.json({ success: true, trigger: updatedTrigger });
+    } catch (error) {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // Delete trigger
+  app.delete('/notify/trigger/:triggerId', async (req, res) => {
+    try {
+      const { triggerId } = req.params;
+      const { DeleteCommand } = await import('@aws-sdk/lib-dynamodb');
+      
+      const trigger = await getTriggerById(triggerId);
+      if (!trigger) return res.status(404).json({ success: false, error: 'Trigger not found' });
+      
+      await documentClientRef.send(new DeleteCommand({
+        TableName: TRIGGERS_TABLE,
+        Key: { id: triggerId }
+      }));
+      
+      await createLogEntry({ 
+        kind: 'trigger_deleted', 
+        triggerId: trigger.id, 
+        name: trigger.name
+      });
+      
+      res.json({ success: true, message: 'Trigger deleted successfully' });
+    } catch (error) {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // Get analytics/stats
+  app.get('/notify/analytics', async (req, res) => {
+    try {
+      const { startDate, endDate } = req.query;
+      const logs = await scanTable(LOGS_TABLE, 1000);
+      
+      // Filter by date range if provided
+      let filteredLogs = logs;
+      if (startDate) {
+        filteredLogs = filteredLogs.filter(l => new Date(l.createdAt) >= new Date(startDate));
+      }
+      if (endDate) {
+        filteredLogs = filteredLogs.filter(l => new Date(l.createdAt) <= new Date(endDate));
+      }
+      
+      // Calculate statistics
+      const total = filteredLogs.length;
+      const successful = filteredLogs.filter(l => l.status === 'ok').length;
+      const failed = filteredLogs.filter(l => l.status === 'error').length;
+      const successRate = total > 0 ? ((successful / total) * 100).toFixed(2) : 0;
+      
+      // Group by event type
+      const byEventType = {};
+      filteredLogs.forEach(log => {
+        const type = log.eventType || 'unknown';
+        byEventType[type] = (byEventType[type] || 0) + 1;
+      });
+      
+      // Group by trigger
+      const byTrigger = {};
+      filteredLogs.forEach(log => {
+        const trigger = log.triggerId || 'unknown';
+        byTrigger[trigger] = (byTrigger[trigger] || 0) + 1;
+      });
+      
+      res.json({
+        success: true,
+        analytics: {
+          total,
+          successful,
+          failed,
+          successRate: parseFloat(successRate),
+          byEventType,
+          byTrigger,
+          dateRange: { startDate, endDate }
+        }
+      });
+    } catch (error) {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // Bulk operations - Create multiple triggers
+  app.post('/notify/triggers/bulk', async (req, res) => {
+    try {
+      const { triggers: triggersToCreate } = req.body;
+      
+      if (!Array.isArray(triggersToCreate) || triggersToCreate.length === 0) {
+        return res.status(400).json({ success: false, error: 'triggers array is required' });
+      }
+      
+      const created = [];
+      const errors = [];
+      
+      for (const triggerData of triggersToCreate) {
+        try {
+          const { name, eventType, filters = {}, action, connectionId, active = true, namespaceTags = [] } = triggerData;
+          
+          if (!name || !eventType || !action || !connectionId) {
+            errors.push({ triggerData, error: 'Missing required fields' });
+            continue;
+          }
+          
+          const item = {
+            id: uuidv4(),
+            name,
+            eventType,
+            filters,
+            action,
+            connectionId,
+            namespaceTags: Array.isArray(namespaceTags) ? namespaceTags : [],
+            active,
+            createdAt: new Date().toISOString()
+          };
+          
+          await putItem(TRIGGERS_TABLE, item);
+          created.push(item);
+          
+          await createLogEntry({ 
+            kind: 'trigger_bulk_created', 
+            triggerId: item.id, 
+            name: item.name
+          });
+        } catch (error) {
+          errors.push({ triggerData, error: error.message });
+        }
+      }
+      
+      res.json({
+        success: true,
+        created: created.length,
+        failed: errors.length,
+        createdTriggers: created,
+        errors
+      });
+    } catch (error) {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
 }
 
 // Helper to derive and emit events for known flows
 export function buildCrudEvent({ method, tableName, body, result }) {
   const typeMap = { POST: 'crud_create', PUT: 'crud_update', DELETE: 'crud_delete', GET: 'crud_read' };
   const type = typeMap[String(method).toUpperCase()] || 'crud_operation';
+  
+  // Extract notification metadata if present
+  const notificationMeta = body?.notificationMeta || {};
+  const recipient = body?.recipient || notificationMeta?.recipient;
+  const customMessage = body?.customMessage || notificationMeta?.message;
+  
   const event = {
     type,
     method,
     tableName,
     resource: 'dynamodb',
-    data: { body, result }
+    data: { 
+      body, 
+      result,
+      message: customMessage // Pass custom message if provided
+    },
+    recipient, // Include recipient if specified
+    actor: body?.actor || 'system'
   };
   console.log('[Backend] buildCrudEvent:', event);
   return event;

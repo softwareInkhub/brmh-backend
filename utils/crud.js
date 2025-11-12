@@ -20,7 +20,7 @@ export async function describeKeySchema(tableName) {
 }
 
 export async function createItem(tableName, body) {
-  const { item, requestDetails, status, itemIndex, totalItems, originalId } = body;
+  const { item, requestDetails, status, itemIndex, totalItems, originalId, notificationMeta } = body;
   if (!item) return { statusCode: 400, body: JSON.stringify({ error: "Item is required" }) };
 
   const { partitionKey, sortKey } = await describeKeySchema(tableName);
@@ -36,7 +36,7 @@ export async function createItem(tableName, body) {
       ["string", "number", "boolean"].includes(typeof value) || value === null || Array.isArray(value) || typeof value === "object"
     )
   );
-//hellooooooooo
+
   // Only save the item as provided, no timestamp or _metadata
   await docClient.send(new PutCommand({ TableName: tableName, Item: simplifiedItem }));
 
@@ -45,7 +45,8 @@ export async function createItem(tableName, body) {
     body: JSON.stringify({
       success: true,
       [partitionKey]: simplifiedItem[partitionKey],
-      ...(sortKey && { [sortKey]: simplifiedItem[sortKey] })
+      ...(sortKey && { [sortKey]: simplifiedItem[sortKey] }),
+      notificationMeta // Pass through for notification system
     })
   };
 }

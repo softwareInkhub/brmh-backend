@@ -53,16 +53,30 @@ function slugifyName(name = '') {
 }
 
 function getS3KeyWithNamespace(userId, filePath, fileName, namespace) {
-  const nsSegment = namespace && namespace.id
-    ? `namespaces/${slugifyName(namespace.name || namespace.id)}_${namespace.id}/users/${userId}`
-    : `users/${userId}`;
+  // Namespace is now REQUIRED - no fallback to users/{userId}
+  if (!namespace || !namespace.id || !namespace.name) {
+    throw new Error('namespace with id and name is required for all drive operations');
+  }
+  
+  if (!userId) {
+    throw new Error('userId is required for all drive operations');
+  }
+  
+  const nsSegment = `namespaces/${slugifyName(namespace.name)}_${namespace.id}/users/${userId}`;
   return `${DRIVE_FOLDER}/${nsSegment}/${filePath}/${fileName}`.replace(/\/+/g, '/');
 }
 
 function getFolderS3KeyWithNamespace(userId, folderPath, namespace) {
-  const nsSegment = namespace && namespace.id
-    ? `namespaces/${slugifyName(namespace.name || namespace.id)}_${namespace.id}/users/${userId}`
-    : `users/${userId}`;
+  // Namespace is now REQUIRED - no fallback to users/{userId}
+  if (!namespace || !namespace.id || !namespace.name) {
+    throw new Error('namespace with id and name is required for all drive operations');
+  }
+  
+  if (!userId) {
+    throw new Error('userId is required for all drive operations');
+  }
+  
+  const nsSegment = `namespaces/${slugifyName(namespace.name)}_${namespace.id}/users/${userId}`;
   return `${DRIVE_FOLDER}/${nsSegment}/${folderPath}`.replace(/\/+/g, '/');
 }
 
@@ -85,6 +99,16 @@ export async function uploadFile(userId, fileData, parentId = 'ROOT') {
     console.log('parentId:', parentId);
     console.log('namespace:', namespace);
     console.log('fileData:', { name, mimeType, size, tags });
+    
+    // REQUIRED: userId validation
+    if (!userId) {
+      throw new Error('userId is required for file upload');
+    }
+    
+    // REQUIRED: namespace validation
+    if (!namespace || !namespace.id || !namespace.name) {
+      throw new Error('namespace with id and name is required for file upload');
+    }
     
     // Validation
     if (!name || !mimeType || !size || !content) {
@@ -188,7 +212,17 @@ export async function uploadFile(userId, fileData, parentId = 'ROOT') {
 
 export async function createFolder(userId, folderData, parentId = 'ROOT') {
   try {
-    const { name, description = '' } = folderData;
+    const { name, description = '', namespaceId, namespaceName } = folderData;
+    
+    // REQUIRED: userId validation
+    if (!userId) {
+      throw new Error('userId is required for folder creation');
+    }
+    
+    // REQUIRED: namespace validation
+    if (!namespaceId || !namespaceName) {
+      throw new Error('namespaceId and namespaceName are required in folderData for folder creation');
+    }
     
     if (!name) {
       throw new Error('Folder name is required');
@@ -314,6 +348,16 @@ export async function getFolderById(userId, folderId) {
 
 export async function listFiles(userId, parentId = 'ROOT', limit = 50, nextToken = null, namespaceId = null) {
   try {
+    // REQUIRED: userId validation
+    if (!userId) {
+      throw new Error('userId is required for listing files');
+    }
+    
+    // REQUIRED: namespaceId validation
+    if (!namespaceId) {
+      throw new Error('namespaceId is required for listing files');
+    }
+    
     // For now, use a simple scan approach - in production you'd use GSI
     const response = await fetch(`${CRUD_API_BASE_URL}/crud?tableName=brmh-drive-files&pagination=true&itemPerPage=${limit}`, {
       method: 'GET'
@@ -324,11 +368,12 @@ export async function listFiles(userId, parentId = 'ROOT', limit = 50, nextToken
     }
     
     const result = await response.json();
+    // REQUIRED: Always filter by namespaceId - no optional logic
     const files = result.items?.filter(item => 
       item.ownerId === userId && 
       item.type === 'file' && 
       item.parentId === parentId &&
-      (namespaceId ? item.namespaceId === namespaceId : true)
+      item.namespaceId === namespaceId
     ) || [];
     
     return {
@@ -343,6 +388,16 @@ export async function listFiles(userId, parentId = 'ROOT', limit = 50, nextToken
 
 export async function listFolders(userId, parentId = 'ROOT', limit = 50, nextToken = null, namespaceId = null) {
   try {
+    // REQUIRED: userId validation
+    if (!userId) {
+      throw new Error('userId is required for listing folders');
+    }
+    
+    // REQUIRED: namespaceId validation
+    if (!namespaceId) {
+      throw new Error('namespaceId is required for listing folders');
+    }
+    
     // For now, use a simple scan approach - in production you'd use GSI
     const response = await fetch(`${CRUD_API_BASE_URL}/crud?tableName=brmh-drive-files&pagination=true&itemPerPage=${limit}`, {
       method: 'GET'
@@ -353,11 +408,12 @@ export async function listFolders(userId, parentId = 'ROOT', limit = 50, nextTok
     }
     
     const result = await response.json();
+    // REQUIRED: Always filter by namespaceId - no optional logic
     const folders = result.items?.filter(item => 
       item.ownerId === userId && 
       item.type === 'folder' && 
       item.parentId === parentId &&
-      (namespaceId ? item.namespaceId === namespaceId : true)
+      item.namespaceId === namespaceId
     ) || [];
     
     return {
@@ -372,6 +428,16 @@ export async function listFolders(userId, parentId = 'ROOT', limit = 50, nextTok
 
 export async function listFolderContents(userId, folderId, limit = 50, nextToken = null, namespaceId = null) {
   try {
+    // REQUIRED: userId validation
+    if (!userId) {
+      throw new Error('userId is required for listing folder contents');
+    }
+    
+    // REQUIRED: namespaceId validation
+    if (!namespaceId) {
+      throw new Error('namespaceId is required for listing folder contents');
+    }
+    
     const files = await listFiles(userId, folderId, limit, nextToken, namespaceId);
     const folders = await listFolders(userId, folderId, limit, nextToken, namespaceId);
     
