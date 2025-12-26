@@ -2169,28 +2169,40 @@ app.post("/indexing/update", async (req, res) => {
   }
 });
 
+// Helper function to set CORS headers
+function setCorsHeaders(req, res) {
+  const origin = req.headers.origin;
+  if (origin) {
+    if (allowedOrigins.includes(origin) || originRegexes.some(rx => rx.test(origin))) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Cookie');
+      console.log('[CORS] Allowed origin:', origin);
+      return true;
+    } else {
+      console.log('[CORS] Rejected origin:', origin);
+      return false;
+    }
+  }
+  return true; // Allow requests with no origin
+}
+
 // Middleware to ensure CORS headers for auth routes
 app.use('/auth', (req, res, next) => {
-  const origin = req.headers.origin;
-  if (origin && (allowedOrigins.includes(origin) || originRegexes.some(rx => rx.test(origin)))) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Cookie');
-  }
+  setCorsHeaders(req, res);
   next();
 });
 
 // Handle OPTIONS requests for CORS preflight
 app.options('/auth/*', (req, res) => {
   const origin = req.headers.origin;
-  if (origin && (allowedOrigins.includes(origin) || originRegexes.some(rx => rx.test(origin)))) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Cookie');
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
+  console.log('[CORS] OPTIONS preflight request from:', origin);
+  if (setCorsHeaders(req, res)) {
+    res.status(200).end();
+  } else {
+    res.status(403).end();
   }
-  res.status(200).end();
 });
 
 // Auth Routes
