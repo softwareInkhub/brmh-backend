@@ -72,17 +72,23 @@ import {
   phoneLoginHandler,
   verifyPhoneHandler,
   resendOtpHandler,
+  resendEmailVerificationHandler,
+  verifyEmailHandler,
+  forgotPasswordHandler,
+  confirmForgotPasswordHandler,
   generateOAuthUrlHandler,
   exchangeTokenHandler,
   refreshTokenHandler,
   validateTokenHandler,
   validateJwtToken,
   debugPkceStoreHandler,
+  debugOAuthConfigHandler,
   logoutHandler,
   getLogoutUrlHandler,
   adminCreateUserHandler,
   adminConfirmUserHandler,
-  adminListUsersHandler
+  adminListUsersHandler,
+  checkUserExistsHandler
 } from './utils/brmh-auth.js';
 
 import { handlers as workflowHandlers } from './lib/workflows.js';
@@ -2173,6 +2179,15 @@ app.post('/auth/phone/login', phoneLoginHandler);
 app.post('/auth/phone/verify', verifyPhoneHandler);
 app.post('/auth/phone/resend-otp', resendOtpHandler);
 
+// Email verification with confirmation code
+app.post('/auth/verify-email', verifyEmailHandler);
+app.post('/auth/resend-email-verification', resendEmailVerificationHandler);
+app.post('/auth/check-user-exists', checkUserExistsHandler);
+
+// Password Reset Routes
+app.post('/auth/forgot-password', forgotPasswordHandler);
+app.post('/auth/confirm-forgot-password', confirmForgotPasswordHandler);
+
 // OAuth Routes
 app.get('/auth/oauth-url', generateOAuthUrlHandler);
 app.post('/auth/token', exchangeTokenHandler);
@@ -2181,8 +2196,10 @@ app.post('/auth/validate', validateTokenHandler);
 app.post('/auth/logout', logoutHandler);
 app.get('/auth/logout-url', getLogoutUrlHandler);
 app.get('/auth/debug-pkce', debugPkceStoreHandler);
+app.get('/auth/debug-oauth-config', debugOAuthConfigHandler);
 
 // Cookie-friendly user info endpoint
+// Simple version: just validate the JWT and return its payload
 app.get('/auth/me', async (req, res) => {
   try {
     const bearer = req.headers.authorization?.replace(/^Bearer /, '');

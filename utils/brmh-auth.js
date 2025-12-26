@@ -34,6 +34,21 @@ setInterval(() => {
   }
 }, 5 * 60 * 1000); // Clean every 5 minutes
 
+// Map provider names to Cognito's expected format
+function normalizeProviderName(provider) {
+  if (!provider) return null;
+  
+  const providerMap = {
+    'google': 'Google',
+    'facebook': 'Facebook',
+    'github': 'GitHub',
+    'brmh': null // BRMH uses default Cognito login, no identity_provider needed
+  };
+  
+  const normalized = provider.toLowerCase();
+  return providerMap[normalized] || provider.charAt(0).toUpperCase() + provider.slice(1).toLowerCase();
+}
+
 // OAuth URL generation handler
 async function generateOAuthUrlHandler(req, res) {
   try {
@@ -46,18 +61,15 @@ async function generateOAuthUrlHandler(req, res) {
     const { challenge, verifier } = createPkce();
     const state = crypto.randomBytes(16).toString('hex');
     
-    // Get provider from query parameter (e.g., 'Google', 'Facebook', etc.)
-    // Normalize provider name to match Cognito's expected format (capitalize first letter)
-    let provider = req.query.provider;
-    if (provider) {
-      provider = provider.charAt(0).toUpperCase() + provider.slice(1).toLowerCase();
-    }
+    // Get provider from query parameter and normalize to Cognito's expected format
+    const rawProvider = req.query.provider;
+    const provider = normalizeProviderName(rawProvider);
     
-    console.log('?? Generating OAuth URL with PKCE:');
+    console.log('🔐 Generating OAuth URL with PKCE:');
+    console.log('  - Raw provider from query:', rawProvider || 'none');
+    console.log('  - Normalized provider:', provider || 'default (Cognito)');
     console.log('  - Challenge:', challenge);
-    console.log('  - Verifier:', verifier);
     console.log('  - State:', state);
-    console.log('  - Provider:', provider || 'default');
     
     const authUrl = new URL('/oauth2/authorize', process.env.AWS_COGNITO_DOMAIN);
     authUrl.searchParams.set('client_id', process.env.AWS_COGNITO_CLIENT_ID);
@@ -68,20 +80,24 @@ async function generateOAuthUrlHandler(req, res) {
     authUrl.searchParams.set('code_challenge', challenge);
     authUrl.searchParams.set('state', state);
     
-    // If provider is specified, add identity_provider parameter
+    // If provider is specified and not null, add identity_provider parameter
     // This tells Cognito to use the specified social identity provider
-    if (provider) {
+    // null means use default Cognito login (for BRMH)
+    if (provider !== null && provider) {
       authUrl.searchParams.set('identity_provider', provider);
+      console.log('  ✅ Added identity_provider parameter:', provider);
     } else {
       // Force showing the login screen to avoid the "continue as" page
       authUrl.searchParams.set('prompt', 'login');
+      console.log('  ℹ️  Using default Cognito login (no identity_provider)');
     }
     
     // Store verifier with state
     pkceStore.set(state, { verifier, timestamp: Date.now() });
     
-    console.log('?? Generated OAuth URL:', authUrl.toString());
-    console.log('?? Stored PKCE data for state:', state);
+    console.log('🔗 Generated OAuth URL:', authUrl.toString());
+    console.log('🔍 URL Scopes:', authUrl.searchParams.get('scope'));
+    console.log('💾 Stored PKCE data for state:', state);
     
     res.json({ 
       authUrl: authUrl.toString(),
@@ -90,6 +106,119 @@ async function generateOAuthUrlHandler(req, res) {
   } catch (error) {
     console.error('Error generating OAuth URL:', error);
     res.status(500).json({ error: 'Failed to generate OAuth URL' });
+  }
+}
+
+// Debug endpoint to check OAuth configuration
+async function debugOAuthConfigHandler(req, res) {
+  try {
+    const cognitoDomain = process.env.AWS_COGNITO_DOMAIN || 'NOT SET';
+    const redirectUri = process.env.AUTH_REDIRECT_URI || 'NOT SET';
+    
+    // Calculate Google Cloud Console redirect URI (Cognito's callback URL)
+    let googleRedirectUri = null;
+    if (cognitoDomain !== 'NOT SET') {
+      try {
+        const cognitoUrl = new URL(cognitoDomain);
+        googleRedirectUri = `${cognitoUrl.origin}/oauth2/idpresponse`;
+      } catch (error) {
+        // If domain is not a full URL, try to construct it
+        if (cognitoDomain.includes('amazoncognito.com')) {
+          googleRedirectUri = `https://${cognitoDomain.replace(/^https?:\/\//, '')}/oauth2/idpresponse`;
+        }
+      }
+    }
+    
+    const config = {
+      hasCognitoDomain: !!process.env.AWS_COGNITO_DOMAIN,
+      hasClientId: !!process.env.AWS_COGNITO_CLIENT_ID,
+      hasRedirectUri: !!process.env.AUTH_REDIRECT_URI,
+      cognitoDomain: cognitoDomain,
+      redirectUri: redirectUri,
+      providers: {
+        google: normalizeProviderName('google'),
+        facebook: normalizeProviderName('facebook'),
+        github: normalizeProviderName('github'),
+        brmh: normalizeProviderName('brmh')
+      },
+      // Google OAuth Configuration Help
+      googleOAuthConfig: {
+        message: 'Configure this URL in Google Cloud Console → OAuth 2.0 Client → Authorized redirect URIs',
+        cognitoCallbackUrl: googleRedirectUri || 'Cannot determine - check AWS_COGNITO_DOMAIN',
+        appCallbackUrl: redirectUri,
+        instructions: [
+          '1. Go to Google Cloud Console → APIs & Services → Credentials',
+          '2. Select your OAuth 2.0 Client ID (the one configured in Cognito)',
+          '3. Add the "cognitoCallbackUrl" above to "Authorized redirect URIs"',
+          '4. Also add the "appCallbackUrl" if you want direct Google OAuth (without Cognito)',
+          '5. Save the changes'
+        ]
+      },
+      // AWS Cognito Configuration Help
+      cognitoConfig: {
+        message: 'Configure these URLs in AWS Cognito → User Pool → App Integration → App Client → Hosted UI',
+        callbackUrls: [
+          redirectUri,
+          redirectUri.includes('localhost') ? null : redirectUri.replace('https://', 'http://localhost:3000').replace(/:\d+/, ':3000'),
+        ].filter(Boolean),
+        signOutUrls: [
+          redirectUri.replace('/callback', '/'),
+          redirectUri.includes('localhost') ? null : redirectUri.replace('https://', 'http://localhost:3000').replace('/callback', '/').replace(/:\d+/, ':3000'),
+        ].filter(Boolean),
+        instructions: [
+          '1. Go to AWS Console → Cognito → User Pools',
+          '2. Select your User Pool → App Integration → App Client',
+          '3. Under "Hosted UI" settings, add the callbackUrls above to "Allowed callback URLs"',
+          '4. Add the signOutUrls above to "Allowed sign-out URLs"',
+          '5. Save the changes'
+        ]
+      }
+    };
+
+    // Generate sample URLs for each provider
+    const sampleUrls = {};
+    const providers = ['google', 'facebook', 'github', 'brmh'];
+    
+    providers.forEach(providerName => {
+      const { challenge } = createPkce();
+      const state = 'sample-state';
+      const provider = normalizeProviderName(providerName);
+      
+      const authUrl = new URL('/oauth2/authorize', process.env.AWS_COGNITO_DOMAIN || 'https://example.auth.region.amazoncognito.com');
+      authUrl.searchParams.set('client_id', process.env.AWS_COGNITO_CLIENT_ID || 'CLIENT_ID');
+      authUrl.searchParams.set('response_type', 'code');
+      authUrl.searchParams.set('scope', 'openid profile email');
+      authUrl.searchParams.set('redirect_uri', process.env.AUTH_REDIRECT_URI || 'http://localhost:3000/callback');
+      authUrl.searchParams.set('code_challenge_method', 'S256');
+      authUrl.searchParams.set('code_challenge', challenge);
+      authUrl.searchParams.set('state', state);
+      
+      if (provider !== null && provider) {
+        authUrl.searchParams.set('identity_provider', provider);
+      } else {
+        authUrl.searchParams.set('prompt', 'login');
+      }
+      
+      sampleUrls[providerName] = {
+        normalizedProvider: provider,
+        url: authUrl.toString(),
+        hasIdentityProvider: provider !== null && !!provider,
+        redirectUriInUrl: authUrl.searchParams.get('redirect_uri')
+      };
+    });
+
+    res.json({
+      config,
+      sampleUrls,
+      message: 'Check the sampleUrls to see what identity_provider parameter is being set for each provider',
+      help: {
+        googleOAuth: 'See config.googleOAuthConfig for Google Cloud Console configuration',
+        cognito: 'See config.cognitoConfig for AWS Cognito configuration'
+      }
+    });
+  } catch (error) {
+    console.error('Error in debug OAuth config:', error);
+    res.status(500).json({ error: 'Failed to generate debug info', details: error.message });
   }
 }
 
@@ -325,13 +454,37 @@ function initializeJwks() {
     console.warn('JWKS not initialized: missing AWS_COGNITO_REGION or AWS_COGNITO_USER_POOL_ID');
     return;
   }
-  
+
   jwks = jwksClient({ 
     jwksUri: `https://cognito-idp.${process.env.AWS_COGNITO_REGION}.amazonaws.com/${process.env.AWS_COGNITO_USER_POOL_ID}/.well-known/jwks.json` 
   });
-  
+
   getKey = (header, cb) => {
-    jwks.getSigningKey(header.kid, (err, key) => cb(err, key.getPublicKey()));
+    // Safety guard: handle missing JWKS client or signing key gracefully
+    if (!jwks) {
+      console.warn('[Auth] JWKS client not initialized when trying to validate token');
+      return cb(new Error('JWKS client not initialized'));
+    }
+
+    jwks.getSigningKey(header.kid, (err, key) => {
+      if (err) {
+        console.error('[Auth] Error getting signing key from JWKS:', err.message || err);
+        return cb(err);
+      }
+
+      if (!key) {
+        console.error('[Auth] No signing key found for kid:', header && header.kid);
+        return cb(new Error('Signing key not found'));
+      }
+
+      try {
+        const publicKey = key.getPublicKey();
+        return cb(null, publicKey);
+      } catch (e) {
+        console.error('[Auth] Failed to get public key from JWKS key:', e.message || e);
+        return cb(e);
+      }
+    });
   };
 }
 
@@ -339,7 +492,8 @@ function initializeJwks() {
 initializeJwks();
 
 // User management functions for DynamoDB
-const USERS_TABLE = process.env.USERS_TABLE || 'users';
+// Default to 'brmh-users' to match create-users-table.js
+const USERS_TABLE = process.env.USERS_TABLE || 'brmh-users';
 
 // Helper function to extract domain from origin header
 function extractDomainFromOrigin(origin) {
@@ -378,15 +532,21 @@ function extractNamespaceFromDomain(domain) {
 // Create user record in DynamoDB
 async function createUserRecord(userData, loginDomain = null) {
   try {
+    // Ensure userId is present (required primary key)
+    const userId = userData.sub || userData.username || userData.cognitoUsername;
+    if (!userId) {
+      throw new Error('Missing required userId (sub, username, or cognitoUsername) for DynamoDB record');
+    }
+    
     const now = new Date().toISOString();
     const namespace = extractNamespaceFromDomain(loginDomain);
     
     const userRecord = {
-      userId: userData.sub || userData.username,
-      username: userData.username,
-      email: userData.email,
-      phoneNumber: userData.phoneNumber,
-      cognitoUsername: userData.cognitoUsername,
+      userId: userId,
+      username: userData.username || userId,
+      email: userData.email || null,
+      phoneNumber: userData.phoneNumber || null,
+      cognitoUsername: userData.cognitoUsername || userId,
       createdAt: now,
       updatedAt: now,
       status: 'active',
@@ -887,11 +1047,12 @@ async function resolveIdentifierForLogin(identifier, client) {
 }
 // Login handler
 async function loginHandler(req, res) {
+  // Extract credentials outside try/catch so identifier is available in fallback paths
+  const { username, password } = req.body;
+  // Allow login with email, phone, or username
+  let identifier = (username || '').toString().trim();
+
   try {
-    const { username, password } = req.body;
-    // Allow login with email, phone, or username
-    let identifier = (username || '').toString().trim();
-    
     console.log('[Auth] Login attempt:', { username: identifier, hasPassword: !!password });
     
     if (!identifier || !password) {
@@ -1378,7 +1539,7 @@ async function verifyPhoneHandler(req, res) {
   });
 }
 
-// Resend OTP
+// Resend OTP (phone)
 async function resendOtpHandler(req, res) {
   if (!userPool) {
     return res.status(500).json({ 
@@ -1410,7 +1571,535 @@ async function resendOtpHandler(req, res) {
   });
 }
 
-export { signupHandler, loginHandler, phoneSignupHandler, phoneLoginHandler, verifyPhoneHandler, resendOtpHandler };
+// Resend email verification code
+async function resendEmailVerificationHandler(req, res) {
+  if (!userPool) {
+    return res.status(500).json({ 
+      success: false, 
+      error: 'Authentication service not configured. Please set AWS_COGNITO_USER_POOL_ID and AWS_COGNITO_CLIENT_ID environment variables.' 
+    });
+  }
+  
+  const { email, username } = req.body;
+  try { console.log('[Auth] Resend email verification request', { email, username }); } catch {}
+
+  let usernameToUse = username;
+
+  try {
+    // If we only have email, try to resolve it to the Cognito username (same helper as login)
+    if (!usernameToUse && email) {
+      const client = new CognitoIdentityProviderClient({ 
+        region: process.env.AWS_COGNITO_REGION || process.env.AWS_REGION || 'us-east-1' 
+      });
+      const resolved = await resolveIdentifierForLogin(email, client);
+      usernameToUse = resolved || email;
+    }
+  } catch (resolveErr) {
+    try {
+      console.warn('[Auth] Could not resolve email to Cognito username for resend:', resolveErr?.message || resolveErr);
+    } catch {}
+    // Fallback: if we still don't have username, we'll handle below
+  }
+
+  if (!usernameToUse) {
+    return res.status(400).json({
+      success: false,
+      error: 'username or email is required to resend verification code'
+    });
+  }
+
+  const user = new CognitoUser({ Username: usernameToUse, Pool: userPool });
+
+  user.resendConfirmationCode((err, result) => {
+    if (err) {
+      console.error('[Auth] Resend email verification error:', err);
+      return res.status(400).json({ success: false, error: err.message });
+    }
+    try { console.log('[Auth] Resend email verification success'); } catch {}
+    return res.status(200).json({
+      success: true,
+      result,
+      message: 'Verification code resent successfully! Please check your email.'
+    });
+  });
+}
+
+// Verify email with confirmation code (email verification OTP)
+async function verifyEmailHandler(req, res) {
+  if (!userPool) {
+    return res.status(500).json({ 
+      success: false, 
+      error: 'Authentication service not configured. Please set AWS_COGNITO_USER_POOL_ID and AWS_COGNITO_CLIENT_ID environment variables.' 
+    });
+  }
+  
+  const { email, code, username } = req.body;
+  
+  if (!code) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Verification code is required' 
+    });
+  }
+  
+  try { 
+    console.log('[Auth] Verify email request', { email, username, hasCode: Boolean(code) }); 
+  } catch {}
+  
+  // Determine username to use – prefer explicit username, try to resolve email to Cognito username
+  let usernameToUse = username;
+
+  try {
+    if (!usernameToUse && email) {
+      const client = new CognitoIdentityProviderClient({ 
+        region: process.env.AWS_COGNITO_REGION || process.env.AWS_REGION || 'us-east-1' 
+      });
+      const resolved = await resolveIdentifierForLogin(email, client);
+      usernameToUse = resolved || email;
+    }
+  } catch (resolveErr) {
+    try {
+      console.warn('[Auth] Could not resolve email to Cognito username for verify:', resolveErr?.message || resolveErr);
+    } catch {}
+    // Fall back to whatever we have (might still be undefined)
+  }
+  
+  if (!usernameToUse) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'username or email is required' 
+    });
+  }
+  
+  const user = new CognitoUser({ Username: usernameToUse, Pool: userPool });
+  
+  user.confirmRegistration(code, true, async (err, result) => {
+    if (err) {
+      console.error('[Auth] Email verification error:', err);
+      return res.status(400).json({ success: false, error: err.message });
+    }
+    
+    try { 
+      console.log('[Auth] Email verification success'); 
+      // Optional: update user record in DynamoDB if it exists
+      try {
+        const userRecord = await getUserRecord(usernameToUse);
+        if (userRecord) {
+          await updateUserRecord(userRecord.userId || usernameToUse, {
+            'metadata.verified': true
+          });
+        }
+      } catch (dbError) {
+        console.warn('[Auth] Could not update user verification status:', dbError.message);
+      }
+    } catch (logError) {
+      console.error('[Auth] Error after email verification:', logError);
+    }
+    
+    return res.status(200).json({ 
+      success: true, 
+      result,
+      message: 'Email verified successfully! You can now login.'
+    });
+  });
+}
+
+// Forgot password - send code
+async function forgotPasswordHandler(req, res) {
+  if (!userPool) {
+    return res.status(500).json({ 
+      success: false, 
+      error: 'Authentication service not configured. Please set AWS_COGNITO_USER_POOL_ID and AWS_COGNITO_CLIENT_ID environment variables.' 
+    });
+  }
+  
+  const { email, username, phoneNumber } = req.body;
+  
+  // Accept email, username, or phoneNumber
+  const identifier = email || phoneNumber || username;
+  
+  if (!identifier) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'email, phoneNumber, or username is required' 
+    });
+  }
+  
+  try { 
+    console.log('[Auth] Forgot password request', { email, phoneNumber, username }); 
+  } catch {}
+  
+  let usernameToUse = username;
+  
+  // Format phone number if provided
+  let formattedPhone = phoneNumber;
+  if (phoneNumber && !phoneNumber.startsWith('+')) {
+    const digits = phoneNumber.replace(/\D/g, '');
+    if (digits.length === 10) {
+      formattedPhone = '+91' + digits; // Assume India for 10-digit numbers
+    } else if (digits.length === 12 && digits.startsWith('91')) {
+      formattedPhone = '+' + digits;
+    } else {
+      formattedPhone = '+' + digits;
+    }
+  }
+  
+  // Use phoneNumber or email/username as identifier
+  const identifierToResolve = formattedPhone || email || username;
+  
+  try {
+    // Try to resolve identifier (email or phone) to Cognito username
+    if (!usernameToUse && identifierToResolve) {
+      const client = new CognitoIdentityProviderClient({ 
+        region: process.env.AWS_COGNITO_REGION || process.env.AWS_REGION || 'us-east-1' 
+      });
+      const resolved = await resolveIdentifierForLogin(identifierToResolve, client);
+      usernameToUse = resolved || identifierToResolve;
+      console.log('[Auth] Resolved identifier to username for forgot password:', { identifier: identifierToResolve, resolved, usernameToUse });
+    }
+  } catch (resolveErr) {
+    try {
+      console.warn('[Auth] Could not resolve identifier to Cognito username for forgot password:', resolveErr?.message || resolveErr);
+    } catch {}
+    // Fallback: use identifier as username
+    if (!usernameToUse && identifierToResolve) {
+      usernameToUse = identifierToResolve;
+      console.log('[Auth] Using identifier as username fallback:', usernameToUse);
+    }
+  }
+  
+  if (!usernameToUse) {
+    console.error('[Auth] No username resolved for forgot password:', { email, phoneNumber, username });
+    return res.status(400).json({ 
+      success: false, 
+      error: 'username, email, or phoneNumber is required' 
+    });
+  }
+  
+  // Determine if it's a phone number for better error messages
+  const isPhoneNumber = formattedPhone || (identifierToResolve && /^\+?\d{10,15}$/.test(identifierToResolve.replace(/\D/g, '')));
+  
+  // Check if user exists before attempting to send reset code
+  try {
+    const client = new CognitoIdentityProviderClient({ 
+      region: process.env.AWS_COGNITO_REGION || process.env.AWS_REGION || 'us-east-1' 
+    });
+    
+    // Try to verify user exists by attempting to resolve identifier
+    const resolvedUsername = await resolveIdentifierForLogin(identifierToResolve, client);
+    
+    // If resolveIdentifierForLogin returns the same identifier, it means user was not found
+    // (resolveIdentifierForLogin only returns a different value if user exists)
+    if (resolvedUsername === identifierToResolve) {
+      // Double check: Try to list users with this identifier
+      const userPoolId = process.env.AWS_COGNITO_USER_POOL_ID;
+      let userExists = false;
+      
+      if (isPhoneNumber && formattedPhone) {
+        // Check by phone number
+        const phoneCommand = new ListUsersCommand({
+          UserPoolId: userPoolId,
+          Filter: `phone_number = "${formattedPhone.replace(/["\\]/g, (char) => `\\${char}`)}"`,
+          Limit: 1
+        });
+        const phoneResponse = await client.send(phoneCommand);
+        userExists = (phoneResponse?.Users?.length || 0) > 0;
+      } else if (email) {
+        // Check by email
+        const emailCommand = new ListUsersCommand({
+          UserPoolId: userPoolId,
+          Filter: `email = "${email.replace(/["\\]/g, (char) => `\\${char}`)}"`,
+          Limit: 1
+        });
+        const emailResponse = await client.send(emailCommand);
+        userExists = (emailResponse?.Users?.length || 0) > 0;
+      } else if (username) {
+        // Check by username (direct)
+        const usernameCommand = new ListUsersCommand({
+          UserPoolId: userPoolId,
+          Filter: `username = "${username.replace(/["\\]/g, (char) => `\\${char}`)}"`,
+          Limit: 1
+        });
+        const usernameResponse = await client.send(usernameCommand);
+        userExists = (usernameResponse?.Users?.length || 0) > 0;
+      }
+      
+      if (!userExists) {
+        console.log('[Auth] User does not exist for forgot password:', { identifier: identifierToResolve, isPhone: isPhoneNumber });
+        return res.status(400).json({ 
+          success: false, 
+          error: isPhoneNumber 
+            ? 'No account found with this phone number. Please check your phone number or sign up first.'
+            : 'No account found with this email address. Please check your email or sign up first.'
+        });
+      }
+    }
+    
+    // Update usernameToUse with resolved username if different
+    if (resolvedUsername && resolvedUsername !== identifierToResolve) {
+      usernameToUse = resolvedUsername;
+      console.log('[Auth] Using resolved username for forgot password:', usernameToUse);
+    }
+  } catch (checkErr) {
+    // If check fails, we'll still try forgotPassword and let Cognito handle the error
+    console.warn('[Auth] Could not verify user existence before forgot password, proceeding anyway:', checkErr?.message || checkErr);
+  }
+  
+  console.log('[Auth] Attempting forgot password for:', usernameToUse, { isPhone: isPhoneNumber });
+  const user = new CognitoUser({ Username: usernameToUse, Pool: userPool });
+  
+  user.forgotPassword({
+    onSuccess: (result) => {
+      try { 
+        console.log('[Auth] Forgot password code sent successfully', { username: usernameToUse, isPhone: isPhoneNumber }); 
+      } catch {}
+      // Determine if code was sent via email or SMS
+      const message = isPhoneNumber 
+        ? 'Password reset code sent successfully! Please check your phone for the verification code.'
+        : 'Password reset code sent successfully! Please check your email.';
+      
+      res.status(200).json({ 
+        success: true, 
+        result,
+        message
+      });
+    },
+    onFailure: (err) => {
+      console.error('[Auth] Forgot password error:', {
+        username: usernameToUse,
+        email: email,
+        phoneNumber: phoneNumber,
+        isPhone: isPhoneNumber,
+        error: err.message,
+        code: err.code,
+        name: err.name
+      });
+      
+      // Provide more specific error messages
+      let errorMessage = err.message || 'Failed to send password reset code';
+      
+      // Handle common Cognito errors
+      if (err.code === 'UserNotFoundException' || err.message?.includes('does not exist')) {
+        errorMessage = isPhoneNumber 
+          ? 'No account found with this phone number. Please check your phone number or sign up.'
+          : 'No account found with this email address. Please check your email or sign up.';
+      } else if (err.code === 'LimitExceededException') {
+        errorMessage = 'Too many attempts. Please try again later.';
+      } else if (err.message?.includes('not confirmed')) {
+        errorMessage = isPhoneNumber 
+          ? 'Please verify your phone number first before resetting password.'
+          : 'Please verify your email first before resetting password.';
+      }
+      
+      res.status(400).json({ 
+        success: false, 
+        error: errorMessage 
+      });
+    }
+  });
+}
+
+// Confirm forgot password - reset password with code
+async function confirmForgotPasswordHandler(req, res) {
+  if (!userPool) {
+    return res.status(500).json({ 
+      success: false, 
+      error: 'Authentication service not configured. Please set AWS_COGNITO_USER_POOL_ID and AWS_COGNITO_CLIENT_ID environment variables.' 
+    });
+  }
+  
+  const { email, username, phoneNumber, code, newPassword } = req.body;
+  
+  if (!code || !newPassword) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'code and newPassword are required' 
+    });
+  }
+  
+  // Accept email, username, or phoneNumber
+  const identifier = email || phoneNumber || username;
+  
+  if (!identifier) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'email, phoneNumber, or username is required' 
+    });
+  }
+  
+  try { 
+    console.log('[Auth] Confirm forgot password request', { email, phoneNumber, username, hasCode: Boolean(code) }); 
+  } catch {}
+  
+  let usernameToUse = username;
+  
+  // Format phone number if provided
+  let formattedPhone = phoneNumber;
+  if (phoneNumber && !phoneNumber.startsWith('+')) {
+    const digits = phoneNumber.replace(/\D/g, '');
+    if (digits.length === 10) {
+      formattedPhone = '+91' + digits; // Assume India for 10-digit numbers
+    } else if (digits.length === 12 && digits.startsWith('91')) {
+      formattedPhone = '+' + digits;
+    } else {
+      formattedPhone = '+' + digits;
+    }
+  }
+  
+  // Use phoneNumber or email/username as identifier
+  const identifierToResolve = formattedPhone || email || username;
+  
+  try {
+    // Try to resolve identifier (email or phone) to Cognito username
+    if (!usernameToUse && identifierToResolve) {
+      const client = new CognitoIdentityProviderClient({ 
+        region: process.env.AWS_COGNITO_REGION || process.env.AWS_REGION || 'us-east-1' 
+      });
+      const resolved = await resolveIdentifierForLogin(identifierToResolve, client);
+      usernameToUse = resolved || identifierToResolve;
+      console.log('[Auth] Resolved identifier to username for confirm forgot password:', { identifier: identifierToResolve, resolved, usernameToUse });
+    }
+  } catch (resolveErr) {
+    try {
+      console.warn('[Auth] Could not resolve identifier to Cognito username for confirm forgot password:', resolveErr?.message || resolveErr);
+    } catch {}
+    // Fallback: use identifier as username
+    if (!usernameToUse && identifierToResolve) {
+      usernameToUse = identifierToResolve;
+      console.log('[Auth] Using identifier as username fallback:', usernameToUse);
+    }
+  }
+  
+  if (!usernameToUse) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'username or email is required' 
+    });
+  }
+  
+  const user = new CognitoUser({ Username: usernameToUse, Pool: userPool });
+  
+  user.confirmPassword(code, newPassword, {
+    onSuccess: () => {
+      try { console.log('[Auth] Password reset successful'); } catch {}
+      res.status(200).json({ 
+        success: true, 
+        message: 'Password reset successfully! You can now login with your new password.'
+      });
+    },
+    onFailure: (err) => {
+      console.error('[Auth] Confirm forgot password error:', err);
+      res.status(400).json({ success: false, error: err.message || 'Failed to reset password' });
+    }
+  });
+}
+
+// Check if user exists (email or phone)
+async function checkUserExistsHandler(req, res) {
+  if (!userPool) {
+    return res.status(500).json({ 
+      success: false, 
+      error: 'Authentication service not configured.' 
+    });
+  }
+
+  const { email, phoneNumber } = req.body;
+
+  if (!email && !phoneNumber) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Email or phone number is required' 
+    });
+  }
+
+  try {
+    const client = new CognitoIdentityProviderClient({ 
+      region: process.env.AWS_COGNITO_REGION || process.env.AWS_REGION || 'us-east-1' 
+    });
+
+    const userPoolId = process.env.AWS_COGNITO_USER_POOL_ID;
+    if (!userPoolId) {
+      return res.status(500).json({ 
+        success: false, 
+        error: 'User pool not configured' 
+      });
+    }
+
+    const sanitize = (value) => value.replace(/["\\]/g, (char) => `\\${char}`);
+
+    // Check email if provided
+    if (email) {
+      const emailTrimmed = email.trim();
+      if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailTrimmed)) {
+        const emailCommand = new ListUsersCommand({
+          UserPoolId: userPoolId,
+          Filter: `email = "${sanitize(emailTrimmed)}"`,
+          Limit: 1
+        });
+        const emailResponse = await client.send(emailCommand);
+        if (emailResponse?.Users && emailResponse.Users.length > 0) {
+          return res.status(200).json({ 
+            success: true, 
+            exists: true, 
+            type: 'email',
+            message: 'Email already registered, choose different email'
+          });
+        }
+      }
+    }
+
+    // Check phone if provided
+    if (phoneNumber) {
+      let phoneDigits = phoneNumber.trim().replace(/[\s\-\(\)\.]/g, '');
+      
+      // Normalize phone number
+      if (!phoneDigits.startsWith('+')) {
+        if (phoneDigits.length === 10) {
+          phoneDigits = '+91' + phoneDigits;
+        } else if (phoneDigits.length === 12 && phoneDigits.startsWith('91')) {
+          phoneDigits = '+' + phoneDigits;
+        } else if (phoneDigits.length === 11 && phoneDigits.startsWith('1')) {
+          phoneDigits = '+' + phoneDigits;
+        } else {
+          phoneDigits = '+' + phoneDigits;
+        }
+      }
+
+      if (/^\+?[1-9]\d{6,}$/.test(phoneDigits.replace(/\+/g, ''))) {
+        const phoneCommand = new ListUsersCommand({
+          UserPoolId: userPoolId,
+          Filter: `phone_number = "${sanitize(phoneDigits)}"`,
+          Limit: 1
+        });
+        const phoneResponse = await client.send(phoneCommand);
+        if (phoneResponse?.Users && phoneResponse.Users.length > 0) {
+          return res.status(200).json({ 
+            success: true, 
+            exists: true, 
+            type: 'phone',
+            message: 'Phone number already registered, choose different phone number'
+          });
+        }
+      }
+    }
+
+    // User doesn't exist
+    return res.status(200).json({ 
+      success: true, 
+      exists: false 
+    });
+
+  } catch (error) {
+    console.error('[Auth] Error checking user existence:', error);
+    return res.status(500).json({ 
+      success: false, 
+      error: 'Failed to check user existence',
+      details: error.message 
+    });
+  }
+}
+
+export { signupHandler, loginHandler, phoneSignupHandler, phoneLoginHandler, verifyPhoneHandler, resendOtpHandler, resendEmailVerificationHandler, verifyEmailHandler, forgotPasswordHandler, confirmForgotPasswordHandler, checkUserExistsHandler };
 // Debug endpoint to check PKCE store
 async function debugPkceStoreHandler(req, res) {
   try {
@@ -1719,6 +2408,7 @@ export {
   validateTokenHandler,
   validateJwtToken,
   debugPkceStoreHandler,
+  debugOAuthConfigHandler,
   logoutHandler,
   getLogoutUrlHandler,
   // User management functions
