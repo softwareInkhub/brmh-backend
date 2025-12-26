@@ -2169,6 +2169,30 @@ app.post("/indexing/update", async (req, res) => {
   }
 });
 
+// Middleware to ensure CORS headers for auth routes
+app.use('/auth', (req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && (allowedOrigins.includes(origin) || originRegexes.some(rx => rx.test(origin)))) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Cookie');
+  }
+  next();
+});
+
+// Handle OPTIONS requests for CORS preflight
+app.options('/auth/*', (req, res) => {
+  const origin = req.headers.origin;
+  if (origin && (allowedOrigins.includes(origin) || originRegexes.some(rx => rx.test(origin)))) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Cookie');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+  }
+  res.status(200).end();
+});
+
 // Auth Routes
 app.post('/auth/login', loginHandler);
 app.post('/auth/signup', signupHandler);
