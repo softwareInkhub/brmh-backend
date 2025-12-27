@@ -87,6 +87,7 @@ swagger-static/
 # Test files
 test-results/
 jest-coverage/
+test-cors.js
 
 # Backup files
 *.bak
