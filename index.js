@@ -91,6 +91,8 @@ import {
   checkUserExistsHandler
 } from './utils/brmh-auth.js';
 
+import { errorHandler } from './middleware/errorHandler.js';
+
 import { handlers as workflowHandlers } from './lib/workflows.js';
 import {
   createRoleHandler,
@@ -2357,6 +2359,20 @@ app.post('/user-resources/:userId/check-access', checkResourceAccessHandler);
 // Get all users with access to a specific resource
 app.get('/user-resources/resource/:resourceType/:resourceId/users', getResourceUsersHandler);
 
+
+// 404 handler - must be before errorHandler, after all routes
+app.use((req, res, next) => {
+  // Set CORS headers for 404 responses
+  setCorsHeaders(req, res);
+  
+  // Create 404 error
+  const err = new Error('Not Found');
+  err.status = 404;
+  next(err);
+});
+
+// Global error handler - must be after all routes and 404 handler
+app.use(errorHandler);
 
 const PORT = process.env.PORT || 5001;
 
