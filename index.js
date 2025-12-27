@@ -2240,12 +2240,19 @@ app.get('/auth/debug-oauth-config', debugOAuthConfigHandler);
 // Simple version: just validate the JWT and return its payload
 app.get('/auth/me', async (req, res) => {
   try {
+    // Ensure CORS headers are set
+    setCorsHeaders(req, res);
+    
     const bearer = req.headers.authorization?.replace(/^Bearer /, '');
     const idToken = bearer || req.cookies?.id_token;
-    if (!idToken) return res.status(401).json({ error: 'No token' });
+    if (!idToken) {
+      return res.status(401).json({ error: 'No token' });
+    }
     const decoded = await validateJwtToken(idToken);
     return res.json({ user: decoded });
   } catch (e) {
+    // Ensure CORS headers are set even on error
+    setCorsHeaders(req, res);
     return res.status(401).json({ error: 'Invalid token' });
   }
 });
