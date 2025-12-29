@@ -39,9 +39,9 @@ function normalizeProviderName(provider) {
   if (!provider) return null;
   
   const providerMap = {
-    'google': 'Google',
-    'facebook': 'Facebook',
-    'github': 'GitHub',
+    'google': 'google',
+    'facebook': 'facebook',
+    'github': 'github',
     'brmh': null // BRMH uses default Cognito login, no identity_provider needed
   };
   
