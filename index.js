@@ -72,19 +72,28 @@ import {
   phoneLoginHandler,
   verifyPhoneHandler,
   resendOtpHandler,
+  resendEmailVerificationHandler,
+  verifyEmailHandler,
+  forgotPasswordHandler,
+  confirmForgotPasswordHandler,
   generateOAuthUrlHandler,
   exchangeTokenHandler,
   refreshTokenHandler,
   validateTokenHandler,
   validateJwtToken,
   debugPkceStoreHandler,
+  debugOAuthConfigHandler,
   logoutHandler,
   getLogoutUrlHandler,
   adminCreateUserHandler,
   adminConfirmUserHandler,
-  adminListUsersHandler
+  adminListUsersHandler,
+  checkUserExistsHandler
 } from './utils/brmh-auth.js';
 
+import { errorHandler } from './middleware/errorHandler.js';
+
+import { handlers as workflowHandlers } from './lib/workflows.js';
 import {
   createRoleHandler,
   getRolesHandler,
@@ -107,12 +116,27 @@ import {
   removeNamespacePermissionsHandler
 } from './utils/namespace-roles.js';
 
+import {
+  grantResourceAccessHandler,
+  bulkGrantResourceAccessHandler,
+  revokeResourceAccessHandler,
+  updateResourceAccessHandler,
+  getUserResourcesHandler,
+  checkResourceAccessHandler,
+  getResourceUsersHandler,
+  getUserResourcesSummaryHandler,
+  getResourceConfigHandler
+} from './utils/user-resources.js';
+
 // Environment variables already loaded at the top
 // Only log AWS config in development
 if (process.env.NODE_ENV !== 'production') {
   console.log("AWS_ACCESS_KEY_ID", process.env.AWS_ACCESS_KEY_ID ? 'SET' : 'NOT SET');
   console.log("AWS_SECRET_ACCESS_KEY", process.env.AWS_SECRET_ACCESS_KEY ? 'SET' : 'NOT SET');
   console.log("AWS_REGION", process.env.AWS_REGION);
+  console.log("LAMBDA_EXECUTION_ROLE_ARN", process.env.LAMBDA_EXECUTION_ROLE_ARN ? '✅ Set' : '❌ Not set');
+  console.log("STEP_FUNCTIONS_ROLE_ARN", process.env.STEP_FUNCTIONS_ROLE_ARN ? '✅ Set' : '❌ Not set');
+  console.log("AWS_ACCOUNT_ID", process.env.AWS_ACCOUNT_ID ? '✅ Set' : '❌ Not set');
 }
 
 
@@ -129,7 +153,10 @@ const docClient = DynamoDBDocumentClient.from(client, {
 console.log('AWS Configuration Check:', {
   hasAccessKeyId: !!process.env.AWS_ACCESS_KEY_ID ? 'Yes' : 'No',
   hasSecretKey: !!process.env.AWS_SECRET_ACCESS_KEY ? 'Yes' : 'No',
-  hasRegion: !!process.env.AWS_REGION ? 'Yes' : 'No',
+    hasRegion: !!process.env.AWS_REGION ? 'Yes' : 'No',
+    hasLambdaRole: !!process.env.LAMBDA_EXECUTION_ROLE_ARN ? 'Yes' : 'No',
+    hasStepFunctionsRole: !!process.env.STEP_FUNCTIONS_ROLE_ARN ? 'Yes' : 'No',
+    hasAccountId: !!process.env.AWS_ACCOUNT_ID ? 'Yes' : 'No',
   nodeEnv: process.env.NODE_ENV
 });
 
@@ -397,14 +424,14 @@ Promise.all([
 // --- Lambda Deployment API Routes ---
 app.post('/lambda/deploy', async (req, res) => {
   try {
-    const { functionName, code, runtime = 'nodejs18.x', handler = 'index.handler', memorySize = 128, timeout = 30, dependencies = {}, environment = '', createApiGateway = true } = req.body;
+    const { functionName, code, runtime = 'nodejs18.x', handler = 'index.handler', memorySize = 128, timeout = 30, dependencies = {}, environment = '', createApiGateway = true, namespaceId } = req.body;
     
     if (!functionName || !code) {
       return res.status(400).json({ error: 'functionName and code are required' });
     }
 
     console.log(`[Lambda Deployment] Deploying function: ${functionName}`);
-    console.log(`[Lambda Deployment] Request body:`, { functionName, runtime, handler, memorySize, timeout, dependencies, environment, createApiGateway });
+    console.log(`[Lambda Deployment] Request body:`, { functionName, runtime, handler, memorySize, timeout, dependencies, environment, createApiGateway, namespaceId });
     
     // Set timeout for the entire deployment process (15 minutes)
     const deploymentPromise = lambdaDeploymentManager.deployLambdaFunction(
@@ -416,7 +443,8 @@ app.post('/lambda/deploy', async (req, res) => {
       timeout,
       dependencies,
       environment,
-      createApiGateway
+      createApiGateway,
+      namespaceId
     );
     
     const timeoutPromise = new Promise((_, reject) => {
@@ -530,6 +558,31 @@ app.post('/lambda/create-api-gateway', async (req, res) => {
   }
 });
 
+// Delete Lambda function from both AWS and DynamoDB
+app.delete('/lambda/:functionName', async (req, res) => {
+  try {
+    const { functionName } = req.params;
+    
+    if (!functionName) {
+      return res.status(400).json({ error: 'functionName is required' });
+    }
+
+    console.log(`[Lambda Deletion] Deleting function: ${functionName}`);
+    
+    const result = await lambdaDeploymentManager.deleteLambdaFunction(functionName);
+    
+    console.log(`[Lambda Deletion] Deletion result:`, result);
+    
+    res.json(result);
+  } catch (error) {
+    console.error('[Lambda Deletion] Error:', error);
+    res.status(500).json({ 
+      error: 'Failed to delete Lambda function',
+      details: error.message 
+    });
+  }
+});
+
 // API Method Testing endpoint
 app.post('/api-method/test', async (req, res) => {
   try {
@@ -635,11 +688,11 @@ app.get('/lambda/deployments/:deploymentId', async (req, res) => {
 // List deployments endpoint
 app.get('/lambda/deployments', async (req, res) => {
   try {
-    const { functionName } = req.query;
+    const { functionName, namespaceIds } = req.query;
     
-    console.log(`[Deployments] Listing deployments${functionName ? ` for function: ${functionName}` : ''}`);
+    console.log(`[Deployments] Listing deployments`, { functionName, namespaceIds });
     
-    const deployments = await lambdaDeploymentManager.listDeployments(functionName);
+    const deployments = await lambdaDeploymentManager.listDeployments(functionName, namespaceIds);
     
     res.json({ deployments });
   } catch (error) {
@@ -1938,8 +1991,10 @@ app.post('/execute', async (req, res) => {
       method: req.body.method
     });
 
+    // Pass request headers to execute function so it can determine backend URL
     const event = {
-      body: req.body
+      body: req.body,
+      headers: req.headers
     };
 
     const result = await execute(event);
@@ -2138,6 +2193,42 @@ app.post("/indexing/update", async (req, res) => {
   }
 });
 
+// Helper function to set CORS headers
+function setCorsHeaders(req, res) {
+  const origin = req.headers.origin;
+  if (origin) {
+    if (allowedOrigins.includes(origin) || originRegexes.some(rx => rx.test(origin))) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Cookie');
+      console.log('[CORS] Allowed origin:', origin);
+      return true;
+    } else {
+      console.log('[CORS] Rejected origin:', origin);
+      return false;
+    }
+  }
+  return true; // Allow requests with no origin
+}
+
+// Middleware to ensure CORS headers for auth routes
+app.use('/auth', (req, res, next) => {
+  setCorsHeaders(req, res);
+  next();
+});
+
+// Handle OPTIONS requests for CORS preflight
+app.options('/auth/*', (req, res) => {
+  const origin = req.headers.origin;
+  console.log('[CORS] OPTIONS preflight request from:', origin);
+  if (setCorsHeaders(req, res)) {
+    res.status(200).end();
+  } else {
+    res.status(403).end();
+  }
+});
+
 // Auth Routes
 app.post('/auth/login', loginHandler);
 app.post('/auth/signup', signupHandler);
@@ -2148,6 +2239,15 @@ app.post('/auth/phone/login', phoneLoginHandler);
 app.post('/auth/phone/verify', verifyPhoneHandler);
 app.post('/auth/phone/resend-otp', resendOtpHandler);
 
+// Email verification with confirmation code
+app.post('/auth/verify-email', verifyEmailHandler);
+app.post('/auth/resend-email-verification', resendEmailVerificationHandler);
+app.post('/auth/check-user-exists', checkUserExistsHandler);
+
+// Password Reset Routes
+app.post('/auth/forgot-password', forgotPasswordHandler);
+app.post('/auth/confirm-forgot-password', confirmForgotPasswordHandler);
+
 // OAuth Routes
 app.get('/auth/oauth-url', generateOAuthUrlHandler);
 app.post('/auth/token', exchangeTokenHandler);
@@ -2156,16 +2256,25 @@ app.post('/auth/validate', validateTokenHandler);
 app.post('/auth/logout', logoutHandler);
 app.get('/auth/logout-url', getLogoutUrlHandler);
 app.get('/auth/debug-pkce', debugPkceStoreHandler);
+app.get('/auth/debug-oauth-config', debugOAuthConfigHandler);
 
 // Cookie-friendly user info endpoint
+// Simple version: just validate the JWT and return its payload
 app.get('/auth/me', async (req, res) => {
   try {
+    // Ensure CORS headers are set
+    setCorsHeaders(req, res);
+    
     const bearer = req.headers.authorization?.replace(/^Bearer /, '');
     const idToken = bearer || req.cookies?.id_token;
-    if (!idToken) return res.status(401).json({ error: 'No token' });
+    if (!idToken) {
+      return res.status(401).json({ error: 'No token' });
+    }
     const decoded = await validateJwtToken(idToken);
     return res.json({ user: decoded });
   } catch (e) {
+    // Ensure CORS headers are set even on error
+    setCorsHeaders(req, res);
     return res.status(401).json({ error: 'Invalid token' });
   }
 });
@@ -2251,6 +2360,48 @@ app.post('/namespace-roles/:userId/:namespace/add-permissions', addNamespacePerm
 // Remove permissions from a user's role in a namespace
 app.post('/namespace-roles/:userId/:namespace/remove-permissions', removeNamespacePermissionsHandler);
 
+// --- User Resources Routes (Resource-level Access Control) ---
+// Get resource configuration (available types and permissions)
+app.get('/user-resources/config', getResourceConfigHandler);
+
+// Grant resource access to a user
+app.post('/user-resources/grant', grantResourceAccessHandler);
+
+// Bulk grant resource access to multiple users
+app.post('/user-resources/grant-bulk', bulkGrantResourceAccessHandler);
+
+// Revoke resource access from a user
+app.delete('/user-resources/revoke', revokeResourceAccessHandler);
+
+// Update resource access permissions
+app.put('/user-resources/:userId/:resourceType/:resourceId', updateResourceAccessHandler);
+
+// Get all resources for a user
+app.get('/user-resources/:userId', getUserResourcesHandler);
+
+// Get resource access summary for a user
+app.get('/user-resources/:userId/summary', getUserResourcesSummaryHandler);
+
+// Check if user has access to a resource
+app.post('/user-resources/:userId/check-access', checkResourceAccessHandler);
+
+// Get all users with access to a specific resource
+app.get('/user-resources/resource/:resourceType/:resourceId/users', getResourceUsersHandler);
+
+
+// 404 handler - must be before errorHandler, after all routes
+app.use((req, res, next) => {
+  // Set CORS headers for 404 responses
+  setCorsHeaders(req, res);
+  
+  // Create 404 error
+  const err = new Error('Not Found');
+  err.status = 404;
+  next(err);
+});
+
+// Global error handler - must be after all routes and 404 handler
+app.use(errorHandler);
 
 const PORT = process.env.PORT || 5001;
 
@@ -3223,6 +3374,309 @@ app.get('/orders/debug', async (req, res) => {
       success: false,
       error: 'Failed to fetch debug data',
       message: error.message
+    });
+  }
+});
+
+// --- Workflow Management API Routes ---
+// Create workflow
+app.post('/workflows', async (req, res) => {
+  try {
+    const workflowData = req.body;
+    
+    if (!workflowData.name) {
+      return res.status(400).json({ error: 'Workflow name is required' });
+    }
+    
+    if (!workflowData.steps || !Array.isArray(workflowData.steps) || workflowData.steps.length === 0) {
+      return res.status(400).json({ error: 'Workflow must have at least one step' });
+    }
+    
+    console.log(`[Workflow] Creating workflow: ${workflowData.name}`);
+    
+    const workflow = await workflowHandlers.createWorkflow(workflowData);
+    
+    res.status(201).json({
+      success: true,
+      workflow
+    });
+  } catch (error) {
+    console.error('[Workflow] Error creating workflow:', error);
+    res.status(500).json({
+      error: 'Failed to create workflow',
+      details: error.message
+    });
+  }
+});
+
+// Get workflow by ID
+app.get('/workflows/:workflowId', async (req, res) => {
+  try {
+    const { workflowId } = req.params;
+    
+    console.log(`[Workflow] Getting workflow: ${workflowId}`);
+    
+    const workflow = await workflowHandlers.getWorkflow(workflowId);
+    
+    res.json({
+      success: true,
+      workflow
+    });
+  } catch (error) {
+    console.error('[Workflow] Error getting workflow:', error);
+    if (error.message === 'Workflow not found') {
+      res.status(404).json({
+        error: 'Workflow not found',
+        details: error.message
+      });
+    } else {
+      res.status(500).json({
+        error: 'Failed to get workflow',
+        details: error.message
+      });
+    }
+  }
+});
+
+// List workflows
+app.get('/workflows', async (req, res) => {
+  try {
+    const { status, createdBy } = req.query;
+    
+    const filters = {};
+    if (status) filters.status = status;
+    if (createdBy) filters.createdBy = createdBy;
+    
+    console.log(`[Workflow] Listing workflows`, filters);
+    
+    const workflows = await workflowHandlers.listWorkflows(filters);
+    
+    res.json({
+      success: true,
+      workflows,
+      count: workflows.length
+    });
+  } catch (error) {
+    console.error('[Workflow] Error listing workflows:', error);
+    res.status(500).json({
+      error: 'Failed to list workflows',
+      details: error.message
+    });
+  }
+});
+
+// Update workflow
+app.put('/workflows/:workflowId', async (req, res) => {
+  try {
+    const { workflowId } = req.params;
+    const updates = req.body;
+    
+    console.log(`[Workflow] Updating workflow: ${workflowId}`);
+    
+    const workflow = await workflowHandlers.updateWorkflow(workflowId, updates);
+    
+    res.json({
+      success: true,
+      workflow
+    });
+  } catch (error) {
+    console.error('[Workflow] Error updating workflow:', error);
+    if (error.message === 'Workflow not found') {
+      res.status(404).json({
+        error: 'Workflow not found',
+        details: error.message
+      });
+    } else {
+      res.status(500).json({
+        error: 'Failed to update workflow',
+        details: error.message
+      });
+    }
+  }
+});
+
+// Delete workflow
+app.delete('/workflows/:workflowId', async (req, res) => {
+  try {
+    const { workflowId } = req.params;
+    
+    console.log(`[Workflow] Deleting workflow: ${workflowId}`);
+    
+    await workflowHandlers.deleteWorkflow(workflowId);
+    
+    res.json({
+      success: true,
+      message: 'Workflow deleted successfully'
+    });
+  } catch (error) {
+    console.error('[Workflow] Error deleting workflow:', error);
+    if (error.message === 'Workflow not found') {
+      res.status(404).json({
+        error: 'Workflow not found',
+        details: error.message
+      });
+    } else {
+      res.status(500).json({
+        error: 'Failed to delete workflow',
+        details: error.message
+      });
+    }
+  }
+});
+
+// Deploy workflow (create/update Step Functions state machine)
+app.post('/workflows/:workflowId/deploy', async (req, res) => {
+  try {
+    const { workflowId } = req.params;
+    
+    console.log(`[Workflow] Deploying workflow: ${workflowId}`);
+    
+    const result = await workflowHandlers.deployWorkflow(workflowId);
+    
+    res.json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    console.error('[Workflow] Error deploying workflow:', error);
+    if (error.message === 'Workflow not found') {
+      res.status(404).json({
+        error: 'Workflow not found',
+        details: error.message
+      });
+    } else {
+      res.status(500).json({
+        error: 'Failed to deploy workflow',
+        details: error.message
+      });
+    }
+  }
+});
+
+// Execute workflow
+app.post('/workflows/:workflowId/execute', async (req, res) => {
+  try {
+    const { workflowId } = req.params;
+    const input = req.body.input || req.body || {};
+    const waitForCompletion = req.body.waitForCompletion === true;
+    
+    console.log(`[Workflow] Executing workflow: ${workflowId} (waitForCompletion: ${waitForCompletion})`);
+    
+    const result = await workflowHandlers.executeWorkflow(workflowId, input, waitForCompletion);
+    
+    res.json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    console.error('[Workflow] Error executing workflow:', error);
+    if (error.message === 'Workflow not found') {
+      res.status(404).json({
+        error: 'Workflow not found',
+        details: error.message
+      });
+    } else {
+      res.status(500).json({
+        error: 'Failed to execute workflow',
+        details: error.message
+      });
+    }
+  }
+});
+
+// Get execution status
+app.get('/workflows/executions/:executionArn/status', async (req, res) => {
+  try {
+    const { executionArn } = req.params;
+    
+    console.log(`[Workflow] Getting execution status: ${executionArn}`);
+    
+    const result = await workflowHandlers.getExecutionStatus(executionArn);
+    
+    res.json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    console.error('[Workflow] Error getting execution status:', error);
+    res.status(500).json({
+      error: 'Failed to get execution status',
+      details: error.message
+    });
+  }
+});
+
+// Get available API methods for workflow steps
+app.get('/workflows/api-methods', async (req, res) => {
+  try {
+    const { namespaceId } = req.query;
+    
+    console.log(`[Workflow] Getting available API methods`, { namespaceId });
+    
+    const methods = await workflowHandlers.getAvailableApiMethods(namespaceId || null);
+    
+    res.json({
+      success: true,
+      methods,
+      count: methods.length
+    });
+  } catch (error) {
+    console.error('[Workflow] Error getting API methods:', error);
+    res.status(500).json({
+      error: 'Failed to get API methods',
+      details: error.message
+    });
+  }
+});
+
+// Get Step Functions definition for a workflow
+app.get('/workflows/:workflowId/definition', async (req, res) => {
+  try {
+    const { workflowId } = req.params;
+    
+    console.log(`[Workflow] Getting Step Functions definition for workflow: ${workflowId}`);
+    
+    const result = await workflowHandlers.getStepFunctionsDefinition(workflowId);
+    
+    res.json(result);
+  } catch (error) {
+    console.error('[Workflow] Error getting Step Functions definition:', error);
+    if (error.message === 'Workflow not found') {
+      res.status(404).json({
+        error: 'Workflow not found',
+        details: error.message
+      });
+    } else {
+      res.status(500).json({
+        error: 'Failed to get Step Functions definition',
+        details: error.message
+      });
+    }
+  }
+});
+
+// Generate Step Functions definition from workflow data (for preview)
+app.post('/workflows/generate-definition', async (req, res) => {
+  try {
+    const workflowData = req.body;
+    
+    console.log(`[Workflow] Generating Step Functions definition from workflow data`);
+    
+    // Import the generateStepFunctionsDefinition function
+    const { generateStepFunctionsDefinition } = await import('./lib/workflows.js');
+    
+    // Generate definition
+    const definition = await generateStepFunctionsDefinition(workflowData);
+    
+    res.json({
+      success: true,
+      definition
+    });
+  } catch (error) {
+    console.error('[Workflow] Error generating Step Functions definition:', error);
+    res.status(500).json({
+      error: 'Failed to generate Step Functions definition',
+      details: error.message
     });
   }
 });
