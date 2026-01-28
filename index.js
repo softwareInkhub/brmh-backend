@@ -163,9 +163,10 @@ console.log('AWS Configuration Check:', {
 const app = express();
 
 // Flexible CORS allowing *.brmh.in, *.vercel.app and localhost for dev, with credentials
+// Explicitly list primary app domains so production frontends like https://www.brmh.in work cleanly.
 const allowedOrigins = [
   'https://brmh.in',
-  'https://*.brmh.in',
+  'https://www.brmh.in',
   'https://auth.brmh.in',
   'https://app.brmh.in',
   'https://projectmngnt.vercel.app',

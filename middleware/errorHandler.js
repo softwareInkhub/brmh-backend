@@ -3,6 +3,7 @@
 // CORS configuration (should match index.js)
 const allowedOrigins = [
   'https://brmh.in',
+  'https://www.brmh.in',
   'https://auth.brmh.in',
   'https://app.brmh.in',
   'https://projectmngnt.vercel.app',
