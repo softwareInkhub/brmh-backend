@@ -138,6 +138,7 @@ const app = express();
 // Flexible CORS allowing *.brmh.in, *.vercel.app and localhost for dev, with credentials
 const allowedOrigins = [
   'https://brmh.in',
+  'https://*.brmh.in',
   'https://auth.brmh.in',
   'https://app.brmh.in',
   'https://projectmngnt.vercel.app',
@@ -148,6 +149,7 @@ const allowedOrigins = [
   'http://localhost:3001',
   'http://localhost:4000',
 ];
+
 const originRegexes = [
   /^https:\/\/([a-z0-9-]+\.)*brmh\.in$/i,
   /^https:\/\/([a-z0-9-]+\.)*vercel\.app$/i,
@@ -165,9 +167,29 @@ app.use(cors({
   },
   credentials: true,
   methods: ['GET','HEAD','PUT','PATCH','POST','DELETE','OPTIONS'],
-  allowedHeaders: ['Content-Type','Authorization','X-Requested-With','Cookie'],
-  exposedHeaders: ['Set-Cookie', 'Authorization']
+  allowedHeaders: ['Content-Type','Authorization','X-Requested-With','Cookie','Accept'],
+  exposedHeaders: ['Set-Cookie', 'Authorization', 'Content-Type'],
+  maxAge: 86400,
+  preflightContinue: false
 }));
+
+// ✅ Explicitly handle all preflight requests globally
+app.options('*', (req, res) => {
+  const origin = req.headers.origin;
+  if (
+    !origin || 
+    allowedOrigins.includes(origin) ||
+    originRegexes.some(rx => rx.test(origin))
+  ) {
+    res.setHeader('Access-Control-Allow-Origin', origin || '*');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, PATCH, DELETE, HEAD');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Cookie, Accept');
+    res.setHeader('Access-Control-Expose-Headers', 'Set-Cookie, Authorization, Content-Type');
+    res.setHeader('Access-Control-Max-Age', '86400');
+  }
+  return res.sendStatus(200); // ✅ No redirect, just OK
+});
 
 app.use(cookieParser());
 app.use(express.json({ limit: '200mb' }));
@@ -186,6 +208,7 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 100 * 1024 * 1024 }
 });
+
 // File storage configuration
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -202,7 +225,6 @@ async function checkPortInUse(port) {
       .listen(port);
   });
 }
-
 
 
 // Start Prism mock server

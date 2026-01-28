@@ -1,4 +1,4 @@
-﻿// AWS Amplify Auth setup
+// AWS Amplify Auth setup
 import { CognitoUserPool, CognitoUser, AuthenticationDetails, CognitoUserAttribute } from 'amazon-cognito-identity-js';
 import { CognitoIdentityProviderClient, InitiateAuthCommand, AdminInitiateAuthCommand, ListUsersCommand } from '@aws-sdk/client-cognito-identity-provider';
 import crypto from 'crypto';
